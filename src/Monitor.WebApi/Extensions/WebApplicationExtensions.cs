@@ -8,6 +8,8 @@ public static class WebApplicationExtensions
 {
     public static WebApplication MapMonitorWebApi(this WebApplication app)
     {
+        app.UseCors();
+
         app.UseMiddleware<GlobalExceptionMiddleware>();
 
         app.MapGet("/health", () => Results.Ok(new

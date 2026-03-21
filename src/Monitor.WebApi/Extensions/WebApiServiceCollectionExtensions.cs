@@ -8,6 +8,17 @@ public static class WebApiServiceCollectionExtensions
 {
     public static IServiceCollection AddMonitorWebApi(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddCors(options =>
+        {
+            options.AddDefaultPolicy(policy =>
+            {
+                policy.WithOrigins("http://localhost:5173")
+                        .AllowAnyHeader()
+                        .AllowAnyMethod()
+                        .AllowCredentials();
+            });
+        });
+
         services.AddSignalR();
         services.AddEndpointsApiExplorer();
         services.AddSingleton<MonitorRealtimeBroadcaster>();
