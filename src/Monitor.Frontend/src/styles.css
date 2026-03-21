@@ -181,6 +181,10 @@ button {
   grid-template-columns: minmax(320px, 1.4fr) minmax(260px, 1fr);
 }
 
+.panel-grid-single {
+  grid-template-columns: minmax(320px, 1fr);
+}
+
 .card {
   padding: 20px;
   border-radius: 18px;
