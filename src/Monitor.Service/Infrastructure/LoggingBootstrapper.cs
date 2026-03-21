@@ -12,14 +12,17 @@ public static class LoggingBootstrapper
             loggerConfiguration
                 .ReadFrom.Configuration(context.Configuration)
                 .ReadFrom.Services(services)
+                .MinimumLevel.Is(LogEventLevel.Warning)
                 .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
                 .MinimumLevel.Override("System", LogEventLevel.Warning)
                 .Enrich.FromLogContext()
-                .WriteTo.Console()
                 .WriteTo.File(
                     path: Path.Combine(AppContext.BaseDirectory, "logs", "monitor-.log"),
                     rollingInterval: RollingInterval.Day,
                     retainedFileCountLimit: 14,
+                    fileSizeLimitBytes: 10 * 1024 * 1024,
+                    rollOnFileSizeLimit: true,
+                    restrictedToMinimumLevel: LogEventLevel.Warning,
                     shared: true);
         });
     }

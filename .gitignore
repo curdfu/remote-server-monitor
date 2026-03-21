@@ -5,6 +5,8 @@ obj/
 node_modules/
 dist/
 coverage/
+artifacts/
+.dotnet-cli-home/
 *.user
 *.suo
 *.nupkg

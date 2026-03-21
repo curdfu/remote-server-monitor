@@ -1,16 +1,31 @@
-using Monitor.Service.Configuration;
+﻿using Monitor.Service.Configuration;
 using Monitor.Service.HostedServices;
 using Monitor.Service.Infrastructure;
 using Monitor.Storage.Configuration;
 using Monitor.WebApi.Extensions;
 using Serilog;
 
-var builder = WebApplication.CreateBuilder(args);
+if (WindowsServiceCommandHandler.TryHandle(args, out var commandExitCode))
+{
+    return commandExitCode;
+}
+
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory
+});
+
 var persistedSettings = PersistedSettingsLoader.Load();
 if (persistedSettings.Count > 0)
 {
     builder.Configuration.AddInMemoryCollection(persistedSettings);
 }
+
+builder.Host.UseWindowsService(options =>
+{
+    options.ServiceName = ServiceConstants.ServiceName;
+});
 
 builder.ConfigureLogging();
 
@@ -36,3 +51,4 @@ app.Logger.LogInformation(
 app.MapMonitorWebApi();
 
 app.Run();
+return 0;

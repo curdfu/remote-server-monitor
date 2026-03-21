@@ -1,5 +1,6 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using Monitor.Storage.Abstractions;
+using Monitor.Storage.Configuration;
 
 namespace Monitor.Storage.Services;
 
@@ -7,10 +8,7 @@ public sealed class SqliteDbConnectionFactory : IDbConnectionFactory
 {
     public SqliteDbConnectionFactory()
     {
-        var dataDirectory = Path.Combine(AppContext.BaseDirectory, "data");
-        Directory.CreateDirectory(dataDirectory);
-
-        DatabasePath = Path.Combine(dataDirectory, "monitor.db");
+        DatabasePath = StoragePathHelper.GetDatabasePath();
         ConnectionString = new SqliteConnectionStringBuilder
         {
             DataSource = DatabasePath,

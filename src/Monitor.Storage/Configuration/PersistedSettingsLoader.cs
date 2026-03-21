@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 
 namespace Monitor.Storage.Configuration;
 
@@ -64,8 +64,7 @@ public static class PersistedSettingsLoader
 
     public static string GetDatabasePath(string? baseDirectory = null)
     {
-        var root = string.IsNullOrWhiteSpace(baseDirectory) ? AppContext.BaseDirectory : baseDirectory;
-        return Path.Combine(root, "data", "monitor.db");
+        return StoragePathHelper.GetDatabasePath(baseDirectory);
     }
 
     private static bool TableExists(SqliteConnection connection, string tableName)
