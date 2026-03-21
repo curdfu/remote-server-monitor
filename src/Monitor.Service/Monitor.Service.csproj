@@ -2,6 +2,7 @@
   <PropertyGroup>
     <RootNamespace>Monitor.Service</RootNamespace>
     <TargetFramework>net8.0</TargetFramework>
+	<ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
