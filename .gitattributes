@@ -1,13 +1,13 @@
 * text=auto
 
-# Windows 脚本
-*.bat text eol=crlf
-*.ps1 text eol=crlf
-
-# 代码文件统一 LF（推荐）
+# C/C++
 *.cpp text eol=lf
 *.h   text eol=lf
 *.c   text eol=lf
 
-# 可选
+# Windows 脚本
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 文本文件
 *.txt text eol=lf
