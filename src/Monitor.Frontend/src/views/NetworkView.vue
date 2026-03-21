@@ -25,6 +25,22 @@
         Top N
         <input v-model.number="filters.topN" type="number" min="1" max="100" />
       </label>
+      <label>
+        范围
+        <select v-model="filters.scope">
+          <option value="all">全部</option>
+          <option value="wan">WAN</option>
+          <option value="lan">LAN</option>
+        </select>
+      </label>
+      <label>
+        方向
+        <select v-model="filters.direction">
+          <option value="total">总量</option>
+          <option value="upload">上行</option>
+          <option value="download">下行</option>
+        </select>
+      </label>
     </article>
 
     <div class="preset-row">
@@ -91,7 +107,7 @@
       <article class="card">
         <div class="panel-header">
           <h3>Top N 排行</h3>
-          <span class="muted">按总流量排序</span>
+          <span class="muted">{{ rankingDescription }}</span>
         </div>
         <ol class="ranking-list">
           <li v-for="item in topRanking" :key="item.appKey">
@@ -99,48 +115,12 @@
               <strong>{{ item.displayName || item.processName }}</strong>
               <small class="muted">{{ item.processName }}</small>
             </div>
-            <span>{{ formatBytes(item.totalUploadBytes + item.totalDownloadBytes) }}</span>
+            <span>{{ formatBytes(getRankingValue(item)) }}</span>
           </li>
           <li v-if="!topRanking.length" class="muted">当前还没有可展示的排行数据。</li>
         </ol>
       </article>
     </section>
-
-    <article class="card">
-      <div class="panel-header">
-        <h3>按 App 上传 / 下载表格</h3>
-        <span class="muted">{{ isLoading ? '加载中...' : `共 ${items.length} 条` }}</span>
-      </div>
-      <div class="table-shell">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>应用</th>
-              <th>总上传</th>
-              <th>总下载</th>
-              <th>WAN 上传</th>
-              <th>WAN 下载</th>
-              <th>LAN 上传</th>
-              <th>LAN 下载</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in items" :key="item.appKey">
-              <td>{{ item.displayName || item.processName }}</td>
-              <td>{{ formatBytes(item.totalUploadBytes) }}</td>
-              <td>{{ formatBytes(item.totalDownloadBytes) }}</td>
-              <td>{{ formatBytes(item.wanUploadBytes) }}</td>
-              <td>{{ formatBytes(item.wanDownloadBytes) }}</td>
-              <td>{{ formatBytes(item.lanUploadBytes) }}</td>
-              <td>{{ formatBytes(item.lanDownloadBytes) }}</td>
-            </tr>
-            <tr v-if="!isLoading && !items.length">
-              <td colspan="7" class="empty-cell">当前时间区间没有查询到流量数据。</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </article>
   </section>
 </template>
 
@@ -154,9 +134,11 @@ const items = ref<AppTrafficSummaryDto[]>([]);
 const isLoading = ref(false);
 const errorMessage = ref('');
 const filters = reactive({
-  from: toLocalInputValue(new Date(Date.now() - 60 * 60 * 1000)),
+  from: toLocalInputValue(new Date(Date.now() - 24 * 60 * 60 * 1000)),
   to: toLocalInputValue(new Date()),
-  topN: 10
+  topN: 10,
+  scope: 'wan' as 'all' | 'wan' | 'lan',
+  direction: 'upload' as 'total' | 'upload' | 'download'
 });
 
 const totalUploadBytes = computed(() =>
@@ -187,9 +169,15 @@ const lanPercent = computed(() =>
 
 const topRanking = computed(() =>
   [...items.value]
-    .sort((left, right) => (right.totalUploadBytes + right.totalDownloadBytes) - (left.totalUploadBytes + left.totalDownloadBytes))
+    .sort((left, right) => getRankingValue(right) - getRankingValue(left))
     .slice(0, filters.topN)
 );
+
+const rankingDescription = computed(() => {
+  const scopeLabel = filters.scope === 'wan' ? 'WAN' : filters.scope === 'lan' ? 'LAN' : '全部';
+  const directionLabel = filters.direction === 'upload' ? '上行' : filters.direction === 'download' ? '下行' : '总量';
+  return `${scopeLabel} / ${directionLabel} 排序`;
+});
 
 onMounted(() => {
   void loadApps();
@@ -203,7 +191,9 @@ async function loadApps() {
     items.value = await getNetworkApps({
       from: toIsoString(filters.from),
       to: toIsoString(filters.to),
-      topN: filters.topN
+      topN: filters.topN,
+      scope: filters.scope,
+      direction: filters.direction
     });
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载网络汇总失败。';
@@ -244,5 +234,23 @@ function toLocalInputValue(value: Date) {
 
 function toIsoString(value: string) {
   return value ? new Date(value).toISOString() : undefined;
+}
+
+function getRankingValue(item: AppTrafficSummaryDto) {
+  if (filters.scope === 'wan') {
+    if (filters.direction === 'upload') return item.wanUploadBytes;
+    if (filters.direction === 'download') return item.wanDownloadBytes;
+    return item.wanUploadBytes + item.wanDownloadBytes;
+  }
+
+  if (filters.scope === 'lan') {
+    if (filters.direction === 'upload') return item.lanUploadBytes;
+    if (filters.direction === 'download') return item.lanDownloadBytes;
+    return item.lanUploadBytes + item.lanDownloadBytes;
+  }
+
+  if (filters.direction === 'upload') return item.totalUploadBytes;
+  if (filters.direction === 'download') return item.totalDownloadBytes;
+  return item.totalUploadBytes + item.totalDownloadBytes;
 }
 </script>

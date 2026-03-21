@@ -29,6 +29,8 @@ public static class NetworkEndpoints
             DateTimeOffset? from,
             DateTimeOffset? to,
             int? topN,
+            string? scope,
+            string? direction,
             NetworkTrafficRepository networkTrafficRepository,
             IOptionsMonitor<MonitorSettings> settings,
             CancellationToken cancellationToken) =>
@@ -40,7 +42,15 @@ public static class NetworkEndpoints
             }
 
             var limit = topN is > 0 ? topN : settings.CurrentValue.TopNDefault;
-            var summaries = await networkTrafficRepository.QueryAppSummariesAsync(rangeFrom, rangeTo, limit, cancellationToken);
+            var scopeFilter = ParseScope(scope);
+            var directionFilter = ParseDirection(direction);
+            var summaries = await networkTrafficRepository.QueryAppSummariesAsync(
+                rangeFrom,
+                rangeTo,
+                scopeFilter,
+                directionFilter,
+                limit,
+                cancellationToken);
 
             return Results.Ok(summaries.Select(ToSummaryDto).ToArray());
         });
@@ -90,5 +100,25 @@ public static class NetworkEndpoints
         var rangeTo = to ?? DateTimeOffset.UtcNow;
         var rangeFrom = from ?? rangeTo.Subtract(defaultWindow);
         return (rangeFrom, rangeTo);
+    }
+
+    private static NetworkTrafficRepository.TrafficScopeFilter ParseScope(string? value)
+    {
+        return value?.Trim().ToLowerInvariant() switch
+        {
+            "wan" => NetworkTrafficRepository.TrafficScopeFilter.Wan,
+            "lan" => NetworkTrafficRepository.TrafficScopeFilter.Lan,
+            _ => NetworkTrafficRepository.TrafficScopeFilter.All
+        };
+    }
+
+    private static NetworkTrafficRepository.TrafficDirectionFilter ParseDirection(string? value)
+    {
+        return value?.Trim().ToLowerInvariant() switch
+        {
+            "upload" => NetworkTrafficRepository.TrafficDirectionFilter.Upload,
+            "download" => NetworkTrafficRepository.TrafficDirectionFilter.Download,
+            _ => NetworkTrafficRepository.TrafficDirectionFilter.Total
+        };
     }
 }

@@ -12,5 +12,6 @@ public sealed class HardwareRealtimeDto
     public double? MemoryUsagePercent { get; init; }
     public double? DiskTemperatureC { get; init; }
     public IReadOnlyList<DiskTemperatureDto> Disks { get; init; } = Array.Empty<DiskTemperatureDto>();
+    public IReadOnlyList<DiskSpaceDto> DiskSpaces { get; init; } = Array.Empty<DiskSpaceDto>();
     public long UptimeSeconds { get; init; }
 }

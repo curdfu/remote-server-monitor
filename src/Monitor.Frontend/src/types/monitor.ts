@@ -9,13 +9,23 @@ export interface HardwareRealtimeDto {
   memoryUsagePercent: number | null;
   diskTemperatureC: number | null;
   disks: DiskTemperatureDto[];
+  diskSpaces: DiskSpaceDto[];
   uptimeSeconds: number;
 }
 
 export interface DiskTemperatureDto {
   name: string;
+  sizeBytes?: number | null;
+  usedBytes?: number | null;
   temperatureC: number | null;
   temperatureSource?: string | null;
+}
+
+export interface DiskSpaceDto {
+  name: string;
+  totalBytes?: number | null;
+  usedBytes?: number | null;
+  freeBytes?: number | null;
 }
 
 export interface NetworkRealtimeDto {

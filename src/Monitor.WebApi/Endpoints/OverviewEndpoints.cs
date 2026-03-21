@@ -12,6 +12,7 @@ public static class OverviewEndpoints
     {
         app.MapGet("/api/overview", (
             IHardwareSnapshotBuffer hardwareSnapshotBuffer,
+            IDiskUsageProvider diskUsageProvider,
             INetworkAggregator networkAggregator,
             IOptionsMonitor<MonitorSettings> settings) =>
         {
@@ -32,6 +33,11 @@ public static class OverviewEndpoints
             }
 
             var topApps = networkAggregator.GetLatestTopApps(settings.CurrentValue.TopNDefault);
+            var diskUsedBytes = diskUsageProvider.GetCurrentUsedBytesByDiskNumber(
+                hardware.Disk.Drives
+                    .Where(drive => drive.DiskNumber.HasValue)
+                    .Select(drive => drive.DiskNumber!.Value));
+            var diskSpaces = diskUsageProvider.GetCurrentDiskSpaces();
 
             return Results.Ok(new RealtimeOverviewDto
             {
@@ -49,8 +55,20 @@ public static class OverviewEndpoints
                     Disks = hardware.Disk.Drives.Select(drive => new DiskTemperatureDto
                     {
                         Name = drive.Name,
+                        SizeBytes = drive.SizeBytes,
+                        UsedBytes = drive.DiskNumber.HasValue &&
+                                    diskUsedBytes.TryGetValue(drive.DiskNumber.Value, out var usedBytes)
+                            ? usedBytes
+                            : null,
                         TemperatureC = drive.TemperatureC,
                         TemperatureSource = drive.TemperatureSource
+                    }).ToArray(),
+                    DiskSpaces = diskSpaces.Select(space => new DiskSpaceDto
+                    {
+                        Name = space.Name,
+                        TotalBytes = space.TotalBytes,
+                        UsedBytes = space.UsedBytes,
+                        FreeBytes = space.FreeBytes
                     }).ToArray(),
                     UptimeSeconds = hardware.System.UptimeSeconds
                 },

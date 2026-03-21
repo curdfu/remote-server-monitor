@@ -36,11 +36,19 @@ export function getHardwareHistory(from?: string, to?: string) {
   return request<HardwareRealtimeDto[]>(`/api/hardware/history${query.toString() ? `?${query}` : ''}`);
 }
 
-export function getNetworkApps(params?: { from?: string; to?: string; topN?: number }) {
+export function getNetworkApps(params?: {
+  from?: string;
+  to?: string;
+  topN?: number;
+  scope?: 'all' | 'wan' | 'lan';
+  direction?: 'total' | 'upload' | 'download';
+}) {
   const query = new URLSearchParams();
   if (params?.from) query.set('from', params.from);
   if (params?.to) query.set('to', params.to);
   if (params?.topN) query.set('topN', String(params.topN));
+  if (params?.scope) query.set('scope', params.scope);
+  if (params?.direction) query.set('direction', params.direction);
   return request<AppTrafficSummaryDto[]>(`/api/network/apps${query.toString() ? `?${query}` : ''}`);
 }
 

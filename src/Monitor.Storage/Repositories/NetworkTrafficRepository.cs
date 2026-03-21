@@ -12,6 +12,20 @@ public sealed class NetworkTrafficRepository(
     IAppRegistry appRegistry,
     ILogger<NetworkTrafficRepository> logger)
 {
+    public enum TrafficScopeFilter
+    {
+        All,
+        Wan,
+        Lan
+    }
+
+    public enum TrafficDirectionFilter
+    {
+        Total,
+        Upload,
+        Download
+    }
+
     public async Task SaveAsync(IReadOnlyList<TrafficBucket> buckets, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(buckets);
@@ -118,11 +132,15 @@ public sealed class NetworkTrafficRepository(
     public async Task<IReadOnlyList<AppTrafficPeriodSummary>> QueryAppSummariesAsync(
         DateTimeOffset from,
         DateTimeOffset to,
+        TrafficScopeFilter scopeFilter = TrafficScopeFilter.All,
+        TrafficDirectionFilter directionFilter = TrafficDirectionFilter.Total,
         int? topN = null,
         CancellationToken cancellationToken = default)
     {
         await using var connection = dbConnectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
+
+        var orderByExpression = GetOrderByExpression(scopeFilter, directionFilter);
 
         var sql = """
                   SELECT a.app_key,
@@ -143,8 +161,10 @@ public sealed class NetworkTrafficRepository(
                   WHERE n.bucket_start_time >= $from
                     AND n.bucket_start_time < $to
                   GROUP BY a.app_key, a.process_name, a.display_name
-                  ORDER BY (SUM(n.bytes)) DESC, a.process_name ASC
+                  ORDER BY
                   """;
+
+        sql += Environment.NewLine + orderByExpression + " DESC, a.process_name ASC";
 
         if (topN is > 0)
         {
@@ -184,6 +204,31 @@ public sealed class NetworkTrafficRepository(
         }
 
         return results;
+    }
+
+    private static string GetOrderByExpression(TrafficScopeFilter scopeFilter, TrafficDirectionFilter directionFilter)
+    {
+        return (scopeFilter, directionFilter) switch
+        {
+            (TrafficScopeFilter.Wan, TrafficDirectionFilter.Upload) =>
+                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Wan, TrafficDirectionFilter.Download) =>
+                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Wan, TrafficDirectionFilter.Total) =>
+                "SUM(CASE WHEN n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Lan, TrafficDirectionFilter.Upload) =>
+                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Lan, TrafficDirectionFilter.Download) =>
+                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Lan, TrafficDirectionFilter.Total) =>
+                "SUM(CASE WHEN n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.All, TrafficDirectionFilter.Upload) =>
+                "SUM(CASE WHEN n.direction = 'outbound' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.All, TrafficDirectionFilter.Download) =>
+                "SUM(CASE WHEN n.direction = 'inbound' THEN n.bytes ELSE 0 END)",
+            _ =>
+                "SUM(n.bytes)"
+        };
     }
 
     public async Task UpsertAppRegistryAsync(

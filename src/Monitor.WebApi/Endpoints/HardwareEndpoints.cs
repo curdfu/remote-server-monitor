@@ -57,9 +57,11 @@ public static class HardwareEndpoints
             Disks = snapshot.Disk.Drives.Select(drive => new DiskTemperatureDto
             {
                 Name = drive.Name,
+                SizeBytes = drive.SizeBytes,
                 TemperatureC = drive.TemperatureC,
                 TemperatureSource = drive.TemperatureSource
             }).ToArray(),
+            DiskSpaces = Array.Empty<DiskSpaceDto>(),
             UptimeSeconds = snapshot.System.UptimeSeconds
         };
     }

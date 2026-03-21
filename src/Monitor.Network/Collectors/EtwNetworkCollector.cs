@@ -16,6 +16,7 @@ public sealed class EtwNetworkCollector(
     IOptionsMonitor<MonitorSettings> settingsMonitor) : INetworkCollector, IDisposable
 {
     private const int InsufficientResourcesHResult = unchecked((int)0x800705AA);
+    private const string SessionNamePrefix = "Monitor.Network.Etw.";
 
     private readonly object _syncRoot = new();
     private TraceEventSession? _session;
@@ -38,39 +39,48 @@ public sealed class EtwNetworkCollector(
                 return Task.CompletedTask;
             }
 
-            _sessionName = $"Monitor.Network.Etw.{Environment.ProcessId}.{Guid.NewGuid():N}";
+            TryCleanupStaleMonitorSessions();
+            _sessionName = $"{SessionNamePrefix}{Environment.ProcessId}.{Guid.NewGuid():N}";
 
             try
             {
-                var bufferSizeMb = Math.Clamp(settingsMonitor.CurrentValue.EtwBufferSizeMb, 1, 128);
-                var sessionOptions = TraceEventSessionOptions.Create |
-                                     TraceEventSessionOptions.NoPerProcessorBuffering;
-
-                _session = new TraceEventSession(_sessionName, sessionOptions);
-                _session.StopOnDispose = true;
-                _session.BufferSizeMB = bufferSizeMb;
-                _session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
-
-                RegisterHandlers(_session.Source.Kernel);
-
-                _processingTask = Task.Factory.StartNew(
-                    () => ProcessSession(_session, logger),
-                    CancellationToken.None,
-                    TaskCreationOptions.LongRunning,
-                    TaskScheduler.Default);
-
-                IsRunning = true;
-                logger.LogInformation(
-                    "ETW network collector started. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}, SessionOptions: {SessionOptions}",
-                    _sessionName,
-                    bufferSizeMb,
-                    sessionOptions);
+                StartSessionCore();
             }
             catch (COMException exception) when (exception.HResult == InsufficientResourcesHResult)
             {
                 var sessionName = _sessionName;
                 var bufferSizeMb = settingsMonitor.CurrentValue.EtwBufferSizeMb;
                 CleanupFailedStart();
+
+                var cleanedSessionCount = TryCleanupStaleMonitorSessions();
+                if (cleanedSessionCount > 0)
+                {
+                    logger.LogWarning(
+                        exception,
+                        "ETW network collector start failed due to insufficient resources. Cleaned {CleanedSessionCount} stale monitor ETW sessions and will retry once. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}",
+                        cleanedSessionCount,
+                        sessionName,
+                        bufferSizeMb);
+
+                    _sessionName = $"{SessionNamePrefix}{Environment.ProcessId}.{Guid.NewGuid():N}";
+                    try
+                    {
+                        StartSessionCore();
+                        return Task.CompletedTask;
+                    }
+                    catch (COMException retryException) when (retryException.HResult == InsufficientResourcesHResult)
+                    {
+                        sessionName = _sessionName;
+                        CleanupFailedStart();
+                        logger.LogError(
+                            retryException,
+                            "Failed to start ETW network collector because ETW resources are insufficient even after cleanup retry. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}. Consider reducing Monitor:EtwBufferSizeMb further or releasing other ETW sessions.",
+                            sessionName,
+                            bufferSizeMb);
+                        return Task.CompletedTask;
+                    }
+                }
+
                 logger.LogError(
                     exception,
                     "Failed to start ETW network collector because ETW resources are insufficient. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}. Consider reducing Monitor:EtwBufferSizeMb further or retrying after other ETW sessions are released.",
@@ -333,5 +343,72 @@ public sealed class EtwNetworkCollector(
         _session = null;
         _processingTask = null;
         _sessionName = null;
+    }
+
+    private void StartSessionCore()
+    {
+        var bufferSizeMb = Math.Clamp(settingsMonitor.CurrentValue.EtwBufferSizeMb, 1, 128);
+        var sessionOptions = TraceEventSessionOptions.Create |
+                             TraceEventSessionOptions.NoPerProcessorBuffering;
+
+        _session = new TraceEventSession(_sessionName, sessionOptions);
+        _session.StopOnDispose = true;
+        _session.BufferSizeMB = bufferSizeMb;
+        _session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
+
+        RegisterHandlers(_session.Source.Kernel);
+
+        _processingTask = Task.Factory.StartNew(
+            () => ProcessSession(_session, logger),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+
+        IsRunning = true;
+        logger.LogInformation(
+            "ETW network collector started. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}, SessionOptions: {SessionOptions}",
+            _sessionName,
+            bufferSizeMb,
+            sessionOptions);
+    }
+
+    private int TryCleanupStaleMonitorSessions()
+    {
+        try
+        {
+            var cleanedCount = 0;
+            foreach (var sessionName in TraceEventSession.GetActiveSessionNames()
+                         .Where(name => name.StartsWith(SessionNamePrefix, StringComparison.OrdinalIgnoreCase))
+                         .Where(name => !string.Equals(name, _sessionName, StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    using var activeSession = TraceEventSession.GetActiveSession(sessionName);
+                    if (activeSession is null)
+                    {
+                        continue;
+                    }
+
+                    activeSession.Stop();
+                    cleanedCount++;
+                }
+                catch (Exception exception)
+                {
+                    logger.LogDebug(exception, "Failed to cleanup stale ETW session {SessionName}.", sessionName);
+                }
+            }
+
+            if (cleanedCount > 0)
+            {
+                logger.LogInformation("Cleaned {CleanedSessionCount} stale monitor ETW sessions before start.", cleanedCount);
+            }
+
+            return cleanedCount;
+        }
+        catch (Exception exception)
+        {
+            logger.LogDebug(exception, "Failed while enumerating active ETW sessions for cleanup.");
+            return 0;
+        }
     }
 }

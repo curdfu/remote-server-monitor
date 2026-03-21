@@ -306,6 +306,7 @@ button {
 }
 
 .filters-card input,
+.filters-card select,
 .settings-form input {
   width: 100%;
   border: 1px solid #475569;
@@ -354,6 +355,10 @@ button {
 
 .table-shell {
   overflow-x: auto;
+}
+
+.realtime-table-shell {
+  min-height: 232px;
 }
 
 .ratio-group {
@@ -435,6 +440,17 @@ button {
 .data-table th {
   color: #94a3b8;
   font-weight: 600;
+}
+
+.table-sort-button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.table-sort-button:hover {
+  color: #e2e8f0;
 }
 
 .empty-cell {
