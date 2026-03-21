@@ -20,19 +20,14 @@ public sealed class CollectorHostedService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await networkCollector.StartAsync(stoppingToken);
+        await CollectSnapshotAsync(stoppingToken);
 
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(settings.CurrentValue.HardwareSampleIntervalMs));
         var lastPersistedAt = DateTimeOffset.UtcNow;
 
         while (!stoppingToken.IsCancellationRequested && await timer.WaitForNextTickAsync(stoppingToken))
         {
-            var snapshot = await hardwareCollector.GetCurrentSnapshotAsync(stoppingToken);
-            hardwareSnapshotBuffer.Add(snapshot);
-
-            logger.LogDebug(
-                "Collected hardware snapshot at {SampleTime}. Pending hardware samples: {PendingCount}.",
-                snapshot.SampleTime,
-                hardwareSnapshotBuffer.PendingCount);
+            await CollectSnapshotAsync(stoppingToken);
 
             var now = DateTimeOffset.UtcNow;
             if (hardwareSnapshotBuffer.PendingCount >= PersistenceBatchSize || now - lastPersistedAt >= PersistenceInterval)
@@ -67,5 +62,16 @@ public sealed class CollectorHostedService(
             await repository.SaveBatchAsync(batch, cancellationToken);
             logger.LogDebug("Persisted {Count} hardware snapshots in batch.", batch.Count);
         }
+    }
+
+    private async Task CollectSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var snapshot = await hardwareCollector.GetCurrentSnapshotAsync(cancellationToken);
+        hardwareSnapshotBuffer.Add(snapshot);
+
+        logger.LogDebug(
+            "Collected hardware snapshot at {SampleTime}. Pending hardware samples: {PendingCount}.",
+            snapshot.SampleTime,
+            hardwareSnapshotBuffer.PendingCount);
     }
 }

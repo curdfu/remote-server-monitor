@@ -14,6 +14,8 @@ public sealed class TrafficAggregator : INetworkAggregator
     private readonly Queue<RealtimeTrafficEvent> _recentEvents = new();
     private readonly Dictionary<BucketKey, BucketAccumulator> _activeBuckets = new();
     private readonly Queue<TrafficBucket> _pendingBuckets = new();
+    private NetworkRealtimeSnapshot? _latestRealtimeSnapshot;
+    private IReadOnlyList<AppTrafficUsage> _latestTopApps = Array.Empty<AppTrafficUsage>();
 
     private readonly INetworkCollector _networkCollector;
     private readonly IAppRegistry _appRegistry;
@@ -41,26 +43,17 @@ public sealed class TrafficAggregator : INetworkAggregator
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        RealtimeView view;
+        NetworkRealtimeSnapshot snapshot;
         var now = DateTimeOffset.UtcNow;
         lock (_syncRoot)
         {
             RotateBucketsCore(now);
             CleanupExpiredRealtimeEventsCore(now);
-            view = BuildRealtimeViewCore(now);
+            var view = BuildRealtimeViewCore(now);
+            snapshot = UpdateLatestRealtimeCacheCore(now, view);
         }
 
-        return Task.FromResult(new NetworkRealtimeSnapshot
-        {
-            SampleTime = now,
-            TotalUploadBytesPerSecond = view.TotalUploadBytesPerSecond,
-            TotalDownloadBytesPerSecond = view.TotalDownloadBytesPerSecond,
-            WanUploadBytesPerSecond = view.WanUploadBytesPerSecond,
-            WanDownloadBytesPerSecond = view.WanDownloadBytesPerSecond,
-            LanUploadBytesPerSecond = view.LanUploadBytesPerSecond,
-            LanDownloadBytesPerSecond = view.LanDownloadBytesPerSecond,
-            AppUsages = view.AppUsages
-        });
+        return Task.FromResult(snapshot);
     }
 
     public Task<IReadOnlyList<AppTrafficUsage>> GetTopAppsAsync(int topN, CancellationToken cancellationToken = default)
@@ -89,6 +82,27 @@ public sealed class TrafficAggregator : INetworkAggregator
             .ToArray();
 
         return Task.FromResult<IReadOnlyList<AppTrafficUsage>>(apps);
+    }
+
+    public NetworkRealtimeSnapshot? GetLatestRealtimeSnapshot()
+    {
+        lock (_syncRoot)
+        {
+            return _latestRealtimeSnapshot;
+        }
+    }
+
+    public IReadOnlyList<AppTrafficUsage> GetLatestTopApps(int topN)
+    {
+        if (topN <= 0)
+        {
+            return Array.Empty<AppTrafficUsage>();
+        }
+
+        lock (_syncRoot)
+        {
+            return _latestTopApps.Take(topN).ToArray();
+        }
     }
 
     public IReadOnlyList<TrafficBucket> DequeuePendingBuckets(int maxCount)
@@ -286,6 +300,30 @@ public sealed class TrafficAggregator : INetworkAggregator
                 .Where(static x => x.UploadBytesPerSecond > 0 || x.DownloadBytesPerSecond > 0)
                 .Select(static x => x.ToModel())
                 .ToArray());
+    }
+
+    private NetworkRealtimeSnapshot UpdateLatestRealtimeCacheCore(DateTimeOffset sampleTime, RealtimeView view)
+    {
+        var snapshot = new NetworkRealtimeSnapshot
+        {
+            SampleTime = sampleTime,
+            TotalUploadBytesPerSecond = view.TotalUploadBytesPerSecond,
+            TotalDownloadBytesPerSecond = view.TotalDownloadBytesPerSecond,
+            WanUploadBytesPerSecond = view.WanUploadBytesPerSecond,
+            WanDownloadBytesPerSecond = view.WanDownloadBytesPerSecond,
+            LanUploadBytesPerSecond = view.LanUploadBytesPerSecond,
+            LanDownloadBytesPerSecond = view.LanDownloadBytesPerSecond,
+            AppUsages = view.AppUsages
+        };
+
+        _latestRealtimeSnapshot = snapshot;
+        _latestTopApps = view.AppUsages
+            .OrderByDescending(static x => x.UploadBytesPerSecond + x.DownloadBytesPerSecond)
+            .ThenByDescending(static x => x.DownloadBytesPerSecond)
+            .ThenBy(static x => x.ProcessName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return snapshot;
     }
 
     private TimeSpan GetRealtimeRetentionWindow()

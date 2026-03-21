@@ -11,11 +11,17 @@ public static class NetworkEndpoints
 {
     public static IEndpointRouteBuilder MapNetworkEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/network/realtime", async (
-            INetworkAggregator networkAggregator,
-            CancellationToken cancellationToken) =>
+        app.MapGet("/api/network/realtime", (
+            INetworkAggregator networkAggregator) =>
         {
-            var snapshot = await networkAggregator.GetRealtimeSnapshotAsync(cancellationToken);
+            var snapshot = networkAggregator.GetLatestRealtimeSnapshot();
+            if (snapshot is null)
+            {
+                return Results.Problem(
+                    detail: "Network realtime cache is not ready yet.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             return Results.Ok(ToRealtimeDto(snapshot));
         });
 

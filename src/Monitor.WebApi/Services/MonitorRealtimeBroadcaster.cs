@@ -9,7 +9,7 @@ using Monitor.WebApi.Hubs;
 namespace Monitor.WebApi.Services;
 
 public sealed class MonitorRealtimeBroadcaster(
-    IHardwareCollector hardwareCollector,
+    IHardwareSnapshotBuffer hardwareSnapshotBuffer,
     INetworkAggregator networkAggregator,
     IHubContext<MonitorHub> hubContext,
     IOptionsMonitor<MonitorSettings> settings,
@@ -17,9 +17,15 @@ public sealed class MonitorRealtimeBroadcaster(
 {
     public async Task BroadcastOnceAsync(CancellationToken cancellationToken = default)
     {
-        var hardware = await hardwareCollector.GetCurrentSnapshotAsync(cancellationToken);
-        var network = await networkAggregator.GetRealtimeSnapshotAsync(cancellationToken);
-        var topApps = await networkAggregator.GetTopAppsAsync(settings.CurrentValue.TopNDefault, cancellationToken);
+        var hardware = hardwareSnapshotBuffer.GetLatest();
+        var network = networkAggregator.GetLatestRealtimeSnapshot();
+        if (hardware is null || network is null)
+        {
+            logger.LogDebug("Skip realtime broadcast because cached payload is not ready yet.");
+            return;
+        }
+
+        var topApps = networkAggregator.GetLatestTopApps(settings.CurrentValue.TopNDefault);
 
         var hardwareDto = new HardwareRealtimeDto
         {

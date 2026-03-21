@@ -8,11 +8,17 @@ public static class HardwareEndpoints
 {
     public static IEndpointRouteBuilder MapHardwareEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/hardware/realtime", async (
-            IHardwareCollector hardwareCollector,
-            CancellationToken cancellationToken) =>
+        app.MapGet("/api/hardware/realtime", (
+            IHardwareSnapshotBuffer hardwareSnapshotBuffer) =>
         {
-            var snapshot = await hardwareCollector.GetCurrentSnapshotAsync(cancellationToken);
+            var snapshot = hardwareSnapshotBuffer.GetLatest();
+            if (snapshot is null)
+            {
+                return Results.Problem(
+                    detail: "Hardware snapshot cache is not ready yet.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             return Results.Ok(ToRealtimeDto(snapshot));
         });
 

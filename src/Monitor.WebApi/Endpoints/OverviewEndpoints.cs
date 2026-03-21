@@ -10,15 +10,28 @@ public static class OverviewEndpoints
 {
     public static IEndpointRouteBuilder MapOverviewEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/overview", async (
-            IHardwareCollector hardwareCollector,
+        app.MapGet("/api/overview", (
+            IHardwareSnapshotBuffer hardwareSnapshotBuffer,
             INetworkAggregator networkAggregator,
-            IOptionsMonitor<MonitorSettings> settings,
-            CancellationToken cancellationToken) =>
+            IOptionsMonitor<MonitorSettings> settings) =>
         {
-            var hardware = await hardwareCollector.GetCurrentSnapshotAsync(cancellationToken);
-            var network = await networkAggregator.GetRealtimeSnapshotAsync(cancellationToken);
-            var topApps = await networkAggregator.GetTopAppsAsync(settings.CurrentValue.TopNDefault, cancellationToken);
+            var hardware = hardwareSnapshotBuffer.GetLatest();
+            if (hardware is null)
+            {
+                return Results.Problem(
+                    detail: "Hardware snapshot cache is not ready yet.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            var network = networkAggregator.GetLatestRealtimeSnapshot();
+            if (network is null)
+            {
+                return Results.Problem(
+                    detail: "Network realtime cache is not ready yet.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            var topApps = networkAggregator.GetLatestTopApps(settings.CurrentValue.TopNDefault);
 
             return Results.Ok(new RealtimeOverviewDto
             {

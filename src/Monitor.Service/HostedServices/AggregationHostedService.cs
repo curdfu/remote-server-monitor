@@ -15,19 +15,12 @@ public sealed class AggregationHostedService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await RefreshRealtimeCacheAsync(stoppingToken);
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(settings.CurrentValue.NetworkSampleIntervalMs));
 
         while (!stoppingToken.IsCancellationRequested && await timer.WaitForNextTickAsync(stoppingToken))
         {
-            var snapshot = await networkAggregator.GetRealtimeSnapshotAsync(stoppingToken);
-            await PersistPendingBucketsAsync(stoppingToken);
-
-            logger.LogDebug(
-                "Aggregated network snapshot at {SampleTime}, up={Upload}, down={Download}, apps={AppCount}.",
-                snapshot.SampleTime,
-                snapshot.TotalUploadBytesPerSecond,
-                snapshot.TotalDownloadBytesPerSecond,
-                snapshot.AppUsages.Count);
+            await RefreshRealtimeCacheAsync(stoppingToken);
         }
     }
 
@@ -50,5 +43,18 @@ public sealed class AggregationHostedService(
             await networkTrafficRepository.SaveAsync(batch, cancellationToken);
             logger.LogDebug("Persisted {Count} network traffic buckets.", batch.Count);
         }
+    }
+
+    private async Task RefreshRealtimeCacheAsync(CancellationToken cancellationToken)
+    {
+        var snapshot = await networkAggregator.GetRealtimeSnapshotAsync(cancellationToken);
+        await PersistPendingBucketsAsync(cancellationToken);
+
+        logger.LogDebug(
+            "Aggregated network snapshot at {SampleTime}, up={Upload}, down={Download}, apps={AppCount}.",
+            snapshot.SampleTime,
+            snapshot.TotalUploadBytesPerSecond,
+            snapshot.TotalDownloadBytesPerSecond,
+            snapshot.AppUsages.Count);
     }
 }
