@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Monitor.WebApi</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Monitor.Contracts\Monitor.Contracts.csproj" />
+    <ProjectReference Include="..\Monitor.Hardware\Monitor.Hardware.csproj" />
+    <ProjectReference Include="..\Monitor.Network\Monitor.Network.csproj" />
+    <ProjectReference Include="..\Monitor.Storage\Monitor.Storage.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Monitor.Storage</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <ProjectReference Include="..\Monitor.Contracts\Monitor.Contracts.csproj" />
+    <ProjectReference Include="..\Monitor.Hardware\Monitor.Hardware.csproj" />
+    <ProjectReference Include="..\Monitor.Network\Monitor.Network.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,63 @@
+using Monitor.Contracts.Dtos;
+using Monitor.Hardware.Abstractions;
+using Monitor.Storage.Repositories;
+
+namespace Monitor.WebApi.Endpoints;
+
+public static class HardwareEndpoints
+{
+    public static IEndpointRouteBuilder MapHardwareEndpoints(this IEndpointRouteBuilder app)
+    {
+        app.MapGet("/api/hardware/realtime", async (
+            IHardwareCollector hardwareCollector,
+            CancellationToken cancellationToken) =>
+        {
+            var snapshot = await hardwareCollector.GetCurrentSnapshotAsync(cancellationToken);
+            return Results.Ok(ToRealtimeDto(snapshot));
+        });
+
+        app.MapGet("/api/hardware/history", async (
+            DateTimeOffset? from,
+            DateTimeOffset? to,
+            HardwareRepository hardwareRepository,
+            CancellationToken cancellationToken) =>
+        {
+            var (rangeFrom, rangeTo) = NormalizeRange(from, to, TimeSpan.FromHours(1));
+            if (rangeFrom >= rangeTo)
+            {
+                return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
+            }
+
+            var snapshots = await hardwareRepository.QueryRangeAsync(rangeFrom, rangeTo, cancellationToken);
+            return Results.Ok(snapshots.Select(ToRealtimeDto).ToArray());
+        });
+
+        return app;
+    }
+
+    private static HardwareRealtimeDto ToRealtimeDto(Monitor.Hardware.Models.HardwareSnapshot snapshot)
+    {
+        return new HardwareRealtimeDto
+        {
+            SampleTime = snapshot.SampleTime,
+            CpuUsagePercent = snapshot.Cpu.UsagePercent,
+            CpuTemperatureC = snapshot.Cpu.TemperatureC,
+            CpuFrequencyMhz = snapshot.Cpu.FrequencyMhz,
+            MemoryTotalMb = snapshot.Memory.TotalMb,
+            MemoryUsedMb = snapshot.Memory.UsedMb,
+            MemoryUsagePercent = snapshot.Memory.UsagePercent,
+            DiskTemperatureC = snapshot.Disk.TemperatureC,
+            UptimeSeconds = snapshot.System.UptimeSeconds
+        };
+    }
+
+    private static (DateTimeOffset From, DateTimeOffset To) NormalizeRange(
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        TimeSpan defaultWindow)
+    {
+        var rangeTo = to ?? DateTimeOffset.UtcNow;
+        var rangeFrom = from ?? rangeTo.Subtract(defaultWindow);
+        return (rangeFrom, rangeTo);
+    }
+}

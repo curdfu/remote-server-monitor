@@ -1,0 +1,13 @@
+﻿bin/
+obj/
+.vs/
+.vscode/
+node_modules/
+dist/
+coverage/
+*.user
+*.suo
+*.nupkg
+*.db
+*.db-shm
+*.db-wal

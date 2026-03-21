@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>Monitor.Service</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="Serilog.Settings.Configuration" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+    <PackageReference Include="Serilog.Sinks.File" />
+    <ProjectReference Include="..\Monitor.Contracts\Monitor.Contracts.csproj" />
+    <ProjectReference Include="..\Monitor.Hardware\Monitor.Hardware.csproj" />
+    <ProjectReference Include="..\Monitor.Network\Monitor.Network.csproj" />
+    <ProjectReference Include="..\Monitor.Storage\Monitor.Storage.csproj" />
+    <ProjectReference Include="..\Monitor.WebApi\Monitor.WebApi.csproj" />
+  </ItemGroup>
+</Project>

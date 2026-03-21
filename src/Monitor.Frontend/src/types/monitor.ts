@@ -1,0 +1,64 @@
+export interface HardwareRealtimeDto {
+  sampleTime: string;
+  cpuUsagePercent: number | null;
+  cpuTemperatureC: number | null;
+  cpuFrequencyMhz: number | null;
+  memoryTotalMb: number | null;
+  memoryUsedMb: number | null;
+  memoryUsagePercent: number | null;
+  diskTemperatureC: number | null;
+  uptimeSeconds: number;
+}
+
+export interface NetworkRealtimeDto {
+  sampleTime: string;
+  totalUploadBytesPerSecond: number;
+  totalDownloadBytesPerSecond: number;
+  wanUploadBytesPerSecond: number;
+  wanDownloadBytesPerSecond: number;
+  lanUploadBytesPerSecond: number;
+  lanDownloadBytesPerSecond: number;
+}
+
+export interface AppTrafficItemDto {
+  appKey: string;
+  processName: string;
+  displayName?: string | null;
+  uploadBytesPerSecond: number;
+  downloadBytesPerSecond: number;
+  wanUploadBytesPerSecond: number;
+  wanDownloadBytesPerSecond: number;
+  lanUploadBytesPerSecond: number;
+  lanDownloadBytesPerSecond: number;
+}
+
+export interface AppTrafficSummaryDto {
+  appKey: string;
+  processName: string;
+  displayName?: string | null;
+  totalUploadBytes: number;
+  totalDownloadBytes: number;
+  wanUploadBytes: number;
+  wanDownloadBytes: number;
+  lanUploadBytes: number;
+  lanDownloadBytes: number;
+  loopbackUploadBytes: number;
+  loopbackDownloadBytes: number;
+  otherUploadBytes: number;
+  otherDownloadBytes: number;
+}
+
+export interface AppSettingsDto {
+  httpPort: number;
+  hardwareSampleIntervalMs: number;
+  networkSampleIntervalMs: number;
+  aggregateIntervalSeconds: number;
+  historyRetentionDays: number;
+  topNDefault: number;
+}
+
+export interface RealtimeOverviewDto {
+  hardware: HardwareRealtimeDto;
+  network: NetworkRealtimeDto;
+  topApps: AppTrafficItemDto[];
+}
