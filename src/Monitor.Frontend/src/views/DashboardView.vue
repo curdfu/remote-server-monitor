@@ -1,9 +1,10 @@
 ﻿<template>
   <section class="page">
     <PageHeader
-      kicker="Overview"
-      title="总览页"
-      description="这一页优先展示核心硬件指标，让首页保持更简洁。"
+      icon="▦"
+      kicker="首页"
+      title="系统概览"
+      description="先看最关键的硬件状态，首页尽量保持清爽。"
     >
       <template #actions>
         <button class="ghost-button" :disabled="isLoading" @click="loadOverview">
@@ -13,16 +14,16 @@
     </PageHeader>
 
     <div class="overview-meta card">
-      <div>
-        <span class="muted">最后更新时间</span>
+      <div class="overview-meta-item">
+        <span class="muted">数据时间</span>
         <strong>{{ formatDateTime(overview?.hardware.sampleTime) }}</strong>
       </div>
-      <div>
-        <span class="muted">刷新策略</span>
+      <div class="overview-meta-item">
+        <span class="muted">刷新方式</span>
         <strong>硬件数据实时推送</strong>
       </div>
-      <div>
-        <span class="muted">当前状态</span>
+      <div class="overview-meta-item">
+        <span class="muted">运行状态</span>
         <strong>{{ errorMessage ? '接口异常' : '运行中' }}</strong>
       </div>
     </div>
@@ -33,20 +34,52 @@
 
     <section class="dashboard-section">
       <div class="section-header">
-        <h3>硬件实时指标</h3>
-        <span class="muted">CPU / 内存 / 温度 / 开机时长</span>
+        <h3>当前硬件状态</h3>
+        <span class="section-tag">CPU / 内存 / 温度 / 开机时长</span>
       </div>
       <div class="grid">
-        <MetricCard label="开机时长" :value="formatUptime(overview?.hardware.uptimeSeconds)" />
-        <MetricCard label="CPU 频率" :value="formatNullable(overview?.hardware.cpuFrequencyMhz, 'MHz')" />
-        <MetricCard label="CPU 温度" :value="formatNullable(overview?.hardware.cpuTemperatureC, '°C')" />
-        <MetricCard label="CPU 功耗" :value="formatNullable(overview?.hardware.cpuPowerWatts, 'W')" />
-        <MetricCard label="CPU 使用率" :value="formatPercent(overview?.hardware.cpuUsagePercent)" />
         <MetricCard
-          label="当前内存占用"
-          :value="formatMemoryUsage(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
+          label="已开机"
+          :value="formatUptime(overview?.hardware.uptimeSeconds)"
+          badge="运行"
+          tone="info"
         />
-        <MetricCard label="最高磁盘温度" :value="formatNullable(overview?.hardware.diskTemperatureC, '°C')" />
+        <MetricCard
+          label="CPU 当前频率"
+          :value="formatNullable(overview?.hardware.cpuFrequencyMhz, 'MHz')"
+          badge="频率"
+          tone="info"
+        />
+        <MetricCard
+          label="CPU 当前温度"
+          :value="formatNullable(overview?.hardware.cpuTemperatureC, '°C')"
+          :badge="temperatureBadge(overview?.hardware.cpuTemperatureC)"
+          :tone="temperatureTone(overview?.hardware.cpuTemperatureC)"
+        />
+        <MetricCard
+          label="CPU 当前功耗"
+          :value="formatNullable(overview?.hardware.cpuPowerWatts, 'W')"
+          badge="功耗"
+          tone="info"
+        />
+        <MetricCard
+          label="CPU 占用"
+          :value="formatPercent(overview?.hardware.cpuUsagePercent)"
+          :badge="usageBadge(overview?.hardware.cpuUsagePercent)"
+          :tone="usageTone(overview?.hardware.cpuUsagePercent)"
+        />
+        <MetricCard
+          label="内存已使用"
+          :value="formatMemoryUsage(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
+          :badge="memoryUsageBadge(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
+          :tone="memoryUsageTone(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
+        />
+        <MetricCard
+          label="最热磁盘温度"
+          :value="formatNullable(overview?.hardware.diskTemperatureC, '°C')"
+          :badge="temperatureBadge(overview?.hardware.diskTemperatureC)"
+          :tone="temperatureTone(overview?.hardware.diskTemperatureC)"
+        />
       </div>
     </section>
 
@@ -54,17 +87,17 @@
       <article class="card">
         <div class="panel-header">
           <h3>磁盘温度</h3>
-          <span class="muted">当前共 {{ overview?.hardware.disks?.length ?? 0 }} 块</span>
+          <span class="section-tag">当前 {{ overview?.hardware.disks?.length ?? 0 }} 块</span>
         </div>
 
         <div class="table-shell realtime-table-shell">
           <table class="data-table">
             <thead>
               <tr>
-                <th>磁盘</th>
-                <th>
+                <th>磁盘名称</th>
+                <th class="align-right">
                   <button class="table-sort-button" @click="toggleDiskSort('temperatureC')">
-                    温度 {{ sortIndicator('temperatureC') }}
+                    当前温度 {{ sortIndicator('temperatureC') }}
                   </button>
                 </th>
               </tr>
@@ -72,7 +105,11 @@
             <tbody>
               <tr v-for="disk in sortedDisks" :key="`${disk.name}-${disk.temperatureSource ?? 'none'}`">
                 <td>{{ disk.name }}</td>
-                <td>{{ formatNullable(disk.temperatureC, '°C') }}</td>
+                <td class="align-right">
+                  <span class="status-pill" :class="temperatureToneClass(disk.temperatureC)">
+                    {{ formatNullable(disk.temperatureC, '°C') }}
+                  </span>
+                </td>
               </tr>
               <tr v-if="!sortedDisks.length">
                 <td colspan="2" class="empty-cell">当前没有可展示的磁盘温度数据。</td>
@@ -85,25 +122,40 @@
       <article class="card">
         <div class="panel-header">
           <h3>磁盘空间</h3>
-          <span class="muted">按卷容量汇总</span>
+          <span class="section-tag">按卷汇总（例如 C: / D:）</span>
         </div>
 
         <div class="table-shell realtime-table-shell">
           <table class="data-table">
             <thead>
               <tr>
-                <th>磁盘</th>
-                <th>总容量</th>
-                <th>已使用</th>
-                <th>剩余空间</th>
+                <th>磁盘 / 卷</th>
+                <th class="align-right">总容量</th>
+                <th class="align-right">已用空间</th>
+                <th class="align-right">剩余空间</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="disk in sortedDiskSpaces" :key="disk.name">
                 <td>{{ disk.name }}</td>
-                <td>{{ formatDiskSize(disk.totalBytes) }}</td>
-                <td>{{ formatDiskSize(disk.usedBytes) }}</td>
-                <td>{{ formatDiskSize(disk.freeBytes) }}</td>
+                <td class="align-right">{{ formatDiskSize(disk.totalBytes) }}</td>
+                <td class="align-right">
+                  <div class="table-metric">
+                    <div class="table-metric-head">
+                      <strong>{{ formatDiskSize(disk.usedBytes) }}</strong>
+                      <small class="muted">{{ formatCapacityPercent(disk.usedBytes, disk.totalBytes) }}</small>
+                    </div>
+                    <div class="table-metric-subrow">
+                      <div class="mini-progress">
+                        <div
+                          class="mini-progress-bar"
+                          :style="{ width: `${getCapacityPercent(disk.usedBytes, disk.totalBytes)}%` }"
+                        ></div>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+                <td class="align-right">{{ formatDiskSize(disk.freeBytes) }}</td>
               </tr>
               <tr v-if="!sortedDiskSpaces.length">
                 <td colspan="4" class="empty-cell">当前没有可展示的磁盘空间数据。</td>
@@ -185,8 +237,6 @@ function formatNullable(value: number | null | undefined, unit: string) {
 function formatMemoryUsage(value?: number | null, total?: number | null) {
   if (value == null) return '--';
 
-  // LibreHardwareMonitor 的内存 Data 传感器通常直接给出 GB，
-  // 这里根据总量做一次兼容判断，避免把 23 GB 显示成 23 MB。
   if (total != null && total < 512) {
     return `${value.toFixed(1)} GB`;
   }
@@ -208,6 +258,11 @@ function formatDiskSize(value?: number | null) {
   return `${(value / gibibyte).toFixed(1)} GB`;
 }
 
+function formatCapacityPercent(usedBytes?: number | null, totalBytes?: number | null) {
+  const percent = getCapacityPercent(usedBytes, totalBytes);
+  return percent == null ? '--' : `${percent.toFixed(1)}%`;
+}
+
 function formatUptime(value?: number | null) {
   if (value == null) return '--';
 
@@ -227,6 +282,65 @@ function formatDateTime(value?: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '--';
   return date.toLocaleString();
+}
+
+function getCapacityPercent(usedBytes?: number | null, totalBytes?: number | null) {
+  if (usedBytes == null || totalBytes == null || totalBytes <= 0) return null;
+  return Math.max(0, Math.min(100, (usedBytes / totalBytes) * 100));
+}
+
+function getMemoryUsagePercent(usedMb?: number | null, totalMb?: number | null) {
+  if (usedMb == null || totalMb == null || totalMb <= 0) return null;
+  return Math.max(0, Math.min(100, (usedMb / totalMb) * 100));
+}
+
+function temperatureTone(value?: number | null): 'default' | 'success' | 'warning' | 'danger' {
+  if (value == null) return 'default';
+  if (value >= 80) return 'danger';
+  if (value >= 65) return 'warning';
+  return 'success';
+}
+
+function temperatureBadge(value?: number | null) {
+  if (value == null) return '未知';
+  if (value >= 80) return '高温';
+  if (value >= 65) return '偏高';
+  return '正常';
+}
+
+function usageTone(value?: number | null): 'default' | 'info' | 'warning' | 'danger' {
+  if (value == null) return 'default';
+  if (value >= 85) return 'danger';
+  if (value >= 65) return 'warning';
+  return 'info';
+}
+
+function usageBadge(value?: number | null) {
+  if (value == null) return '未知';
+  if (value >= 85) return '繁忙';
+  if (value >= 65) return '较高';
+  return '平稳';
+}
+
+function memoryUsageTone(usedMb?: number | null, totalMb?: number | null): 'default' | 'info' | 'warning' | 'danger' {
+  const percent = getMemoryUsagePercent(usedMb, totalMb);
+  if (percent == null) return 'default';
+  if (percent >= 90) return 'danger';
+  if (percent >= 75) return 'warning';
+  return 'info';
+}
+
+function memoryUsageBadge(usedMb?: number | null, totalMb?: number | null) {
+  const percent = getMemoryUsagePercent(usedMb, totalMb);
+  if (percent == null) return '未知';
+  if (percent >= 90) return '紧张';
+  if (percent >= 75) return '偏高';
+  return '正常';
+}
+
+function temperatureToneClass(value?: number | null) {
+  const tone = temperatureTone(value);
+  return `status-pill-${tone}`;
 }
 
 function toggleDiskSort(field: 'temperatureC') {

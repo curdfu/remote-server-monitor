@@ -1,13 +1,14 @@
-<template>
+﻿<template>
   <section class="page">
     <PageHeader
-      kicker="Network"
-      title="网络页"
-      description="当前聚焦累计流量查询，保留按时间区间查看总量、占比和 Top N 排行。"
+      icon="⇆"
+      kicker="网络"
+      title="网络流量"
+      description="这里主要看一段时间内的累计流量、占比和应用排行。"
     >
       <template #actions>
         <button class="ghost-button" :disabled="isLoading" @click="loadApps">
-          {{ isLoading ? '查询中...' : '查询' }}
+          {{ isLoading ? '查询中...' : '重新查询' }}
         </button>
       </template>
     </PageHeader>
@@ -22,11 +23,11 @@
         <input v-model="filters.to" type="datetime-local" />
       </label>
       <label>
-        Top N
+        排行数量
         <input v-model.number="filters.topN" type="number" min="1" max="100" />
       </label>
       <label>
-        范围
+        统计范围
         <select v-model="filters.scope">
           <option value="all">全部</option>
           <option value="wan">WAN</option>
@@ -34,19 +35,25 @@
         </select>
       </label>
       <label>
-        方向
+        统计方向
         <select v-model="filters.direction">
-          <option value="total">总量</option>
-          <option value="upload">上行</option>
-          <option value="download">下行</option>
+          <option value="total">总流量</option>
+          <option value="upload">上传</option>
+          <option value="download">下载</option>
         </select>
       </label>
     </article>
 
     <div class="preset-row">
-      <button class="chip-button" @click="applyPreset(1)">最近 1 小时</button>
-      <button class="chip-button" @click="applyPreset(6)">最近 6 小时</button>
-      <button class="chip-button" @click="applyPreset(24)">最近 24 小时</button>
+      <button class="chip-button" :class="{ 'chip-button-active': activePresetHours === 1 }" @click="applyPreset(1)">
+        最近 1 小时
+      </button>
+      <button class="chip-button" :class="{ 'chip-button-active': activePresetHours === 6 }" @click="applyPreset(6)">
+        最近 6 小时
+      </button>
+      <button class="chip-button" :class="{ 'chip-button-active': activePresetHours === 24 }" @click="applyPreset(24)">
+        最近 24 小时
+      </button>
     </div>
 
     <div v-if="errorMessage" class="card state-card error-state">
@@ -54,21 +61,25 @@
     </div>
 
     <div class="grid">
-      <div class="card metric-card">
-        <span class="metric-label">总上传流量</span>
+      <div class="card metric-card metric-card-compact">
+        <span class="metric-label">↑ 累计上传</span>
         <strong class="metric-value">{{ formatBytes(totalUploadBytes) }}</strong>
       </div>
-      <div class="card metric-card">
-        <span class="metric-label">总下载流量</span>
+      <div class="card metric-card metric-card-compact">
+        <span class="metric-label">↓ 累计下载</span>
         <strong class="metric-value">{{ formatBytes(totalDownloadBytes) }}</strong>
       </div>
-      <div class="card metric-card">
-        <span class="metric-label">参与统计 App 数</span>
+      <div class="card metric-card metric-card-compact">
+        <span class="metric-label">◉ 涉及应用数</span>
         <strong class="metric-value">{{ items.length }}</strong>
       </div>
-      <div class="card metric-card">
-        <span class="metric-label">查询时间范围</span>
-        <strong class="metric-value metric-small">{{ formatRangeText() }}</strong>
+      <div class="card metric-card metric-card-compact">
+        <span class="metric-label">⏱ 统计时间范围</span>
+        <div v-if="rangeParts" class="metric-value metric-small range-value">
+          <span>{{ rangeParts.from }}&nbsp;~</span>
+          <span>{{ rangeParts.to }}</span>
+        </div>
+        <strong v-else class="metric-value metric-small">--</strong>
       </div>
     </div>
 
@@ -76,7 +87,36 @@
       <article class="card">
         <div class="panel-header">
           <h3>WAN / LAN 占比</h3>
-          <span class="muted">按当前查询结果汇总</span>
+          <span class="section-tag">按当前筛选结果汇总</span>
+        </div>
+
+        <div class="ratio-overview">
+          <div class="ratio-summary-card ratio-summary-card-wan">
+            <div class="ratio-summary-top">
+              <span class="ratio-summary-label">WAN 流量</span>
+              <span class="ratio-summary-badge">外网</span>
+            </div>
+            <strong>{{ formatBytes(wanTotalBytes) }}</strong>
+            <small>{{ wanPercent.toFixed(1) }}%</small>
+          </div>
+
+          <div class="ratio-summary-card ratio-summary-card-lan">
+            <div class="ratio-summary-top">
+              <span class="ratio-summary-label">LAN 流量</span>
+              <span class="ratio-summary-badge">内网</span>
+            </div>
+            <strong>{{ formatBytes(lanTotalBytes) }}</strong>
+            <small>{{ lanPercent.toFixed(1) }}%</small>
+          </div>
+
+          <div class="ratio-summary-card ratio-summary-card-neutral">
+            <div class="ratio-summary-top">
+              <span class="ratio-summary-label">主导网络</span>
+              <span class="ratio-summary-badge">概览</span>
+            </div>
+            <strong>{{ dominantScopeLabel }}</strong>
+            <small>{{ dominantScopeHint }}</small>
+          </div>
         </div>
 
         <div class="ratio-group">
@@ -106,16 +146,17 @@
 
       <article class="card">
         <div class="panel-header">
-          <h3>Top N 排行</h3>
-          <span class="muted">{{ rankingDescription }}</span>
+          <h3>应用流量排行</h3>
+          <span class="section-tag">{{ rankingDescription }}</span>
         </div>
         <ol class="ranking-list">
-          <li v-for="item in topRanking" :key="item.appKey">
-            <div>
+          <li v-for="(item, index) in topRanking" :key="item.appKey">
+            <div class="ranking-main">
+              <span class="ranking-index">{{ index + 1 }}</span>
               <strong>{{ item.displayName || item.processName }}</strong>
               <small class="muted">{{ item.processName }}</small>
             </div>
-            <span>{{ formatBytes(getRankingValue(item)) }}</span>
+            <span class="ranking-value">{{ formatBytes(getRankingValue(item)) }}</span>
           </li>
           <li v-if="!topRanking.length" class="muted">当前还没有可展示的排行数据。</li>
         </ol>
@@ -175,8 +216,24 @@ const topRanking = computed(() =>
 
 const rankingDescription = computed(() => {
   const scopeLabel = filters.scope === 'wan' ? 'WAN' : filters.scope === 'lan' ? 'LAN' : '全部';
-  const directionLabel = filters.direction === 'upload' ? '上行' : filters.direction === 'download' ? '下行' : '总量';
-  return `${scopeLabel} / ${directionLabel} 排序`;
+  const directionLabel =
+    filters.direction === 'upload' ? '上传' : filters.direction === 'download' ? '下载' : '总流量';
+  return `${scopeLabel} / ${directionLabel}`;
+});
+
+const activePresetHours = computed(() => getMatchedPresetHours(filters.from, filters.to));
+
+const rangeParts = computed(() => formatRangeParts());
+
+const dominantScopeLabel = computed(() => {
+  if (wanTotalBytes.value === 0 && lanTotalBytes.value === 0) return '--';
+  if (Math.abs(wanPercent.value - lanPercent.value) < 1) return '基本均衡';
+  return wanPercent.value >= lanPercent.value ? 'WAN 为主' : 'LAN 为主';
+});
+
+const dominantScopeHint = computed(() => {
+  if (wanTotalBytes.value === 0 && lanTotalBytes.value === 0) return '当前没有流量数据';
+  return `差值 ${Math.abs(wanPercent.value - lanPercent.value).toFixed(1)}%`;
 });
 
 onMounted(() => {
@@ -216,15 +273,18 @@ function formatBytes(value: number) {
   return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function formatRangeText() {
+function formatRangeParts() {
   const from = filters.from ? new Date(filters.from) : null;
   const to = filters.to ? new Date(filters.to) : null;
 
   if (!from || !to || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-    return '--';
+    return null;
   }
 
-  return `${from.toLocaleString()} ~ ${to.toLocaleString()}`;
+  return {
+    from: from.toLocaleString(),
+    to: to.toLocaleString()
+  };
 }
 
 function toLocalInputValue(value: Date) {
@@ -234,6 +294,23 @@ function toLocalInputValue(value: Date) {
 
 function toIsoString(value: string) {
   return value ? new Date(value).toISOString() : undefined;
+}
+
+function getMatchedPresetHours(fromValue: string, toValue: string) {
+  const from = fromValue ? new Date(fromValue) : null;
+  const to = toValue ? new Date(toValue) : null;
+
+  if (!from || !to || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return null;
+  }
+
+  const diffHours = (to.getTime() - from.getTime()) / (60 * 60 * 1000);
+  const rounded = Math.round(diffHours * 100) / 100;
+
+  if (rounded === 1) return 1;
+  if (rounded === 6) return 6;
+  if (rounded === 24) return 24;
+  return null;
 }
 
 function getRankingValue(item: AppTrafficSummaryDto) {
