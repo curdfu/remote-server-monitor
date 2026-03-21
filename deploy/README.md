@@ -25,9 +25,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-service.ps1
 - `artifacts\publish\win-x64`
 
 ### 2. 安装服务
-以管理员 PowerShell 执行：
+进入发布目录后，以管理员 PowerShell 执行：
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-service.ps1
+powershell -ExecutionPolicy Bypass -File .\install-service.ps1
 ```
 
 服务信息：
@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-service.ps1
 ### 4. 卸载服务
 如需卸载，以管理员 PowerShell 执行：
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-service.ps1
+powershell -ExecutionPolicy Bypass -File .\uninstall-service.ps1
 ```
 
 ## 发布
@@ -57,6 +57,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-service.ps1
 发布目录内容：
 - `Monitor.Service.exe`
 - `appsettings.json`
+- `install-service.ps1`
+- `uninstall-service.ps1`
 - `wwwroot\`（前端静态文件）
 - `logs\`（运行后自动创建）
 - `monitor.db`（服务首次启动时自动创建，与 exe 同级）
@@ -72,6 +74,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish-service.ps1
 ```text
 Monitor.Service.exe
 appsettings.json
+install-service.ps1
+uninstall-service.ps1
 logs\
 wwwroot\
 ```

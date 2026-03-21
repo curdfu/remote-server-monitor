@@ -11,6 +11,8 @@ $frontendDir = Join-Path $repoRoot 'src\Monitor.Frontend'
 $serviceProject = Join-Path $repoRoot 'src\Monitor.Service\Monitor.Service.csproj'
 $outputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $publishWwwroot = Join-Path $outputDir 'wwwroot'
+$installScriptSource = Join-Path $PSScriptRoot 'install-service.ps1'
+$uninstallScriptSource = Join-Path $PSScriptRoot 'uninstall-service.ps1'
 
 $env:DOTNET_CLI_HOME = Join-Path $repoRoot '.dotnet-cli-home'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
@@ -50,6 +52,9 @@ if (Test-Path $publishWwwroot) {
 }
 New-Item -ItemType Directory -Path $publishWwwroot -Force | Out-Null
 Copy-Item -Path (Join-Path $frontendDir 'dist\*') -Destination $publishWwwroot -Recurse -Force
+Copy-Item -Path $installScriptSource -Destination (Join-Path $outputDir 'install-service.ps1') -Force
+Copy-Item -Path $uninstallScriptSource -Destination (Join-Path $outputDir 'uninstall-service.ps1') -Force
 
 Write-Host "发布完成： $outputDir"
 Write-Host "可执行文件： $(Join-Path $outputDir 'Monitor.Service.exe')"
+

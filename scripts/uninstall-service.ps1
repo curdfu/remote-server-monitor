@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$PublishDir = "$(Join-Path $PSScriptRoot '..\artifacts\publish\win-x64')",
+    [string]$PublishDir = $PSScriptRoot,
     [string]$ExecutableName = 'Monitor.Service.exe'
 )
 
@@ -13,9 +13,10 @@ if (-not (Test-Path $exePath)) {
 }
 
 Write-Host "卸载服务..."
-& $exePath uninstall
-if ($LASTEXITCODE -ne 0) {
-    throw "卸载服务失败，退出码：$LASTEXITCODE"
+$uninstallProcess = Start-Process -FilePath $exePath -ArgumentList 'uninstall' -Wait -PassThru
+$uninstallExitCode = $uninstallProcess.ExitCode
+if ($uninstallExitCode -ne 0) {
+    throw "卸载服务失败，退出码：$uninstallExitCode"
 }
 
 Write-Host "服务已卸载。"
