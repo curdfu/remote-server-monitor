@@ -8,4 +8,6 @@ public sealed class CpuMetrics
     public string? TemperatureSource { get; init; }
     public double? FrequencyMhz { get; init; }
     public string? FrequencySource { get; init; }
+    public double? PowerWatts { get; init; }
+    public string? PowerSource { get; init; }
 }

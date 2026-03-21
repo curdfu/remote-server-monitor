@@ -71,6 +71,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDisposable
             }
 
             var (cpuFrequencyMhz, cpuFrequencySource) = ReadCpuClock(cpuSensors);
+            var (cpuPowerWatts, cpuPowerSource) = ReadCpuPower(cpuSensors);
 
             var (memoryUsed, _) = ReadFirstSensor(
                 memorySensors,
@@ -100,6 +101,39 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDisposable
                     Source = $"{sensor.Hardware.Name}/{sensor.Name}"
                 })
                 .Where(item => item.Value.HasValue)
+                .ToArray();
+
+            var diskDrives = storageSensors
+                .Where(sensor => sensor.SensorType == SensorType.Temperature)
+                .GroupBy(sensor => sensor.Hardware.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(group =>
+                {
+                    var candidates = group
+                        .Select(sensor => new
+                        {
+                            Value = Normalize(sensor.Value),
+                            Source = $"{sensor.Hardware.Name}/{sensor.Name}"
+                        })
+                        .Where(item => item.Value.HasValue)
+                        .ToArray();
+
+                    var driveTemperature = candidates
+                        .Select(item => item.Value!.Value)
+                        .DefaultIfEmpty()
+                        .Max() is var maxTemperature && maxTemperature > 0
+                            ? maxTemperature
+                            : (double?)null;
+
+                    return new DiskDriveMetrics
+                    {
+                        Name = group.Key,
+                        TemperatureC = driveTemperature,
+                        TemperatureSource = driveTemperature.HasValue
+                            ? candidates.FirstOrDefault(item => item.Value == driveTemperature)?.Source
+                            : null
+                    };
+                })
+                .OrderBy(drive => drive.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
             var diskTemperature = diskTemperatureCandidates
@@ -134,7 +168,9 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDisposable
                     TemperatureC = cpuTemperature,
                     TemperatureSource = cpuTemperatureSource,
                     FrequencyMhz = cpuFrequencyMhz,
-                    FrequencySource = cpuFrequencySource
+                    FrequencySource = cpuFrequencySource,
+                    PowerWatts = cpuPowerWatts,
+                    PowerSource = cpuPowerSource
                 },
                 Memory = new MemoryMetrics
                 {
@@ -148,9 +184,10 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDisposable
                 },
                 Disk = new DiskMetrics
                 {
-                    MonitoredDiskCount = _computer.Hardware.Count(hardware => hardware.HardwareType == HardwareType.Storage),
+                    MonitoredDiskCount = diskDrives.Length,
                     TemperatureC = diskTemperature,
-                    TemperatureSource = diskTemperatureSource
+                    TemperatureSource = diskTemperatureSource,
+                    Drives = diskDrives
                 },
                 System = new SystemMetrics
                 {
@@ -319,6 +356,34 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDisposable
         return fallback is null
             ? (null, null)
             : (fallback.Value!.Value, $"Frequency/{fallback.Name}");
+    }
+
+    private static (double? Value, string? Source) ReadCpuPower(IEnumerable<ISensor> cpuSensors)
+    {
+        var preferredPatterns = new[]
+        {
+            "CPU Package",
+            "Package"
+        };
+
+        foreach (var pattern in preferredPatterns)
+        {
+            var match = ReadFirstSensor(
+                cpuSensors,
+                sensor => sensor.SensorType == SensorType.Power &&
+                          sensor.Name.Contains(pattern, StringComparison.OrdinalIgnoreCase),
+                sensor => sensor.Name);
+
+            if (match.Value.HasValue)
+            {
+                return match;
+            }
+        }
+
+        return ReadFirstSensor(
+            cpuSensors,
+            sensor => sensor.SensorType == SensorType.Power,
+            sensor => sensor.Name);
     }
 
     private static double? Normalize(float? value)

@@ -3,11 +3,19 @@ export interface HardwareRealtimeDto {
   cpuUsagePercent: number | null;
   cpuTemperatureC: number | null;
   cpuFrequencyMhz: number | null;
+  cpuPowerWatts: number | null;
   memoryTotalMb: number | null;
   memoryUsedMb: number | null;
   memoryUsagePercent: number | null;
   diskTemperatureC: number | null;
+  disks: DiskTemperatureDto[];
   uptimeSeconds: number;
+}
+
+export interface DiskTemperatureDto {
+  name: string;
+  temperatureC: number | null;
+  temperatureSource?: string | null;
 }
 
 export interface NetworkRealtimeDto {

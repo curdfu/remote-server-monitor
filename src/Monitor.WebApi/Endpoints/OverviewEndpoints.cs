@@ -41,10 +41,17 @@ public static class OverviewEndpoints
                     CpuUsagePercent = hardware.Cpu.UsagePercent,
                     CpuTemperatureC = hardware.Cpu.TemperatureC,
                     CpuFrequencyMhz = hardware.Cpu.FrequencyMhz,
+                    CpuPowerWatts = hardware.Cpu.PowerWatts,
                     MemoryTotalMb = hardware.Memory.TotalMb,
                     MemoryUsedMb = hardware.Memory.UsedMb,
                     MemoryUsagePercent = hardware.Memory.UsagePercent,
                     DiskTemperatureC = hardware.Disk.TemperatureC,
+                    Disks = hardware.Disk.Drives.Select(drive => new DiskTemperatureDto
+                    {
+                        Name = drive.Name,
+                        TemperatureC = drive.TemperatureC,
+                        TemperatureSource = drive.TemperatureSource
+                    }).ToArray(),
                     UptimeSeconds = hardware.System.UptimeSeconds
                 },
                 Network = new NetworkRealtimeDto

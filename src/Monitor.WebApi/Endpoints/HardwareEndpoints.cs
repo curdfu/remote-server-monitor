@@ -49,10 +49,17 @@ public static class HardwareEndpoints
             CpuUsagePercent = snapshot.Cpu.UsagePercent,
             CpuTemperatureC = snapshot.Cpu.TemperatureC,
             CpuFrequencyMhz = snapshot.Cpu.FrequencyMhz,
+            CpuPowerWatts = snapshot.Cpu.PowerWatts,
             MemoryTotalMb = snapshot.Memory.TotalMb,
             MemoryUsedMb = snapshot.Memory.UsedMb,
             MemoryUsagePercent = snapshot.Memory.UsagePercent,
             DiskTemperatureC = snapshot.Disk.TemperatureC,
+            Disks = snapshot.Disk.Drives.Select(drive => new DiskTemperatureDto
+            {
+                Name = drive.Name,
+                TemperatureC = drive.TemperatureC,
+                TemperatureSource = drive.TemperatureSource
+            }).ToArray(),
             UptimeSeconds = snapshot.System.UptimeSeconds
         };
     }

@@ -40,8 +40,9 @@
         <MetricCard label="CPU 使用率" :value="formatPercent(overview?.hardware.cpuUsagePercent)" />
         <MetricCard label="内存使用率" :value="formatPercent(overview?.hardware.memoryUsagePercent)" />
         <MetricCard label="CPU 温度" :value="formatNullable(overview?.hardware.cpuTemperatureC, '°C')" />
-        <MetricCard label="磁盘温度" :value="formatNullable(overview?.hardware.diskTemperatureC, '°C')" />
+        <MetricCard label="最高磁盘温度" :value="formatNullable(overview?.hardware.diskTemperatureC, '°C')" />
         <MetricCard label="CPU 频率" :value="formatNullable(overview?.hardware.cpuFrequencyMhz, 'MHz')" />
+        <MetricCard label="CPU 功耗" :value="formatNullable(overview?.hardware.cpuPowerWatts, 'W')" />
         <MetricCard label="开机时长" :value="formatUptime(overview?.hardware.uptimeSeconds)" />
       </div>
     </section>
@@ -82,13 +83,30 @@
       </article>
 
       <article class="card">
+        <div class="panel-header">
+          <h3>磁盘温度</h3>
+          <span class="muted">当前共 {{ overview?.hardware.disks?.length ?? 0 }} 块</span>
+        </div>
+        <ul class="simple-list realtime-list">
+          <li v-for="disk in overview?.hardware.disks ?? []" :key="disk.name">
+            <strong>{{ disk.name }}</strong>
+            <span>{{ formatNullable(disk.temperatureC, '°C') }}</span>
+          </li>
+          <li v-if="!(overview?.hardware.disks?.length)">
+            <span class="muted">当前没有可展示的磁盘温度数据。</span>
+          </li>
+        </ul>
+      </article>
+
+      <article class="card">
         <h3>当前页已完成项</h3>
         <ul class="simple-list compact">
           <li>CPU 使用率</li>
           <li>内存使用率</li>
           <li>CPU 温度</li>
-          <li>磁盘温度</li>
+          <li>多磁盘温度列表</li>
           <li>CPU 频率</li>
+          <li>CPU 功耗</li>
           <li>开机时长</li>
           <li>当前总上传 / 下载速率</li>
         </ul>
@@ -224,10 +242,12 @@ function emptyHardwareRealtime() {
     cpuUsagePercent: null,
     cpuTemperatureC: null,
     cpuFrequencyMhz: null,
+    cpuPowerWatts: null,
     memoryTotalMb: null,
     memoryUsedMb: null,
     memoryUsagePercent: null,
     diskTemperatureC: null,
+    disks: [],
     uptimeSeconds: 0
   };
 }
