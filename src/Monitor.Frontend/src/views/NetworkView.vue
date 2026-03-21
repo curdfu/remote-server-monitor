@@ -7,7 +7,7 @@
       description="这里主要看一段时间内的累计流量、占比和应用排行。"
     >
       <template #actions>
-        <button class="ghost-button" :disabled="isLoading" @click="loadApps">
+        <button class="ghost-button" :disabled="isLoading" @click="refreshApps">
           {{ isLoading ? '查询中...' : '重新查询' }}
         </button>
       </template>
@@ -257,6 +257,16 @@ async function loadApps() {
   } finally {
     isLoading.value = false;
   }
+}
+
+function refreshApps() {
+  const presetHours = activePresetHours.value;
+  if (presetHours) {
+    applyPreset(presetHours);
+    return;
+  }
+
+  void loadApps();
 }
 
 function applyPreset(hours: number) {
