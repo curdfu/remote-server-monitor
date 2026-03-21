@@ -1,15 +1,22 @@
-﻿using Microsoft.Diagnostics.Tracing.Parsers;
+using Microsoft.Diagnostics.Tracing.Parsers;
 using Microsoft.Diagnostics.Tracing.Parsers.Kernel;
 using Microsoft.Diagnostics.Tracing.Session;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Monitor.Contracts.Options;
 using Monitor.Network.Abstractions;
 using Monitor.Network.Enums;
 using Monitor.Network.Models;
+using System.Runtime.InteropServices;
 
 namespace Monitor.Network.Collectors;
 
-public sealed class EtwNetworkCollector(ILogger<EtwNetworkCollector> logger) : INetworkCollector, IDisposable
+public sealed class EtwNetworkCollector(
+    ILogger<EtwNetworkCollector> logger,
+    IOptionsMonitor<MonitorSettings> settingsMonitor) : INetworkCollector, IDisposable
 {
+    private const int InsufficientResourcesHResult = unchecked((int)0x800705AA);
+
     private readonly object _syncRoot = new();
     private TraceEventSession? _session;
     private Task? _processingTask;
@@ -35,9 +42,13 @@ public sealed class EtwNetworkCollector(ILogger<EtwNetworkCollector> logger) : I
 
             try
             {
-                _session = new TraceEventSession(_sessionName);
+                var bufferSizeMb = Math.Clamp(settingsMonitor.CurrentValue.EtwBufferSizeMb, 1, 128);
+                var sessionOptions = TraceEventSessionOptions.Create |
+                                     TraceEventSessionOptions.NoPerProcessorBuffering;
+
+                _session = new TraceEventSession(_sessionName, sessionOptions);
                 _session.StopOnDispose = true;
-                _session.BufferSizeMB = 64;
+                _session.BufferSizeMB = bufferSizeMb;
                 _session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
 
                 RegisterHandlers(_session.Source.Kernel);
@@ -49,16 +60,42 @@ public sealed class EtwNetworkCollector(ILogger<EtwNetworkCollector> logger) : I
                     TaskScheduler.Default);
 
                 IsRunning = true;
-                logger.LogInformation("ETW network collector started. SessionName: {SessionName}", _sessionName);
+                logger.LogInformation(
+                    "ETW network collector started. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}, SessionOptions: {SessionOptions}",
+                    _sessionName,
+                    bufferSizeMb,
+                    sessionOptions);
+            }
+            catch (COMException exception) when (exception.HResult == InsufficientResourcesHResult)
+            {
+                var sessionName = _sessionName;
+                var bufferSizeMb = settingsMonitor.CurrentValue.EtwBufferSizeMb;
+                CleanupFailedStart();
+                logger.LogError(
+                    exception,
+                    "Failed to start ETW network collector because ETW resources are insufficient. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}. Consider reducing Monitor:EtwBufferSizeMb further or retrying after other ETW sessions are released.",
+                    sessionName,
+                    bufferSizeMb);
+                return Task.CompletedTask;
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                var sessionName = _sessionName;
+                CleanupFailedStart();
+                logger.LogError(
+                    exception,
+                    "Failed to start ETW network collector due to insufficient privileges. SessionName: {SessionName}. Administrator rights are required to start the ETW kernel session.",
+                    sessionName);
+                return Task.CompletedTask;
             }
             catch (Exception exception)
             {
-                _session?.Dispose();
-                _session = null;
-                _processingTask = null;
-                _sessionName = null;
-
-                logger.LogError(exception, "Failed to start ETW network collector. ETW kernel session may require elevated privileges.");
+                var sessionName = _sessionName;
+                CleanupFailedStart();
+                logger.LogError(
+                    exception,
+                    "Failed to start ETW network collector. SessionName: {SessionName}",
+                    sessionName);
                 return Task.CompletedTask;
             }
         }
@@ -288,5 +325,13 @@ public sealed class EtwNetworkCollector(ILogger<EtwNetworkCollector> logger) : I
     private void ThrowIfDisposed()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+    }
+
+    private void CleanupFailedStart()
+    {
+        _session?.Dispose();
+        _session = null;
+        _processingTask = null;
+        _sessionName = null;
     }
 }

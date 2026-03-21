@@ -19,7 +19,7 @@
       </div>
       <div>
         <span class="muted">刷新策略</span>
-        <strong>每 2 秒自动刷新</strong>
+        <strong>SignalR 实时推送</strong>
       </div>
       <div>
         <span class="muted">当前状态</span>
@@ -65,14 +65,17 @@
       <article class="card">
         <div class="panel-header">
           <h3>Top App 预览</h3>
-          <span class="muted">{{ isLoading ? '正在更新…' : `共 ${overview?.topApps?.length ?? 0} 项` }}</span>
+          <span class="muted">{{ isLoading ? '正在更新…' : `共 ${topApps.length} 项` }}</span>
         </div>
-        <ul class="simple-list">
-          <li v-for="item in overview?.topApps ?? []" :key="item.appKey">
-            <strong>{{ item.displayName || item.processName }}</strong>
+        <ul class="simple-list realtime-list">
+          <li v-for="item in topApps" :key="item.appKey">
+            <strong>
+              {{ item.displayName || item.processName }}
+              <small v-if="item.isStale" class="muted">（暂时空闲）</small>
+            </strong>
             <span>{{ formatRate(item.downloadBytesPerSecond) }} ↓ / {{ formatRate(item.uploadBytesPerSecond) }} ↑</span>
           </li>
-          <li v-if="!overview?.topApps?.length" class="muted">
+          <li v-if="!topApps.length" class="muted">
             当前还没有实时排行数据。
           </li>
         </ul>
@@ -99,25 +102,69 @@ import { onMounted, onUnmounted, ref } from 'vue';
 import MetricCard from '../components/MetricCard.vue';
 import PageHeader from '../components/PageHeader.vue';
 import { getOverview } from '../services/api';
-import type { RealtimeOverviewDto } from '../types/monitor';
+import { createFrameUpdater } from '../services/frameUpdater';
+import {
+  startRealtimeConnection,
+  subscribeHardwareRealtime,
+  subscribeNetworkRealtime,
+  subscribeTopAppsRealtime
+} from '../services/realtime';
+import {
+  mergeRetainedTopApps,
+  pruneRetainedTopApps,
+  type RetainedAppTrafficItem
+} from '../services/topAppsRetention';
+import type {
+  AppTrafficItemDto,
+  HardwareRealtimeDto,
+  NetworkRealtimeDto,
+  RealtimeOverviewDto
+} from '../types/monitor';
 
 const overview = ref<RealtimeOverviewDto | null>(null);
+const topApps = ref<RetainedAppTrafficItem[]>([]);
 const isLoading = ref(false);
 const errorMessage = ref('');
-
-let refreshTimer: number | null = null;
+let cleanupTimer: number | null = null;
+let unsubscribeHardware: (() => void) | null = null;
+let unsubscribeNetwork: (() => void) | null = null;
+let unsubscribeTopApps: (() => void) | null = null;
+const topAppRetentionMs = 10_000;
+const pendingHardware = ref<HardwareRealtimeDto | null>(null);
+const pendingNetwork = ref<NetworkRealtimeDto | null>(null);
+const pendingTopApps = ref<AppTrafficItemDto[] | null>(null);
+const frameUpdater = createFrameUpdater(flushRealtimeState);
 
 onMounted(() => {
   void loadOverview();
-  refreshTimer = window.setInterval(() => {
-    void loadOverview();
-  }, 2000);
+  void startRealtimeConnection().catch(() => {
+    errorMessage.value = 'SignalR 实时通道连接失败，将继续保留当前页面数据。';
+  });
+
+  unsubscribeHardware = subscribeHardwareRealtime((hardware) => {
+    errorMessage.value = '';
+    pendingHardware.value = hardware;
+    frameUpdater.schedule();
+  });
+
+  unsubscribeNetwork = subscribeNetworkRealtime((network) => {
+    errorMessage.value = '';
+    pendingNetwork.value = network;
+    frameUpdater.schedule();
+  });
+
+  unsubscribeTopApps = subscribeTopAppsRealtime((items) => {
+    errorMessage.value = '';
+    pendingTopApps.value = items;
+    frameUpdater.schedule();
+  });
 });
 
 onUnmounted(() => {
-  if (refreshTimer !== null) {
-    window.clearInterval(refreshTimer);
-  }
+  frameUpdater.cancel();
+  unsubscribeHardware?.();
+  unsubscribeNetwork?.();
+  unsubscribeTopApps?.();
 });
 
 async function loadOverview() {
@@ -125,7 +172,9 @@ async function loadOverview() {
   errorMessage.value = '';
 
   try {
-    overview.value = await getOverview();
+    const loaded = await getOverview();
+    overview.value = loaded;
+    topApps.value = mergeRetainedTopApps([], loaded.topApps, topAppRetentionMs);
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载总览数据失败。';
   } finally {
@@ -167,5 +216,58 @@ function formatDateTime(value?: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '--';
   return date.toLocaleString();
+}
+
+function emptyHardwareRealtime() {
+  return {
+    sampleTime: new Date(0).toISOString(),
+    cpuUsagePercent: null,
+    cpuTemperatureC: null,
+    cpuFrequencyMhz: null,
+    memoryTotalMb: null,
+    memoryUsedMb: null,
+    memoryUsagePercent: null,
+    diskTemperatureC: null,
+    uptimeSeconds: 0
+  };
+}
+
+function emptyNetworkRealtime() {
+  return {
+    sampleTime: new Date(0).toISOString(),
+    totalUploadBytesPerSecond: 0,
+    totalDownloadBytesPerSecond: 0,
+    wanUploadBytesPerSecond: 0,
+    wanDownloadBytesPerSecond: 0,
+    lanUploadBytesPerSecond: 0,
+    lanDownloadBytesPerSecond: 0
+  };
+}
+
+function flushRealtimeState() {
+  const hasHardware = pendingHardware.value !== null;
+  const hasNetwork = pendingNetwork.value !== null;
+  const hasTopApps = pendingTopApps.value !== null;
+
+  if (!hasHardware && !hasNetwork && !hasTopApps) {
+    return;
+  }
+
+  const nextTopAppsSource = pendingTopApps.value;
+  const retainedTopApps = nextTopAppsSource
+    ? mergeRetainedTopApps(topApps.value, nextTopAppsSource, topAppRetentionMs)
+    : pruneRetainedTopApps(topApps.value, topAppRetentionMs);
+
+  topApps.value = retainedTopApps;
+
+  overview.value = {
+    hardware: pendingHardware.value ?? overview.value?.hardware ?? emptyHardwareRealtime(),
+    network: pendingNetwork.value ?? overview.value?.network ?? emptyNetworkRealtime(),
+    topApps: nextTopAppsSource ?? overview.value?.topApps ?? []
+  };
+
+  pendingHardware.value = null;
+  pendingNetwork.value = null;
+  pendingTopApps.value = null;
 }
 </script>

@@ -243,6 +243,11 @@ button {
   border-bottom: none;
 }
 
+.realtime-list {
+  min-height: 232px;
+  align-content: start;
+}
+
 .simple-list.compact li {
   display: list-item;
   margin-left: 18px;

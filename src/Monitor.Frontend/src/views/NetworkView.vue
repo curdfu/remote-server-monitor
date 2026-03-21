@@ -37,6 +37,39 @@
       {{ errorMessage }}
     </div>
 
+    <section class="dashboard-section">
+      <div class="section-header">
+        <h3>实时网络概览</h3>
+        <span class="muted">来自 SignalR 推送</span>
+      </div>
+      <div class="grid">
+        <div class="card metric-card">
+          <span class="metric-label">当前上传</span>
+          <strong class="metric-value">{{ formatBytes(realtimeNetwork?.totalUploadBytesPerSecond ?? 0) }}/s</strong>
+        </div>
+        <div class="card metric-card">
+          <span class="metric-label">当前下载</span>
+          <strong class="metric-value">{{ formatBytes(realtimeNetwork?.totalDownloadBytesPerSecond ?? 0) }}/s</strong>
+        </div>
+        <div class="card metric-card">
+          <span class="metric-label">WAN 实时流量</span>
+          <strong class="metric-value metric-small">
+            ↑ {{ formatBytes(realtimeNetwork?.wanUploadBytesPerSecond ?? 0) }}/s
+            <br />
+            ↓ {{ formatBytes(realtimeNetwork?.wanDownloadBytesPerSecond ?? 0) }}/s
+          </strong>
+        </div>
+        <div class="card metric-card">
+          <span class="metric-label">LAN 实时流量</span>
+          <strong class="metric-value metric-small">
+            ↑ {{ formatBytes(realtimeNetwork?.lanUploadBytesPerSecond ?? 0) }}/s
+            <br />
+            ↓ {{ formatBytes(realtimeNetwork?.lanDownloadBytesPerSecond ?? 0) }}/s
+          </strong>
+        </div>
+      </div>
+    </section>
+
     <div class="grid">
       <div class="card metric-card">
         <span class="metric-label">总上传流量</span>
@@ -91,7 +124,7 @@
       <article class="card">
         <div class="panel-header">
           <h3>Top N 排行</h3>
-          <span class="muted">按总流量排序</span>
+          <span class="muted">按总流量排序 / 实时榜单保活 10 秒</span>
         </div>
         <ol class="ranking-list">
           <li v-for="item in topRanking" :key="item.appKey">
@@ -103,6 +136,23 @@
           </li>
           <li v-if="!topRanking.length" class="muted">当前还没有可展示的排行数据。</li>
         </ol>
+      </article>
+
+      <article class="card">
+        <div class="panel-header">
+          <h3>实时 Top App</h3>
+          <span class="muted">SignalR 实时更新</span>
+        </div>
+        <ul class="simple-list realtime-list">
+          <li v-for="item in realtimeTopApps" :key="item.appKey">
+            <strong>
+              {{ item.displayName || item.processName }}
+              <small v-if="item.isStale" class="muted">（暂时空闲）</small>
+            </strong>
+            <span>{{ formatBytes(item.downloadBytesPerSecond) }}/s ↓ / {{ formatBytes(item.uploadBytesPerSecond) }}/s ↑</span>
+          </li>
+          <li v-if="!realtimeTopApps.length" class="muted">当前还没有实时排行数据。</li>
+        </ul>
       </article>
     </section>
 
@@ -145,12 +195,25 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import PageHeader from '../components/PageHeader.vue';
 import { getNetworkApps } from '../services/api';
-import type { AppTrafficSummaryDto } from '../types/monitor';
+import { createFrameUpdater } from '../services/frameUpdater';
+import {
+  startRealtimeConnection,
+  subscribeNetworkRealtime,
+  subscribeTopAppsRealtime
+} from '../services/realtime';
+import {
+  mergeRetainedTopApps,
+  pruneRetainedTopApps,
+  type RetainedAppTrafficItem
+} from '../services/topAppsRetention';
+import type { AppTrafficSummaryDto, NetworkRealtimeDto } from '../types/monitor';
 
 const items = ref<AppTrafficSummaryDto[]>([]);
+const realtimeNetwork = ref<NetworkRealtimeDto | null>(null);
+const realtimeTopApps = ref<RetainedAppTrafficItem[]>([]);
 const isLoading = ref(false);
 const errorMessage = ref('');
 const filters = reactive({
@@ -158,6 +221,12 @@ const filters = reactive({
   to: toLocalInputValue(new Date()),
   topN: 10
 });
+const topAppRetentionMs = 10_000;
+let unsubscribeNetwork: (() => void) | null = null;
+let unsubscribeTopApps: (() => void) | null = null;
+const pendingRealtimeNetwork = ref<NetworkRealtimeDto | null>(null);
+const pendingRealtimeTopApps = ref<RetainedAppTrafficItem[] | null>(null);
+const frameUpdater = createFrameUpdater(flushRealtimeState);
 
 const totalUploadBytes = computed(() =>
   items.value.reduce((sum, item) => sum + item.totalUploadBytes, 0)
@@ -193,6 +262,25 @@ const topRanking = computed(() =>
 
 onMounted(() => {
   void loadApps();
+  void startRealtimeConnection().catch(() => {
+    errorMessage.value = 'SignalR 实时通道连接失败，历史查询仍可继续使用。';
+  });
+
+  unsubscribeNetwork = subscribeNetworkRealtime((payload) => {
+    pendingRealtimeNetwork.value = payload;
+    frameUpdater.schedule();
+  });
+
+  unsubscribeTopApps = subscribeTopAppsRealtime((payload) => {
+    pendingRealtimeTopApps.value = mergeRetainedTopApps(realtimeTopApps.value, payload, topAppRetentionMs);
+    frameUpdater.schedule();
+  });
+});
+
+onUnmounted(() => {
+  frameUpdater.cancel();
+  unsubscribeNetwork?.();
+  unsubscribeTopApps?.();
 });
 
 async function loadApps() {
@@ -244,5 +332,17 @@ function toLocalInputValue(value: Date) {
 
 function toIsoString(value: string) {
   return value ? new Date(value).toISOString() : undefined;
+}
+
+function flushRealtimeState() {
+  if (pendingRealtimeNetwork.value === null && pendingRealtimeTopApps.value === null) {
+    return;
+  }
+
+  realtimeNetwork.value = pendingRealtimeNetwork.value ?? realtimeNetwork.value;
+  realtimeTopApps.value = pendingRealtimeTopApps.value ?? pruneRetainedTopApps(realtimeTopApps.value, topAppRetentionMs);
+
+  pendingRealtimeNetwork.value = null;
+  pendingRealtimeTopApps.value = null;
 }
 </script>
