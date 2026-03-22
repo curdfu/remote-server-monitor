@@ -207,6 +207,10 @@ button:disabled {
   background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
   backdrop-filter: blur(14px);
+  position: sticky;
+  top: 0;
+  align-self: start;
+  min-height: 100vh;
 }
 
 .sidebar-brand {
@@ -237,12 +241,16 @@ button:disabled {
   line-height: 1.45;
 }
 
-.sidebar nav {
+.sidebar-nav {
+  display: grid;
+}
+
+.sidebar-nav-links {
   display: grid;
   gap: 8px;
 }
 
-.sidebar nav a {
+.sidebar-nav-links a {
   padding: 10px 12px;
   border-radius: 12px;
   color: var(--sidebar-nav-text);
@@ -268,18 +276,18 @@ button:disabled {
   color: var(--accent);
 }
 
-.sidebar nav a:hover,
-.sidebar nav a.router-link-active {
+.sidebar-nav-links a:hover,
+.sidebar-nav-links a.router-link-active {
   background: var(--sidebar-nav-hover-bg);
   border-color: var(--sidebar-nav-hover-border);
   color: var(--sidebar-nav-hover-text);
   transform: translateX(2px);
 }
 
-.sidebar-footer-grid {
-  margin-top: auto;
+.sidebar-nav-meta {
   display: grid;
   gap: 8px;
+  margin-top: 12px;
 }
 
 .sidebar-mini-card {
@@ -1207,6 +1215,8 @@ button:disabled {
   }
 
   .sidebar {
+    position: static;
+    min-height: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
