@@ -45,14 +45,14 @@
     </article>
 
     <div class="preset-row">
-      <button class="chip-button" :class="{ 'chip-button-active': activePresetHours === 1 }" @click="applyPreset(1)">
-        最近 1 小时
-      </button>
-      <button class="chip-button" :class="{ 'chip-button-active': activePresetHours === 6 }" @click="applyPreset(6)">
-        最近 6 小时
-      </button>
-      <button class="chip-button" :class="{ 'chip-button-active': activePresetHours === 24 }" @click="applyPreset(24)">
-        最近 24 小时
+      <button
+        v-for="preset in presetOptions"
+        :key="preset.hours"
+        class="chip-button"
+        :class="{ 'chip-button-active': activePresetHours === preset.hours }"
+        @click="applyPreset(preset.hours)"
+      >
+        {{ preset.label }}
       </button>
     </div>
 
@@ -170,6 +170,15 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import PageHeader from '../components/PageHeader.vue';
 import { getNetworkApps } from '../services/api';
 import type { AppTrafficSummaryDto } from '../types/monitor';
+
+const presetOptions = [
+  { hours: 1, label: '最近 1 小时' },
+  { hours: 6, label: '最近 6 小时' },
+  { hours: 24, label: '最近 24 小时' },
+  { hours: 72, label: '最近 3 天' },
+  { hours: 24 * 7, label: '最近 1 周' },
+  { hours: 24 * 30, label: '最近 30 天' }
+] as const;
 
 const items = ref<AppTrafficSummaryDto[]>([]);
 const isLoading = ref(false);
@@ -316,11 +325,7 @@ function getMatchedPresetHours(fromValue: string, toValue: string) {
 
   const diffHours = (to.getTime() - from.getTime()) / (60 * 60 * 1000);
   const rounded = Math.round(diffHours * 100) / 100;
-
-  if (rounded === 1) return 1;
-  if (rounded === 6) return 6;
-  if (rounded === 24) return 24;
-  return null;
+  return presetOptions.find((preset) => rounded === preset.hours)?.hours ?? null;
 }
 
 function getRankingValue(item: AppTrafficSummaryDto) {
