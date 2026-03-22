@@ -1,30 +1,31 @@
-﻿<template>
-  <section class="page">
+<template>
+  <section class="page dashboard-page">
     <PageHeader
-      icon="▦"
+      iconName="dashboard"
       kicker="首页"
       title="系统概览"
       description="先看最关键的硬件状态，首页尽量保持清爽。"
     >
       <template #actions>
         <button class="ghost-button" :disabled="isLoading" @click="loadOverview">
+          <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
           {{ isLoading ? '刷新中...' : '立即刷新' }}
         </button>
       </template>
     </PageHeader>
 
-    <div class="overview-meta card">
+    <div class="overview-meta card overview-meta-bar">
       <div class="overview-meta-item">
         <span class="muted">数据时间</span>
         <strong>{{ formatDateTime(overview?.hardware.sampleTime) }}</strong>
       </div>
       <div class="overview-meta-item">
-        <span class="muted">刷新方式</span>
-        <strong>硬件数据实时推送</strong>
+        <span class="muted">采集模式</span>
+        <strong>硬件推送 + 网络累计</strong>
       </div>
       <div class="overview-meta-item">
-        <span class="muted">运行状态</span>
-        <strong>{{ errorMessage ? '接口异常' : '运行中' }}</strong>
+        <span class="muted">在线状态</span>
+        <strong>{{ errorMessage ? '接口异常' : '稳定运行' }}</strong>
       </div>
     </div>
 
@@ -33,60 +34,89 @@
     </div>
 
     <section class="dashboard-section">
-      <div class="section-header">
-        <h3>当前硬件状态</h3>
-        <span class="section-tag">CPU / 内存 / 温度 / 开机时长</span>
+      <div class="section-header section-header-rich">
+        <div>
+          <h3>核心运行指标</h3>
+          <p class="section-subtitle">优先展示最关键、最常看的首页指标。</p>
+        </div>
+        <span class="section-tag">Core Metrics</span>
       </div>
-      <div class="grid">
+
+      <div class="dashboard-hero-grid">
         <MetricCard
           label="已开机"
           :value="formatUptime(overview?.hardware.uptimeSeconds)"
+          :hint="`启动时间 ${formatDateTime(bootTimeText)}`"
           badge="运行"
           tone="info"
+          icon-name="uptime"
         />
         <MetricCard
           label="CPU 当前频率"
           :value="formatNullable(overview?.hardware.cpuFrequencyMhz, 'MHz')"
+          :hint="formatCpuHint(overview?.hardware.cpuFrequencyMhz, overview?.hardware.cpuPowerWatts)"
           badge="频率"
           tone="info"
+          icon-name="cpu"
         />
         <MetricCard
           label="CPU 当前温度"
           :value="formatNullable(overview?.hardware.cpuTemperatureC, '°C')"
+          :hint="formatNullable(overview?.hardware.cpuFrequencyMhz, 'MHz')"
           :badge="temperatureBadge(overview?.hardware.cpuTemperatureC)"
           :tone="temperatureTone(overview?.hardware.cpuTemperatureC)"
+          icon-name="temperature"
+          :meter-percent="temperaturePercent(overview?.hardware.cpuTemperatureC)"
         />
         <MetricCard
           label="CPU 当前功耗"
           :value="formatNullable(overview?.hardware.cpuPowerWatts, 'W')"
+          :hint="formatNullable(overview?.hardware.cpuFrequencyMhz, 'MHz')"
           badge="功耗"
           tone="info"
+          icon-name="power"
+          :meter-percent="powerPercent(overview?.hardware.cpuPowerWatts)"
         />
         <MetricCard
           label="CPU 占用"
           :value="formatPercent(overview?.hardware.cpuUsagePercent)"
+          :hint="formatCpuHint(overview?.hardware.cpuFrequencyMhz, overview?.hardware.cpuPowerWatts)"
           :badge="usageBadge(overview?.hardware.cpuUsagePercent)"
           :tone="usageTone(overview?.hardware.cpuUsagePercent)"
+          icon-name="cpu"
+          :meter-percent="overview?.hardware.cpuUsagePercent"
         />
         <MetricCard
           label="内存已使用"
           :value="formatMemoryUsage(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
+          :hint="formatMemoryHint(overview?.hardware.memoryTotalMb)"
           :badge="memoryUsageBadge(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
           :tone="memoryUsageTone(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
+          icon-name="memory"
+          :meter-percent="getMemoryUsagePercent(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
         />
         <MetricCard
           label="最热磁盘温度"
           :value="formatNullable(overview?.hardware.diskTemperatureC, '°C')"
+          :hint="`已识别 ${overview?.hardware.disks?.length ?? 0} 块磁盘`"
           :badge="temperatureBadge(overview?.hardware.diskTemperatureC)"
           :tone="temperatureTone(overview?.hardware.diskTemperatureC)"
+          icon-name="disk"
+          :meter-percent="temperaturePercent(overview?.hardware.diskTemperatureC)"
         />
       </div>
     </section>
 
-    <section class="panel-grid panel-grid-single">
-      <article class="card">
+    <section class="panel-grid dashboard-storage-grid">
+      <article class="card dashboard-panel-card">
         <div class="panel-header">
-          <h3>磁盘温度</h3>
+          <div class="panel-title">
+            <span class="panel-icon"><AppIcon name="temperature" :size="16" /></span>
+            <div>
+              <h3>磁盘温度</h3>
+              <p class="panel-subtitle">快速定位当前最热磁盘，便于散热与健康排查。</p>
+            </div>
+          </div>
           <span class="section-tag">当前 {{ overview?.hardware.disks?.length ?? 0 }} 块</span>
         </div>
 
@@ -119,10 +149,16 @@
         </div>
       </article>
 
-      <article class="card">
+      <article class="card dashboard-panel-card">
         <div class="panel-header">
-          <h3>磁盘空间</h3>
-          <span class="section-tag">按卷汇总（例如 C: / D:）</span>
+          <div class="panel-title">
+            <span class="panel-icon"><AppIcon name="disk" :size="16" /></span>
+            <div>
+              <h3>磁盘空间</h3>
+              <p class="panel-subtitle">按卷展示容量占用，优先发现空间紧张的盘符。</p>
+            </div>
+          </div>
+          <span class="section-tag">按卷汇总</span>
         </div>
 
         <div class="table-shell realtime-table-shell">
@@ -195,6 +231,15 @@ const sortedDiskSpaces = computed(() => {
   return diskSpaces.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
 });
 
+const bootTimeText = computed(() => {
+  const uptimeSeconds = overview.value?.hardware.uptimeSeconds;
+  if (uptimeSeconds == null) {
+    return null;
+  }
+
+  return new Date(Date.now() - uptimeSeconds * 1000).toISOString();
+});
+
 onMounted(() => {
   void loadOverview();
   void startRealtimeConnection().catch(() => {
@@ -247,6 +292,20 @@ function formatMemoryUsage(value?: number | null, total?: number | null) {
   return `${(value / 1024).toFixed(1)} GB`;
 }
 
+function formatMemoryHint(total?: number | null) {
+  if (total == null) {
+    return '总容量 --';
+  }
+
+  return `总容量 ${total < 1024 ? `${total.toFixed(0)} MB` : `${(total / 1024).toFixed(1)} GB`}`;
+}
+
+function formatCpuHint(frequency?: number | null, power?: number | null) {
+  const frequencyText = formatNullable(frequency, 'MHz');
+  const powerText = formatNullable(power, 'W');
+  return `频率 ${frequencyText} · 功耗 ${powerText}`;
+}
+
 function formatDiskSize(value?: number | null) {
   if (value == null || value <= 0) return '--';
 
@@ -294,6 +353,16 @@ function getCapacityPercent(usedBytes?: number | null, totalBytes?: number | nul
 function getMemoryUsagePercent(usedMb?: number | null, totalMb?: number | null) {
   if (usedMb == null || totalMb == null || totalMb <= 0) return null;
   return Math.max(0, Math.min(100, (usedMb / totalMb) * 100));
+}
+
+function temperaturePercent(value?: number | null) {
+  if (value == null) return null;
+  return Math.max(0, Math.min(100, value));
+}
+
+function powerPercent(value?: number | null) {
+  if (value == null) return null;
+  return Math.max(0, Math.min(100, (value / 200) * 100));
 }
 
 function temperatureTone(value?: number | null): 'default' | 'success' | 'warning' | 'danger' {

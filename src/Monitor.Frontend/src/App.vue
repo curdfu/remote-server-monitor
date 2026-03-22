@@ -10,19 +10,19 @@
         <div class="sidebar-nav-links">
           <RouterLink to="/">
             <span class="nav-link-content">
-              <span class="nav-icon">▦</span>
+              <span class="nav-icon"><AppIcon name="home" :size="16" /></span>
               <span>首页</span>
             </span>
           </RouterLink>
           <RouterLink to="/network">
             <span class="nav-link-content">
-              <span class="nav-icon">⇆</span>
+              <span class="nav-icon"><AppIcon name="network" :size="16" /></span>
               <span>网络</span>
             </span>
           </RouterLink>
           <RouterLink to="/settings">
             <span class="nav-link-content">
-              <span class="nav-icon">⛭</span>
+              <span class="nav-icon"><AppIcon name="settings" :size="16" /></span>
               <span>设置</span>
             </span>
           </RouterLink>
@@ -30,12 +30,18 @@
 
         <div class="sidebar-nav-meta">
           <div class="sidebar-mini-card">
-            <span class="sidebar-meta-label">实时通道</span>
+            <span class="sidebar-meta-label">
+              <AppIcon name="status" :size="12" />
+              <span>实时通道</span>
+            </span>
             <small>{{ connectionStatusText }}</small>
           </div>
 
           <label class="sidebar-mini-card theme-field">
-            <span class="sidebar-meta-label">界面主题</span>
+            <span class="sidebar-meta-label">
+              <AppIcon name="palette" :size="12" />
+              <span>界面主题</span>
+            </span>
             <select v-model="themePreference" class="theme-select">
               <option value="system">跟随系统</option>
               <option value="light">亮色</option>
@@ -53,6 +59,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import AppIcon from './components/AppIcon.vue';
 import {
   type RealtimeConnectionState,
   startRealtimeConnection,

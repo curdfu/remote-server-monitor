@@ -1,19 +1,20 @@
 ﻿<template>
-  <section class="page">
+  <section class="page network-page">
     <PageHeader
-      icon="⇆"
+      iconName="network"
       kicker="网络"
       title="网络流量"
       description="这里主要看一段时间内的累计流量、占比和应用排行。"
     >
       <template #actions>
         <button class="ghost-button" :disabled="isLoading" @click="refreshApps">
+          <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
           {{ isLoading ? '查询中...' : '重新查询' }}
         </button>
       </template>
     </PageHeader>
 
-    <article class="card filters-card">
+    <article class="card filters-card filters-card-elevated">
       <label>
         开始时间
         <input v-model="filters.from" type="datetime-local" />
@@ -61,20 +62,28 @@
     </div>
 
     <div class="grid">
-      <div class="card metric-card metric-card-compact">
-        <span class="metric-label">↑ 累计上传</span>
+      <div class="card metric-card metric-card-compact network-stat-card">
+        <div class="metric-top">
+          <span class="metric-label metric-label-inline"><AppIcon name="upload" :size="14" />累计上传</span>
+        </div>
         <strong class="metric-value">{{ formatBytes(totalUploadBytes) }}</strong>
       </div>
-      <div class="card metric-card metric-card-compact">
-        <span class="metric-label">↓ 累计下载</span>
+      <div class="card metric-card metric-card-compact network-stat-card">
+        <div class="metric-top">
+          <span class="metric-label metric-label-inline"><AppIcon name="download" :size="14" />累计下载</span>
+        </div>
         <strong class="metric-value">{{ formatBytes(totalDownloadBytes) }}</strong>
       </div>
-      <div class="card metric-card metric-card-compact">
-        <span class="metric-label">◉ 涉及应用数</span>
+      <div class="card metric-card metric-card-compact network-stat-card">
+        <div class="metric-top">
+          <span class="metric-label metric-label-inline"><AppIcon name="apps" :size="14" />涉及应用数</span>
+        </div>
         <strong class="metric-value">{{ items.length }}</strong>
       </div>
-      <div class="card metric-card metric-card-compact">
-        <span class="metric-label">⏱ 统计时间范围</span>
+      <div class="card metric-card metric-card-compact network-stat-card">
+        <div class="metric-top">
+          <span class="metric-label metric-label-inline"><AppIcon name="uptime" :size="14" />统计时间范围</span>
+        </div>
         <div v-if="rangeParts" class="metric-value metric-small range-value">
           <span>{{ rangeParts.from }}&nbsp;~</span>
           <span>{{ rangeParts.to }}</span>
@@ -84,9 +93,15 @@
     </div>
 
     <section class="panel-grid">
-      <article class="card">
+      <article class="card dashboard-panel-card">
         <div class="panel-header">
-          <h3>WAN / LAN 占比</h3>
+          <div class="panel-title">
+            <span class="panel-icon"><AppIcon name="traffic" :size="16" /></span>
+            <div>
+              <h3>WAN / LAN 占比</h3>
+              <p class="panel-subtitle">按当前筛选结果汇总的累计流量分布。</p>
+            </div>
+          </div>
           <span class="section-tag">按当前筛选结果汇总</span>
         </div>
 
@@ -144,9 +159,15 @@
         </div>
       </article>
 
-      <article class="card">
+      <article class="card dashboard-panel-card">
         <div class="panel-header">
-          <h3>应用流量排行</h3>
+          <div class="panel-title">
+            <span class="panel-icon"><AppIcon name="apps" :size="16" /></span>
+            <div>
+              <h3>应用流量排行</h3>
+              <p class="panel-subtitle">保持现有筛选逻辑，仅增强视觉层次。</p>
+            </div>
+          </div>
           <span class="section-tag">{{ rankingDescription }}</span>
         </div>
         <ol class="ranking-list">
@@ -167,6 +188,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import AppIcon from '../components/AppIcon.vue';
 import PageHeader from '../components/PageHeader.vue';
 import { getNetworkApps } from '../services/api';
 import type { AppTrafficSummaryDto } from '../types/monitor';
