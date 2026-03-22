@@ -1,7 +1,7 @@
 ﻿<template>
-  <section class="page">
+  <section class="page settings-page">
     <PageHeader
-      icon="⚙"
+      iconName="settings"
       kicker="设置"
       title="系统设置"
       description="这里调整访问端口、采样间隔、默认统计粒度和历史保留时间。"
@@ -9,9 +9,11 @@
       <template #actions>
         <div class="actions-row settings-actions">
           <button class="chip-button settings-action-button" :disabled="isLoading || isSaving" @click="loadSettings">
+            <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
             重新加载
           </button>
           <button class="ghost-button settings-action-button" :disabled="!isDirty || isSaving" @click="save">
+            <span class="button-inline-icon"><AppIcon name="settings" :size="14" /></span>
             {{ isSaving ? '保存中...' : '保存设置' }}
           </button>
         </div>
@@ -19,23 +21,31 @@
     </PageHeader>
 
     <div class="grid">
-      <div class="card metric-card">
-        <span class="metric-label">当前访问端口</span>
+      <div class="card metric-card metric-card-compact settings-stat-card">
+        <div class="metric-top">
+          <span class="metric-label metric-label-inline"><AppIcon name="settings" :size="14" />当前访问端口</span>
+        </div>
         <strong class="metric-value">{{ form.httpPort }}</strong>
         <span class="metric-hint">修改后下次启动生效</span>
       </div>
-      <div class="card metric-card">
-        <span class="metric-label">硬件采样间隔</span>
+      <div class="card metric-card metric-card-compact settings-stat-card">
+        <div class="metric-top">
+          <span class="metric-label metric-label-inline"><AppIcon name="cpu" :size="14" />硬件采样间隔</span>
+        </div>
         <strong class="metric-value">{{ form.hardwareSampleIntervalMs }} ms</strong>
         <span class="metric-hint">越短越实时，但占用也会更高</span>
       </div>
-      <div class="card metric-card">
-        <span class="metric-label">网络统计粒度</span>
+      <div class="card metric-card metric-card-compact settings-stat-card">
+        <div class="metric-top">
+          <span class="metric-label metric-label-inline"><AppIcon name="network" :size="14" />网络统计粒度</span>
+        </div>
         <strong class="metric-value">{{ form.aggregateIntervalSeconds }} s</strong>
         <span class="metric-hint">影响网络历史数据的聚合粒度</span>
       </div>
-      <div class="card metric-card">
-        <span class="metric-label">历史保留天数</span>
+      <div class="card metric-card metric-card-compact settings-stat-card">
+        <div class="metric-top">
+          <span class="metric-label metric-label-inline"><AppIcon name="disk" :size="14" />历史保留天数</span>
+        </div>
         <strong class="metric-value">{{ form.historyRetentionDays }} 天</strong>
         <span class="metric-hint">到期后会自动清理旧数据</span>
       </div>
@@ -50,10 +60,16 @@
     </div>
 
     <section class="panel-grid">
-      <form class="card settings-layout" @submit.prevent="save">
+      <form class="card settings-layout settings-layout-elevated" @submit.prevent="save">
         <div class="settings-group">
           <div class="section-header">
-            <h3>访问端口</h3>
+            <div class="panel-title">
+              <span class="panel-icon"><AppIcon name="settings" :size="16" /></span>
+              <div>
+                <h3>访问端口</h3>
+                <p class="panel-subtitle">仅调整展示样式，不改配置行为。</p>
+              </div>
+            </div>
             <span class="section-tag">HTTP 端口配置</span>
           </div>
 
@@ -67,7 +83,13 @@
 
         <div class="settings-group">
           <div class="section-header">
-            <h3>采样与统计</h3>
+            <div class="panel-title">
+              <span class="panel-icon"><AppIcon name="network" :size="16" /></span>
+              <div>
+                <h3>采样与统计</h3>
+                <p class="panel-subtitle">保持原有字段与保存逻辑，只做视觉升级。</p>
+              </div>
+            </div>
             <span class="section-tag">实时采样频率</span>
           </div>
 
@@ -95,7 +117,13 @@
 
         <div class="settings-group">
           <div class="section-header">
-            <h3>历史数据</h3>
+            <div class="panel-title">
+              <span class="panel-icon"><AppIcon name="disk" :size="16" /></span>
+              <div>
+                <h3>历史数据</h3>
+                <p class="panel-subtitle">清晰区分存储周期与默认展示配置。</p>
+              </div>
+            </div>
             <span class="section-tag">存储与默认展示</span>
           </div>
 
@@ -115,9 +143,15 @@
         </div>
       </form>
 
-      <aside class="card settings-side">
+      <aside class="card settings-side settings-side-elevated">
         <div class="section-header">
-          <h3>保存说明</h3>
+          <div class="panel-title">
+            <span class="panel-icon"><AppIcon name="status" :size="16" /></span>
+            <div>
+              <h3>保存说明</h3>
+              <p class="panel-subtitle">保存逻辑保持不变，仅强化信息层级。</p>
+            </div>
+          </div>
           <span class="section-tag">{{ isDirty ? '有未保存修改' : '已同步' }}</span>
         </div>
 
@@ -129,9 +163,11 @@
 
         <div class="settings-side-actions">
           <button class="chip-button" :disabled="!isDirty || isSaving" @click="resetForm">
+            <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
             撤销修改
           </button>
           <button class="ghost-button" :disabled="isSaving || !canSave || !isDirty" @click="save">
+            <span class="button-inline-icon"><AppIcon name="settings" :size="14" /></span>
             提交保存
           </button>
         </div>
@@ -142,6 +178,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import AppIcon from '../components/AppIcon.vue';
 import PageHeader from '../components/PageHeader.vue';
 import { getSettings, saveSettings } from '../services/api';
 import type { AppSettingsDto } from '../types/monitor';
