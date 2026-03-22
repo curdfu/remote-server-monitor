@@ -206,6 +206,116 @@ public sealed class NetworkTrafficRepository(
         return results;
     }
 
+    public async Task<AppTrafficPeriodSummary> QueryTotalsAsync(
+        DateTimeOffset from,
+        DateTimeOffset to,
+        TrafficScopeFilter scopeFilter = TrafficScopeFilter.All,
+        TrafficDirectionFilter directionFilter = TrafficDirectionFilter.Total,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = dbConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+                              SELECT COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'download' AND n.direction = 'outbound'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS total_upload_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'upload' AND n.direction = 'inbound'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS total_download_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'download'
+                                                           AND n.direction = 'outbound'
+                                                           AND n.scope_type = 'wan'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS wan_upload_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'upload'
+                                                           AND n.direction = 'inbound'
+                                                           AND n.scope_type = 'wan'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS wan_download_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'download'
+                                                           AND n.direction = 'outbound'
+                                                           AND n.scope_type = 'lan'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS lan_upload_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'upload'
+                                                           AND n.direction = 'inbound'
+                                                           AND n.scope_type = 'lan'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS lan_download_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'download'
+                                                           AND n.direction = 'outbound'
+                                                           AND n.scope_type = 'loopback'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS loopback_upload_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'upload'
+                                                           AND n.direction = 'inbound'
+                                                           AND n.scope_type = 'loopback'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS loopback_download_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'download'
+                                                           AND n.direction = 'outbound'
+                                                           AND n.scope_type = 'other'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS other_upload_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'upload'
+                                                           AND n.direction = 'inbound'
+                                                           AND n.scope_type = 'other'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS other_download_bytes
+                              FROM network_usage_agg n
+                              WHERE n.bucket_start_time >= $from
+                                AND n.bucket_start_time < $to
+                                AND ($scopeType IS NULL OR n.scope_type = $scopeType);
+                              """;
+
+        command.Parameters.AddWithValue("$from", from.ToString("O"));
+        command.Parameters.AddWithValue("$to", to.ToString("O"));
+        command.Parameters.AddWithValue("$scopeType", MapScopeFilterToDbValue(scopeFilter));
+        command.Parameters.AddWithValue("$directionFilter", MapDirectionFilter(directionFilter));
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return new AppTrafficPeriodSummary();
+        }
+
+        return new AppTrafficPeriodSummary
+        {
+            TotalUploadBytes = reader.GetInt64(0),
+            TotalDownloadBytes = reader.GetInt64(1),
+            WanUploadBytes = reader.GetInt64(2),
+            WanDownloadBytes = reader.GetInt64(3),
+            LanUploadBytes = reader.GetInt64(4),
+            LanDownloadBytes = reader.GetInt64(5),
+            LoopbackUploadBytes = reader.GetInt64(6),
+            LoopbackDownloadBytes = reader.GetInt64(7),
+            OtherUploadBytes = reader.GetInt64(8),
+            OtherDownloadBytes = reader.GetInt64(9)
+        };
+    }
+
     private static string GetOrderByExpression(TrafficScopeFilter scopeFilter, TrafficDirectionFilter directionFilter)
     {
         return (scopeFilter, directionFilter) switch
@@ -230,6 +340,20 @@ public sealed class NetworkTrafficRepository(
                 "SUM(n.bytes)"
         };
     }
+
+    private static object MapScopeFilterToDbValue(TrafficScopeFilter scopeFilter) => scopeFilter switch
+    {
+        TrafficScopeFilter.Wan => "wan",
+        TrafficScopeFilter.Lan => "lan",
+        _ => DBNull.Value
+    };
+
+    private static string MapDirectionFilter(TrafficDirectionFilter directionFilter) => directionFilter switch
+    {
+        TrafficDirectionFilter.Upload => "upload",
+        TrafficDirectionFilter.Download => "download",
+        _ => "total"
+    };
 
     public async Task UpsertAppRegistryAsync(
         IReadOnlyCollection<AppRegistryEntry> entries,

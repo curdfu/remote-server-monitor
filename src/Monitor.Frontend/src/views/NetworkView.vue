@@ -187,11 +187,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
 import PageHeader from '../components/PageHeader.vue';
-import { getNetworkApps } from '../services/api';
-import type { AppTrafficSummaryDto } from '../types/monitor';
+import { getNetworkApps, getNetworkSummary } from '../services/api';
+import type { AppTrafficSummaryDto, NetworkPeriodSummaryDto } from '../types/monitor';
 
 const presetOptions = [
   { hours: 1, label: '最近 1 小时' },
@@ -203,8 +203,10 @@ const presetOptions = [
 ] as const;
 
 const items = ref<AppTrafficSummaryDto[]>([]);
+const summary = ref<NetworkPeriodSummaryDto | null>(null);
 const isLoading = ref(false);
 const errorMessage = ref('');
+let autoRefreshTimer: number | null = null;
 const filters = reactive({
   from: toLocalInputValue(new Date(Date.now() - 24 * 60 * 60 * 1000)),
   to: toLocalInputValue(new Date()),
@@ -214,19 +216,19 @@ const filters = reactive({
 });
 
 const totalUploadBytes = computed(() =>
-  items.value.reduce((sum, item) => sum + item.totalUploadBytes, 0)
+  summary.value?.totalUploadBytes ?? 0
 );
 
 const totalDownloadBytes = computed(() =>
-  items.value.reduce((sum, item) => sum + item.totalDownloadBytes, 0)
+  summary.value?.totalDownloadBytes ?? 0
 );
 
 const wanTotalBytes = computed(() =>
-  items.value.reduce((sum, item) => sum + item.wanUploadBytes + item.wanDownloadBytes, 0)
+  (summary.value?.wanUploadBytes ?? 0) + (summary.value?.wanDownloadBytes ?? 0)
 );
 
 const lanTotalBytes = computed(() =>
-  items.value.reduce((sum, item) => sum + item.lanUploadBytes + item.lanDownloadBytes, 0)
+  (summary.value?.lanUploadBytes ?? 0) + (summary.value?.lanDownloadBytes ?? 0)
 );
 
 const totalScopeBytes = computed(() => wanTotalBytes.value + lanTotalBytes.value);
@@ -271,18 +273,52 @@ onMounted(() => {
   void loadApps();
 });
 
+onUnmounted(() => {
+  if (autoRefreshTimer !== null) {
+    window.clearTimeout(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+});
+
+watch(
+  () => [filters.from, filters.to, filters.scope, filters.direction],
+  () => {
+    if (autoRefreshTimer !== null) {
+      window.clearTimeout(autoRefreshTimer);
+    }
+
+    autoRefreshTimer = window.setTimeout(() => {
+      autoRefreshTimer = null;
+      void loadApps();
+    }, 250);
+  }
+);
+
 async function loadApps() {
   isLoading.value = true;
   errorMessage.value = '';
 
   try {
-    items.value = await getNetworkApps({
-      from: toIsoString(filters.from),
-      to: toIsoString(filters.to),
-      topN: filters.topN,
-      scope: filters.scope,
-      direction: filters.direction
-    });
+    const from = toIsoString(filters.from);
+    const to = toIsoString(filters.to);
+    const [apps, periodSummary] = await Promise.all([
+      getNetworkApps({
+        from,
+        to,
+        topN: filters.topN,
+        scope: filters.scope,
+        direction: filters.direction
+      }),
+      getNetworkSummary({
+        from,
+        to,
+        scope: filters.scope,
+        direction: filters.direction
+      })
+    ]);
+
+    items.value = apps;
+    summary.value = periodSummary;
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载网络汇总失败。';
   } finally {

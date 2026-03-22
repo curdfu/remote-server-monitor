@@ -2,6 +2,7 @@ import type {
   AppSettingsDto,
   AppTrafficSummaryDto,
   HardwareRealtimeDto,
+  NetworkPeriodSummaryDto,
   NetworkRealtimeDto,
   RealtimeOverviewDto
 } from '../types/monitor';
@@ -50,6 +51,20 @@ export function getNetworkApps(params?: {
   if (params?.scope) query.set('scope', params.scope);
   if (params?.direction) query.set('direction', params.direction);
   return request<AppTrafficSummaryDto[]>(`/api/network/apps${query.toString() ? `?${query}` : ''}`);
+}
+
+export function getNetworkSummary(params?: {
+  from?: string;
+  to?: string;
+  scope?: 'all' | 'wan' | 'lan';
+  direction?: 'total' | 'upload' | 'download';
+}) {
+  const query = new URLSearchParams();
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  if (params?.scope) query.set('scope', params.scope);
+  if (params?.direction) query.set('direction', params.direction);
+  return request<NetworkPeriodSummaryDto>(`/api/network/summary${query.toString() ? `?${query}` : ''}`);
 }
 
 export function getSettings() {

@@ -55,6 +55,32 @@ public static class NetworkEndpoints
             return Results.Ok(summaries.Select(ToSummaryDto).ToArray());
         });
 
+        app.MapGet("/api/network/summary", async (
+            DateTimeOffset? from,
+            DateTimeOffset? to,
+            string? scope,
+            string? direction,
+            NetworkTrafficRepository networkTrafficRepository,
+            CancellationToken cancellationToken) =>
+        {
+            var (rangeFrom, rangeTo) = NormalizeRange(from, to, TimeSpan.FromHours(1));
+            if (rangeFrom >= rangeTo)
+            {
+                return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
+            }
+
+            var scopeFilter = ParseScope(scope);
+            var directionFilter = ParseDirection(direction);
+            var totals = await networkTrafficRepository.QueryTotalsAsync(
+                rangeFrom,
+                rangeTo,
+                scopeFilter,
+                directionFilter,
+                cancellationToken);
+
+            return Results.Ok(ToPeriodSummaryDto(totals));
+        });
+
         return app;
     }
 
@@ -79,6 +105,23 @@ public static class NetworkEndpoints
             AppKey = summary.AppKey,
             ProcessName = summary.ProcessName,
             DisplayName = summary.DisplayName,
+            TotalUploadBytes = summary.TotalUploadBytes,
+            TotalDownloadBytes = summary.TotalDownloadBytes,
+            WanUploadBytes = summary.WanUploadBytes,
+            WanDownloadBytes = summary.WanDownloadBytes,
+            LanUploadBytes = summary.LanUploadBytes,
+            LanDownloadBytes = summary.LanDownloadBytes,
+            LoopbackUploadBytes = summary.LoopbackUploadBytes,
+            LoopbackDownloadBytes = summary.LoopbackDownloadBytes,
+            OtherUploadBytes = summary.OtherUploadBytes,
+            OtherDownloadBytes = summary.OtherDownloadBytes
+        };
+    }
+
+    private static NetworkPeriodSummaryDto ToPeriodSummaryDto(AppTrafficPeriodSummary summary)
+    {
+        return new NetworkPeriodSummaryDto
+        {
             TotalUploadBytes = summary.TotalUploadBytes,
             TotalDownloadBytes = summary.TotalDownloadBytes,
             WanUploadBytes = summary.WanUploadBytes,

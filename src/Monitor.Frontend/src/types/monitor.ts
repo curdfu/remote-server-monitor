@@ -66,6 +66,19 @@ export interface AppTrafficSummaryDto {
   otherDownloadBytes: number;
 }
 
+export interface NetworkPeriodSummaryDto {
+  totalUploadBytes: number;
+  totalDownloadBytes: number;
+  wanUploadBytes: number;
+  wanDownloadBytes: number;
+  lanUploadBytes: number;
+  lanDownloadBytes: number;
+  loopbackUploadBytes: number;
+  loopbackDownloadBytes: number;
+  otherUploadBytes: number;
+  otherDownloadBytes: number;
+}
+
 export interface AppSettingsDto {
   httpPort: number;
   hardwareSampleIntervalMs: number;

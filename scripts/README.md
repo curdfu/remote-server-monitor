@@ -1,6 +1,7 @@
 ﻿# Scripts
 
 - `publish-service.ps1`：构建前端并发布本机服务包
+- `publish-and-deploy.ps1`：构建前后端并自动同步到指定部署目录，可选自动停止/启动 Windows 服务
 - `publish-frontend-only.ps1`：只构建并发布前端静态文件到指定 `wwwroot`
 - `install-service.ps1`：安装并启动 Windows 服务，发布后会复制到 exe 同级目录（需管理员 PowerShell）
 - `uninstall-service.ps1`：卸载 Windows 服务，发布后会复制到 exe 同级目录（需管理员 PowerShell）
