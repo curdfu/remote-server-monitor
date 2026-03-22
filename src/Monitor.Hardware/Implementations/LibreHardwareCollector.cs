@@ -423,77 +423,98 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private static (double? Value, string? Source) ReadCpuClock(IEnumerable<ISensor> cpuSensors)
     {
-        // ---------- 1. 最优：Frequency（Windows/Intel最准） ----------
-        var frequencySensors = cpuSensors
-            .Where(sensor => sensor.SensorType == SensorType.Frequency)
-            .Select(sensor => new
-            {
-                sensor.Name,
-                Value = Normalize(sensor.Value)
-            })
-            .Where(item => item.Value.HasValue)
-            .ToArray();
+        double freqSum = 0;
+        int freqCount = 0;
+        double? freqTotal = null;
+        string? freqTotalName = null;
 
-        if (frequencySensors.Length > 0)
+        double effSum = 0;
+        int effCount = 0;
+
+        double clockSum = 0;
+        int clockCount = 0;
+
+        double coreClockSum = 0;
+        int coreClockCount = 0;
+
+        foreach (var sensor in cpuSensors)
         {
-            // 优先 Total（最准，避免多核平均误差）
-            var total = frequencySensors
-                .FirstOrDefault(item =>
-                    item.Name.Contains("Total", StringComparison.OrdinalIgnoreCase) ||
-                    item.Name.Contains("CPU", StringComparison.OrdinalIgnoreCase));
+            var value = Normalize(sensor.Value);
+            if (!value.HasValue)
+                continue;
 
-            if (total != null)
+            var name = sensor.Name;
+
+            // ---------- Frequency ----------
+            if (sensor.SensorType == SensorType.Frequency)
             {
-                return (total.Value!.Value, $"Frequency/{total.Name}");
+                // 优先 Total / CPU
+                if (freqTotal == null &&
+                    (name.Contains("Total", StringComparison.OrdinalIgnoreCase) ||
+                     name.Contains("CPU", StringComparison.OrdinalIgnoreCase)))
+                {
+                    freqTotal = value.Value;
+                    freqTotalName = name;
+                }
+
+                freqSum += value.Value;
+                freqCount++;
+                continue;
             }
 
-            // 否则取平均（兼容没有 Total 的情况）
-            return (frequencySensors.Average(item => item.Value!.Value), "Frequency/Average");
+            // ---------- Clock ----------
+            if (sensor.SensorType == SensorType.Clock)
+            {
+                // Effective Clock
+                if (name.Contains("Effective", StringComparison.OrdinalIgnoreCase))
+                {
+                    effSum += value.Value;
+                    effCount++;
+                    continue;
+                }
+
+                // 排除 Bus
+                if (name.Contains("Bus", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                clockSum += value.Value;
+                clockCount++;
+
+                // Core 优先
+                if (name.Contains("Core", StringComparison.OrdinalIgnoreCase))
+                {
+                    coreClockSum += value.Value;
+                    coreClockCount++;
+                }
+            }
         }
 
-        // ---------- 2. 次优：Effective Clock（部分平台更接近真实执行频率） ----------
-        var effectiveClockSensors = cpuSensors
-            .Where(sensor => sensor.SensorType == SensorType.Clock &&
-                             sensor.Name.Contains("Effective", StringComparison.OrdinalIgnoreCase))
-            .Select(sensor => new
-            {
-                sensor.Name,
-                Value = Normalize(sensor.Value)
-            })
-            .Where(item => item.Value.HasValue)
-            .ToArray();
-
-        if (effectiveClockSensors.Length > 0)
+        // ---------- 1. Frequency ----------
+        if (freqCount > 0)
         {
-            return (effectiveClockSensors.Average(item => item.Value!.Value), "EffectiveClock/Average");
-        }
-
-        // ---------- 3. fallback：Clock（排除 Bus + 优先 Core） ----------
-        var clockSensors = cpuSensors
-            .Where(sensor => sensor.SensorType == SensorType.Clock &&
-                             !sensor.Name.Contains("Bus", StringComparison.OrdinalIgnoreCase) &&
-                             !sensor.Name.Contains("Effective", StringComparison.OrdinalIgnoreCase))
-            .Select(sensor => new
+            if (freqTotal.HasValue)
             {
-                sensor.Name,
-                Value = Normalize(sensor.Value)
-            })
-            .Where(item => item.Value.HasValue)
-            .ToArray();
-
-        if (clockSensors.Length > 0)
-        {
-            // 优先 Core（避免 Package / Uncore 干扰）
-            var coreClocks = clockSensors
-                .Where(item => item.Name.Contains("Core", StringComparison.OrdinalIgnoreCase))
-                .ToArray();
-
-            if (coreClocks.Length > 0)
-            {
-                return (coreClocks.Average(item => item.Value!.Value), "Clock/CoreAverage");
+                return (freqTotal.Value, $"Frequency/{freqTotalName}");
             }
 
-            return (clockSensors.Average(item => item.Value!.Value), "Clock/Average");
+            return (freqSum / freqCount, "Frequency/Average");
+        }
+
+        // ---------- 2. Effective Clock ----------
+        if (effCount > 0)
+        {
+            return (effSum / effCount, "EffectiveClock/Average");
+        }
+
+        // ---------- 3. Clock ----------
+        if (clockCount > 0)
+        {
+            if (coreClockCount > 0)
+            {
+                return (coreClockSum / coreClockCount, "Clock/CoreAverage");
+            }
+
+            return (clockSum / clockCount, "Clock/Average");
         }
 
         return (null, null);
