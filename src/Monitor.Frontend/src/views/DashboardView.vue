@@ -106,7 +106,7 @@
               <tr v-for="disk in sortedDisks" :key="`${disk.name}-${disk.temperatureSource ?? 'none'}`">
                 <td>{{ disk.name }}</td>
                 <td class="align-right">
-                  <span class="status-pill" :class="temperatureToneClass(disk.temperatureC)">
+                  <span class="status-pill status-pill-temperature" :class="temperatureToneClass(disk.temperatureC)">
                     {{ formatNullable(disk.temperatureC, '°C') }}
                   </span>
                 </td>
