@@ -155,7 +155,9 @@
                     </div>
                   </div>
                 </td>
-                <td class="align-right">{{ formatDiskSize(disk.freeBytes) }}</td>
+                <td class="align-right">
+                  <strong class="disk-space-value">{{ formatDiskSize(disk.freeBytes) }}</strong>
+                </td>
               </tr>
               <tr v-if="!sortedDiskSpaces.length">
                 <td colspan="4" class="empty-cell">当前没有可展示的磁盘空间数据。</td>
