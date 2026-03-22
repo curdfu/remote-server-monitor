@@ -423,9 +423,56 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private static (double? Value, string? Source) ReadCpuClock(IEnumerable<ISensor> cpuSensors)
     {
+        // ---------- 1. 最优：Frequency（Windows/Intel最准） ----------
+        var frequencySensors = cpuSensors
+            .Where(sensor => sensor.SensorType == SensorType.Frequency)
+            .Select(sensor => new
+            {
+                sensor.Name,
+                Value = Normalize(sensor.Value)
+            })
+            .Where(item => item.Value.HasValue)
+            .ToArray();
+
+        if (frequencySensors.Length > 0)
+        {
+            // 优先 Total（最准，避免多核平均误差）
+            var total = frequencySensors
+                .FirstOrDefault(item =>
+                    item.Name.Contains("Total", StringComparison.OrdinalIgnoreCase) ||
+                    item.Name.Contains("CPU", StringComparison.OrdinalIgnoreCase));
+
+            if (total != null)
+            {
+                return (total.Value!.Value, $"Frequency/{total.Name}");
+            }
+
+            // 否则取平均（兼容没有 Total 的情况）
+            return (frequencySensors.Average(item => item.Value!.Value), "Frequency/Average");
+        }
+
+        // ---------- 2. 次优：Effective Clock（部分平台更接近真实执行频率） ----------
+        var effectiveClockSensors = cpuSensors
+            .Where(sensor => sensor.SensorType == SensorType.Clock &&
+                             sensor.Name.Contains("Effective", StringComparison.OrdinalIgnoreCase))
+            .Select(sensor => new
+            {
+                sensor.Name,
+                Value = Normalize(sensor.Value)
+            })
+            .Where(item => item.Value.HasValue)
+            .ToArray();
+
+        if (effectiveClockSensors.Length > 0)
+        {
+            return (effectiveClockSensors.Average(item => item.Value!.Value), "EffectiveClock/Average");
+        }
+
+        // ---------- 3. fallback：Clock（排除 Bus + 优先 Core） ----------
         var clockSensors = cpuSensors
             .Where(sensor => sensor.SensorType == SensorType.Clock &&
-                             !sensor.Name.Contains("Bus", StringComparison.OrdinalIgnoreCase))
+                             !sensor.Name.Contains("Bus", StringComparison.OrdinalIgnoreCase) &&
+                             !sensor.Name.Contains("Effective", StringComparison.OrdinalIgnoreCase))
             .Select(sensor => new
             {
                 sensor.Name,
@@ -436,21 +483,20 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
         if (clockSensors.Length > 0)
         {
+            // 优先 Core（避免 Package / Uncore 干扰）
+            var coreClocks = clockSensors
+                .Where(item => item.Name.Contains("Core", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+
+            if (coreClocks.Length > 0)
+            {
+                return (coreClocks.Average(item => item.Value!.Value), "Clock/CoreAverage");
+            }
+
             return (clockSensors.Average(item => item.Value!.Value), "Clock/Average");
         }
 
-        var fallback = cpuSensors
-            .Where(sensor => sensor.SensorType == SensorType.Frequency)
-            .Select(sensor => new
-            {
-                sensor.Name,
-                Value = Normalize(sensor.Value)
-            })
-            .FirstOrDefault(item => item.Value.HasValue);
-
-        return fallback is null
-            ? (null, null)
-            : (fallback.Value!.Value, $"Frequency/{fallback.Name}");
+        return (null, null);
     }
 
     private static (double? Value, string? Source) ReadCpuPower(IEnumerable<ISensor> cpuSensors)
