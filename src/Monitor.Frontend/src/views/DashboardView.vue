@@ -294,7 +294,7 @@ function formatMemoryHint(total?: number | null) {
     return '总容量 --';
   }
 
-  return `总容量 ${total < 1024 ? `${total.toFixed(0)} MB` : `${(total / 1024).toFixed(1)} GB`}`;
+  return `总容量 ${total < 1024 ? `${total.toFixed(0)} GB` : `${(total / 1024).toFixed(1)} GB`}`;
 }
 
 function formatCpuHint(frequency?: number | null, power?: number | null) {
