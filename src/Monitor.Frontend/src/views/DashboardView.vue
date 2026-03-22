@@ -17,7 +17,7 @@
     <div class="overview-meta card overview-meta-bar">
       <div class="overview-meta-item">
         <span class="muted">数据时间</span>
-        <strong>{{ formatDateTime(overview?.hardware.sampleTime) }}</strong>
+        <strong>{{ formatDateTime(hardware?.sampleTime) }}</strong>
       </div>
       <div class="overview-meta-item">
         <span class="muted">采集模式</span>
@@ -45,7 +45,7 @@
       <div class="dashboard-hero-grid">
         <MetricCard
           label="已开机"
-          :value="formatUptime(overview?.hardware.uptimeSeconds)"
+          :value="formatUptime(hardware?.uptimeSeconds)"
           :hint="`启动时间 ${formatDateTime(bootTimeText)}`"
           badge="运行"
           tone="info"
@@ -53,56 +53,56 @@
         />
         <MetricCard
           label="CPU 当前频率"
-          :value="formatNullable(overview?.hardware.cpuFrequencyMhz, 'MHz')"
-          :hint="formatCpuHint(overview?.hardware.cpuFrequencyMhz, overview?.hardware.cpuPowerWatts)"
+          :value="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
+          :hint="formatCpuHint(hardware?.cpuFrequencyMhz, hardware?.cpuPowerWatts)"
           badge="频率"
           tone="info"
           icon-name="cpu"
         />
         <MetricCard
           label="CPU 当前温度"
-          :value="formatNullable(overview?.hardware.cpuTemperatureC, '°C')"
-          :hint="formatNullable(overview?.hardware.cpuFrequencyMhz, 'MHz')"
-          :badge="temperatureBadge(overview?.hardware.cpuTemperatureC)"
-          :tone="temperatureTone(overview?.hardware.cpuTemperatureC)"
+          :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
+          :hint="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
+          :badge="temperatureBadge(hardware?.cpuTemperatureC)"
+          :tone="temperatureTone(hardware?.cpuTemperatureC)"
           icon-name="temperature"
-          :meter-percent="temperaturePercent(overview?.hardware.cpuTemperatureC)"
+          :meter-percent="temperaturePercent(hardware?.cpuTemperatureC)"
         />
         <MetricCard
           label="CPU 当前功耗"
-          :value="formatNullable(overview?.hardware.cpuPowerWatts, 'W')"
-          :hint="formatNullable(overview?.hardware.cpuFrequencyMhz, 'MHz')"
+          :value="formatNullable(hardware?.cpuPowerWatts, 'W')"
+          :hint="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
           badge="功耗"
           tone="info"
           icon-name="power"
-          :meter-percent="powerPercent(overview?.hardware.cpuPowerWatts)"
+          :meter-percent="powerPercent(hardware?.cpuPowerWatts)"
         />
         <MetricCard
           label="CPU 占用"
-          :value="formatPercent(overview?.hardware.cpuUsagePercent)"
-          :hint="formatCpuHint(overview?.hardware.cpuFrequencyMhz, overview?.hardware.cpuPowerWatts)"
-          :badge="usageBadge(overview?.hardware.cpuUsagePercent)"
-          :tone="usageTone(overview?.hardware.cpuUsagePercent)"
+          :value="formatPercent(hardware?.cpuUsagePercent)"
+          :hint="formatCpuHint(hardware?.cpuFrequencyMhz, hardware?.cpuPowerWatts)"
+          :badge="usageBadge(hardware?.cpuUsagePercent)"
+          :tone="usageTone(hardware?.cpuUsagePercent)"
           icon-name="cpu"
-          :meter-percent="overview?.hardware.cpuUsagePercent"
+          :meter-percent="hardware?.cpuUsagePercent"
         />
         <MetricCard
           label="内存已使用"
-          :value="formatMemoryUsage(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
-          :hint="formatMemoryHint(overview?.hardware.memoryTotalMb)"
-          :badge="memoryUsageBadge(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
-          :tone="memoryUsageTone(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
+          :value="formatMemoryUsage(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+          :hint="formatMemoryHint(hardware?.memoryTotalMb)"
+          :badge="memoryUsageBadge(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+          :tone="memoryUsageTone(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
           icon-name="memory"
-          :meter-percent="getMemoryUsagePercent(overview?.hardware.memoryUsedMb, overview?.hardware.memoryTotalMb)"
+          :meter-percent="getMemoryUsagePercent(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
         />
         <MetricCard
           label="最热磁盘温度"
-          :value="formatNullable(overview?.hardware.diskTemperatureC, '°C')"
-          :hint="`已识别 ${overview?.hardware.disks?.length ?? 0} 块磁盘`"
-          :badge="temperatureBadge(overview?.hardware.diskTemperatureC)"
-          :tone="temperatureTone(overview?.hardware.diskTemperatureC)"
+          :value="formatNullable(hardware?.diskTemperatureC, '°C')"
+          :hint="`已识别 ${hardware?.disks?.length ?? 0} 块磁盘`"
+          :badge="temperatureBadge(hardware?.diskTemperatureC)"
+          :tone="temperatureTone(hardware?.diskTemperatureC)"
           icon-name="disk"
-          :meter-percent="temperaturePercent(overview?.hardware.diskTemperatureC)"
+          :meter-percent="temperaturePercent(hardware?.diskTemperatureC)"
         />
       </div>
     </section>
@@ -117,7 +117,7 @@
               <p class="panel-subtitle">快速定位当前最热磁盘，便于散热与健康排查。</p>
             </div>
           </div>
-          <span class="section-tag">当前 {{ overview?.hardware.disks?.length ?? 0 }} 块</span>
+          <span class="section-tag">当前 {{ hardware?.disks?.length ?? 0 }} 块</span>
         </div>
 
         <div class="table-shell realtime-table-shell">
@@ -214,7 +214,7 @@ import { getOverview } from '../services/api';
 import { startRealtimeConnection, subscribeHardwareRealtime } from '../services/realtime';
 import type { DiskSpaceDto, DiskTemperatureDto, RealtimeOverviewDto } from '../types/monitor';
 
-const overview = ref<RealtimeOverviewDto | null>(null);
+const hardware = ref<RealtimeOverviewDto['hardware'] | null>(null);
 const isLoading = ref(false);
 const errorMessage = ref('');
 const diskSortField = ref<'temperatureC'>('temperatureC');
@@ -222,17 +222,17 @@ const diskSortDescending = ref(true);
 let unsubscribeHardware: (() => void) | null = null;
 
 const sortedDisks = computed(() => {
-  const disks = [...(overview.value?.hardware.disks ?? [])];
+  const disks = [...(hardware.value?.disks ?? [])];
   return disks.sort(compareDisks);
 });
 
 const sortedDiskSpaces = computed(() => {
-  const diskSpaces = [...(overview.value?.hardware.diskSpaces ?? [])];
+  const diskSpaces = [...(hardware.value?.diskSpaces ?? [])];
   return diskSpaces.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
 });
 
 const bootTimeText = computed(() => {
-  const uptimeSeconds = overview.value?.hardware.uptimeSeconds;
+  const uptimeSeconds = hardware.value?.uptimeSeconds;
   if (uptimeSeconds == null) {
     return null;
   }
@@ -248,11 +248,7 @@ onMounted(() => {
 
   unsubscribeHardware = subscribeHardwareRealtime((hardware) => {
     errorMessage.value = '';
-    overview.value = {
-      hardware: mergeHardwarePayload(hardware, overview.value?.hardware),
-      network: overview.value?.network ?? emptyNetworkRealtime(),
-      topApps: overview.value?.topApps ?? []
-    };
+    updateHardwareState(mergeHardwarePayload(hardware, hardwareState()));
   });
 });
 
@@ -265,7 +261,8 @@ async function loadOverview() {
   errorMessage.value = '';
 
   try {
-    overview.value = await getOverview();
+    const overview = await getOverview();
+    updateHardwareState(mergeHardwarePayload(overview.hardware, hardwareState()));
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载总览数据失败。';
   } finally {
@@ -487,15 +484,44 @@ function mergeDiskSpaces(currentDiskSpaces: DiskSpaceDto[], previousDiskSpaces: 
   return currentDiskSpaces.length > 0 ? currentDiskSpaces : previousDiskSpaces;
 }
 
-function emptyNetworkRealtime() {
-  return {
-    sampleTime: new Date(0).toISOString(),
-    totalUploadBytesPerSecond: 0,
-    totalDownloadBytesPerSecond: 0,
-    wanUploadBytesPerSecond: 0,
-    wanDownloadBytesPerSecond: 0,
-    lanUploadBytesPerSecond: 0,
-    lanDownloadBytesPerSecond: 0
-  };
+function hardwareState() {
+  return hardware.value ?? undefined;
+}
+
+function updateHardwareState(nextHardware: RealtimeOverviewDto['hardware']) {
+  if (!hardware.value) {
+    hardware.value = nextHardware;
+    return;
+  }
+
+  applyHardwarePayload(hardware.value, nextHardware);
+}
+
+function applyHardwarePayload(
+  target: RealtimeOverviewDto['hardware'],
+  next: RealtimeOverviewDto['hardware']
+) {
+  Object.assign(target, next, {
+    disks: target.disks,
+    diskSpaces: target.diskSpaces
+  });
+
+  syncNamedItems(target.disks, next.disks);
+  syncNamedItems(target.diskSpaces, next.diskSpaces);
+}
+
+function syncNamedItems<T extends { name: string }>(target: T[], next: T[]) {
+  const existingByName = new Map(target.map((item) => [item.name, item]));
+  const normalizedItems = next.map((item) => {
+    const existing = existingByName.get(item.name);
+    if (existing) {
+      Object.assign(existing, item);
+      return existing;
+    }
+
+    return { ...item };
+  });
+
+  target.splice(0, target.length, ...normalizedItems);
 }
 </script>
