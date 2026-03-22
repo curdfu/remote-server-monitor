@@ -1,4 +1,3 @@
-ï»¿using BlackSharp.Core.Logging;
 using LibreHardwareMonitor.Hardware;
 using Microsoft.Extensions.Logging;
 using Monitor.Hardware.Abstractions;
@@ -701,7 +700,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
         return pathNames.Length > 0
             ? string.Join(" + ", pathNames)
-            : $"ç£ç›˜ {entry.DiskNumber}";
+            : $"´ÅÅÌ {entry.DiskNumber}";
     }
 
     private DiskTopologyEntry? ResolveDiskTopologyEntry(string hardwareName)
