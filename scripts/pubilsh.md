@@ -2,8 +2,7 @@
 
   ### 最常用：发布并部署到你的服务目录
 
-  powershell -ExecutionPolicy Bypass -File .\scripts\publish-and-deploy.ps1 -DeployDir 'C:\GreenSoft\remote-server-
-  monitor-win-x64'
+  powershell -ExecutionPolicy Bypass -File .\scripts\publish-and-deploy.ps1 -DeployDir 'C:\GreenSoft\remote-server-monitor-win-x64'
 
   ———
 
