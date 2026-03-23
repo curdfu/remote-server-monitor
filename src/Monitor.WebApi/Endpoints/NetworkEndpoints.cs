@@ -1,5 +1,4 @@
-using Microsoft.Extensions.Options;
-using Monitor.Contracts.Dtos;
+﻿using Monitor.Contracts.Dtos;
 using Monitor.Contracts.Options;
 using Monitor.Network.Abstractions;
 using Monitor.Network.Models;
@@ -32,7 +31,7 @@ public static class NetworkEndpoints
             string? scope,
             string? direction,
             NetworkTrafficRepository networkTrafficRepository,
-            IOptionsMonitor<MonitorSettings> settings,
+            IMonitorSettingsProvider settings,
             CancellationToken cancellationToken) =>
         {
             var (rangeFrom, rangeTo) = NormalizeRange(from, to, TimeSpan.FromHours(1));
@@ -41,7 +40,7 @@ public static class NetworkEndpoints
                 return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
             }
 
-            var limit = topN is > 0 ? topN : settings.CurrentValue.TopNDefault;
+            var limit = topN is > 0 ? topN : settings.Current.TopNDefault;
             var scopeFilter = ParseScope(scope);
             var directionFilter = ParseDirection(direction);
             var summaries = await networkTrafficRepository.QueryAppSummariesAsync(

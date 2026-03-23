@@ -39,6 +39,7 @@ builder.Services
 
 var app = builder.Build();
 var appConfiguration = app.Services.GetRequiredService<IAppConfigurationProvider>();
+var currentSettings = appConfiguration.Current;
 var listenAddress = builder.Configuration["Monitor:ListenAddress"];
 if (string.IsNullOrWhiteSpace(listenAddress))
 {
@@ -46,14 +47,22 @@ if (string.IsNullOrWhiteSpace(listenAddress))
 }
 
 app.UseSerilogRequestLogging();
-app.Urls.Add($"http://{listenAddress}:{appConfiguration.Current.HttpPort}");
+app.Urls.Add($"http://{listenAddress}:{currentSettings.HttpPort}");
 
-app.Logger.LogInformation(
-    "Monitor service starting on {ListenAddress}:{Port}, hardware interval {HardwareInterval}ms, network interval {NetworkInterval}ms.",
+Log.ForContext("ImportantInfo", true).Information(
+    "Monitor service listen configuration applied. ListenAddress={ListenAddress}, Port={Port}, PersistedSettingsLoaded={PersistedSettingsLoaded}",
     listenAddress,
-    appConfiguration.Current.HttpPort,
-    appConfiguration.Current.HardwareSampleIntervalMs,
-    appConfiguration.Current.NetworkSampleIntervalMs);
+    currentSettings.HttpPort,
+    persistedSettings.Count > 0);
+
+Log.ForContext("ImportantInfo", true).Information(
+    "Monitor service runtime configuration applied. HardwareIntervalMs={HardwareIntervalMs}, NetworkIntervalMs={NetworkIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}, EtwBufferSizeMb={EtwBufferSizeMb}",
+    currentSettings.HardwareSampleIntervalMs,
+    currentSettings.NetworkSampleIntervalMs,
+    currentSettings.AggregateIntervalSeconds,
+    currentSettings.HistoryRetentionDays,
+    currentSettings.TopNDefault,
+    currentSettings.EtwBufferSizeMb);
 
 if (!IPAddress.TryParse(listenAddress, out var parsedListenAddress) || !IPAddress.IsLoopback(parsedListenAddress))
 {

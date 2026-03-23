@@ -26,21 +26,21 @@
           <span class="metric-label metric-label-inline"><AppIcon name="settings" :size="14" />当前访问端口</span>
         </div>
         <strong class="metric-value">{{ form.httpPort }}</strong>
-        <span class="metric-hint">修改后下次启动生效</span>
+        <span class="metric-hint">保存后会持久化，端口变更仍需重启</span>
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
           <span class="metric-label metric-label-inline"><AppIcon name="cpu" :size="14" />硬件采样间隔</span>
         </div>
         <strong class="metric-value">{{ form.hardwareSampleIntervalMs }} ms</strong>
-        <span class="metric-hint">保存后会持久化，并在服务重启后生效</span>
+        <span class="metric-hint">保存后会实时生效</span>
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
           <span class="metric-label metric-label-inline"><AppIcon name="network" :size="14" />网络统计粒度</span>
         </div>
         <strong class="metric-value">{{ form.aggregateIntervalSeconds }} s</strong>
-        <span class="metric-hint">保存后会持久化，并在服务重启后生效</span>
+        <span class="metric-hint">保存后会实时生效</span>
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
@@ -157,7 +157,7 @@
 
         <ul class="simple-list compact">
           <li>所有设置都会先写入 SQLite 持久化保存。</li>
-          <li>运行中的服务不会热切换，新配置会在服务重启后统一生效。</li>
+          <li>除访问端口外，其余采样、聚合和展示配置会在运行中实时生效。</li>
           <li>如果输入超出合法范围，前端会先拦截，再阻止提交。</li>
         </ul>
 
@@ -276,7 +276,7 @@ async function save() {
     const saved = await saveSettings({ ...form });
     Object.assign(form, saved);
     original.value = { ...saved };
-    successMessage.value = '设置已保存。新的配置会在服务重启后生效。';
+    successMessage.value = '设置已保存。除访问端口外，其余配置已实时生效；端口变更仍需重启服务。';
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '保存设置失败。';
   } finally {
@@ -284,3 +284,4 @@ async function save() {
   }
 }
 </script>
+

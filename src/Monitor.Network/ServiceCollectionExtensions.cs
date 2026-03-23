@@ -9,10 +9,12 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddMonitorNetwork(this IServiceCollection services)
     {
+        services.AddSingleton<INetworkCollector, EtwNetworkCollector>();
+        services.AddSingleton<INetworkCollectorDiagnostics>(sp =>
+            (INetworkCollectorDiagnostics)sp.GetRequiredService<INetworkCollector>());
         services.AddSingleton<IProcessResolver, ProcessResolver>();
         services.AddSingleton<IAppRegistry, AppRegistryService>();
         services.AddSingleton<IAddressClassifier, AddressClassifier>();
-        services.AddSingleton<INetworkCollector, EtwNetworkCollector>();
         services.AddSingleton<INetworkAggregator, TrafficAggregator>();
         return services;
     }

@@ -1,5 +1,4 @@
-using Microsoft.Extensions.Options;
-using Monitor.Contracts.Dtos;
+﻿using Monitor.Contracts.Dtos;
 using Monitor.Contracts.Options;
 using Monitor.Hardware.Abstractions;
 using Monitor.Network.Abstractions;
@@ -14,7 +13,7 @@ public static class OverviewEndpoints
             IHardwareSnapshotBuffer hardwareSnapshotBuffer,
             IDiskUsageProvider diskUsageProvider,
             INetworkAggregator networkAggregator,
-            IOptionsMonitor<MonitorSettings> settings) =>
+            IMonitorSettingsProvider settings) =>
         {
             var hardware = hardwareSnapshotBuffer.GetLatest();
             if (hardware is null)
@@ -32,7 +31,7 @@ public static class OverviewEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            var topApps = networkAggregator.GetLatestTopApps(settings.CurrentValue.TopNDefault);
+            var topApps = networkAggregator.GetLatestTopApps(settings.Current.TopNDefault);
             var diskUsedBytes = diskUsageProvider.GetCurrentUsedBytesByDiskNumber(
                 hardware.Disk.Drives
                     .Where(drive => drive.DiskNumber.HasValue)

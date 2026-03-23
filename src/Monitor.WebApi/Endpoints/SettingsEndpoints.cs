@@ -1,5 +1,4 @@
-using System.ComponentModel.DataAnnotations;
-using Microsoft.Extensions.Options;
+﻿using System.ComponentModel.DataAnnotations;
 using Monitor.Contracts.Dtos;
 using Monitor.Contracts.Options;
 using Monitor.Storage.Repositories;
@@ -12,26 +11,38 @@ public static class SettingsEndpoints
     {
         app.MapGet("/api/settings", async (
             SettingsRepository settingsRepository,
-            IOptionsMonitor<MonitorSettings> settings,
+            IMonitorSettingsProvider settings,
             CancellationToken cancellationToken) =>
         {
             var persisted = await settingsRepository.GetAsync(cancellationToken);
-            return Results.Ok(persisted ?? ToDto(settings.CurrentValue));
+            return Results.Ok(persisted ?? ToDto(settings.Current));
         });
 
         app.MapPost("/api/settings", async (
             AppSettingsDto request,
             SettingsRepository settingsRepository,
-            IOptionsMonitor<MonitorSettings> currentSettings,
+            IMonitorSettingsProvider currentSettings,
+            ILoggerFactory loggerFactory,
             CancellationToken cancellationToken) =>
         {
-            var validationErrors = Validate(request, currentSettings.CurrentValue);
+            var runtimeSettings = currentSettings.Current;
+            var validationErrors = Validate(request, runtimeSettings);
             if (validationErrors.Count > 0)
             {
                 return Results.ValidationProblem(validationErrors);
             }
 
             await settingsRepository.SaveAsync(request, cancellationToken);
+            var appliedSettings = currentSettings.Update(request);
+
+            if (request.HttpPort != appliedSettings.HttpPort)
+            {
+                loggerFactory.CreateLogger(typeof(SettingsEndpoints)).LogWarning(
+                    "HTTP port change was persisted but cannot be applied dynamically. CurrentPort={CurrentPort}, RequestedPort={RequestedPort}. A service restart is still required for the new port.",
+                    appliedSettings.HttpPort,
+                    request.HttpPort);
+            }
+
             return Results.Ok(request);
         });
 
@@ -48,6 +59,7 @@ public static class SettingsEndpoints
             AggregateIntervalSeconds = request.AggregateIntervalSeconds,
             HistoryRetentionDays = request.HistoryRetentionDays,
             TopNDefault = request.TopNDefault,
+            EtwBufferSizeMb = currentSettings.EtwBufferSizeMb,
             AddressClassification = currentSettings.AddressClassification
         };
 

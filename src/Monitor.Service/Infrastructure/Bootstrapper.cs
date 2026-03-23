@@ -18,7 +18,9 @@ public static class Bootstrapper
         Monitor.Hardware.ServiceCollectionExtensions.AddMonitorHardware(services);
         Monitor.Network.ServiceCollectionExtensions.AddMonitorNetwork(services);
         Monitor.Storage.ServiceCollectionExtensions.AddMonitorStorage(services);
-        services.AddSingleton<IAppConfigurationProvider, AppConfigurationProvider>();
+        services.AddSingleton<AppConfigurationProvider>();
+        services.AddSingleton<IAppConfigurationProvider>(sp => sp.GetRequiredService<AppConfigurationProvider>());
+        services.AddSingleton<IMonitorSettingsProvider>(sp => sp.GetRequiredService<AppConfigurationProvider>());
 
         return services;
     }

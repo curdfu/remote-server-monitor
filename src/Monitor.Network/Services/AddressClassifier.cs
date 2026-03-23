@@ -2,7 +2,6 @@
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Monitor.Contracts.Options;
 using Monitor.Network.Abstractions;
 using Monitor.Network.Enums;
@@ -10,7 +9,7 @@ using Monitor.Network.Enums;
 namespace Monitor.Network.Services;
 
 public sealed class AddressClassifier(
-    IOptionsMonitor<MonitorSettings> settingsMonitor,
+    IMonitorSettingsProvider settingsMonitor,
     ILogger<AddressClassifier> logger) : IAddressClassifier
 {
     private static readonly TimeSpan LocalSubnetRefreshInterval = TimeSpan.FromSeconds(30);
@@ -35,7 +34,7 @@ public sealed class AddressClassifier(
 
         var remote = Normalize(remoteAddress);
         var local = localAddress is null ? null : Normalize(localAddress);
-        var settings = settingsMonitor.CurrentValue.AddressClassification;
+        var settings = settingsMonitor.Current.AddressClassification;
         var additionalSubnets = GetAdditionalSubnets(settings);
 
         if (settings.TreatLoopbackAsLoopback &&
@@ -376,3 +375,5 @@ public sealed class AddressClassifier(
         }
     }
 }
+
+

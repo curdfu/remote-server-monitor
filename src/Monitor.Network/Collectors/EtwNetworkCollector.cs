@@ -1,27 +1,38 @@
+﻿using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Diagnostics.Tracing.Parsers;
 using Microsoft.Diagnostics.Tracing.Parsers.Kernel;
 using Microsoft.Diagnostics.Tracing.Session;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Monitor.Contracts.Options;
 using Monitor.Network.Abstractions;
 using Monitor.Network.Enums;
 using Monitor.Network.Models;
-using System.Runtime.InteropServices;
 
 namespace Monitor.Network.Collectors;
 
 public sealed class EtwNetworkCollector(
     ILogger<EtwNetworkCollector> logger,
-    IOptionsMonitor<MonitorSettings> settingsMonitor) : INetworkCollector, IDisposable
+    IMonitorSettingsProvider settingsMonitor) : INetworkCollector, INetworkCollectorDiagnostics, IDisposable
 {
+    private static readonly int[] AdaptiveBufferSizesMb = [4, 8, 16];
     private const int InsufficientResourcesHResult = unchecked((int)0x800705AA);
     private const string SessionNamePrefix = "Monitor.Network.Etw.";
 
     private readonly object _syncRoot = new();
     private TraceEventSession? _session;
     private Task? _processingTask;
+    private Task? _adaptiveRestartTask;
     private string? _sessionName;
+    private DateTimeOffset? _startedAt;
+    private int _bufferSizeMb;
+    private int _adaptiveRestartCount;
+    private long _sessionPublishedEvents;
+    private long _sessionLostEvents;
+    private long _totalPublishedEvents;
+    private long _totalLostEvents;
+    private long _lastLoggedLostEvents;
+    private bool _adaptiveRestartScheduled;
     private bool _disposed;
 
     public event Action<NetworkTraceEvent>? EventReceived;
@@ -40,17 +51,17 @@ public sealed class EtwNetworkCollector(
             }
 
             TryCleanupStaleMonitorSessions();
-            _sessionName = $"{SessionNamePrefix}{Environment.ProcessId}.{Guid.NewGuid():N}";
+            _sessionName = BuildSessionName();
 
             try
             {
-                StartSessionCore();
+                StartSessionCore(GetInitialAdaptiveBufferSize());
             }
             catch (COMException exception) when (exception.HResult == InsufficientResourcesHResult)
             {
                 var sessionName = _sessionName;
-                var bufferSizeMb = settingsMonitor.CurrentValue.EtwBufferSizeMb;
-                CleanupFailedStart();
+                var requestedBufferSizeMb = GetInitialAdaptiveBufferSize();
+                CleanupFailedStart(clearTotals: false);
 
                 var cleanedSessionCount = TryCleanupStaleMonitorSessions();
                 if (cleanedSessionCount > 0)
@@ -60,38 +71,38 @@ public sealed class EtwNetworkCollector(
                         "ETW network collector start failed due to insufficient resources. Cleaned {CleanedSessionCount} stale monitor ETW sessions and will retry once. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}",
                         cleanedSessionCount,
                         sessionName,
-                        bufferSizeMb);
+                        requestedBufferSizeMb);
 
-                    _sessionName = $"{SessionNamePrefix}{Environment.ProcessId}.{Guid.NewGuid():N}";
+                    _sessionName = BuildSessionName();
                     try
                     {
-                        StartSessionCore();
+                        StartSessionCore(requestedBufferSizeMb);
                         return Task.CompletedTask;
                     }
                     catch (COMException retryException) when (retryException.HResult == InsufficientResourcesHResult)
                     {
                         sessionName = _sessionName;
-                        CleanupFailedStart();
+                        CleanupFailedStart(clearTotals: false);
                         logger.LogError(
                             retryException,
-                            "Failed to start ETW network collector because ETW resources are insufficient even after cleanup retry. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}. Consider reducing Monitor:EtwBufferSizeMb further or releasing other ETW sessions.",
+                            "Failed to start ETW network collector because ETW resources are insufficient even after cleanup retry. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}. Consider releasing other ETW sessions or reducing load.",
                             sessionName,
-                            bufferSizeMb);
+                            requestedBufferSizeMb);
                         return Task.CompletedTask;
                     }
                 }
 
                 logger.LogError(
                     exception,
-                    "Failed to start ETW network collector because ETW resources are insufficient. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}. Consider reducing Monitor:EtwBufferSizeMb further or retrying after other ETW sessions are released.",
+                    "Failed to start ETW network collector because ETW resources are insufficient. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}. Consider releasing other ETW sessions or reducing load.",
                     sessionName,
-                    bufferSizeMb);
+                    requestedBufferSizeMb);
                 return Task.CompletedTask;
             }
             catch (UnauthorizedAccessException exception)
             {
                 var sessionName = _sessionName;
-                CleanupFailedStart();
+                CleanupFailedStart(clearTotals: false);
                 logger.LogError(
                     exception,
                     "Failed to start ETW network collector due to insufficient privileges. SessionName: {SessionName}. Administrator rights are required to start the ETW kernel session.",
@@ -101,7 +112,7 @@ public sealed class EtwNetworkCollector(
             catch (Exception exception)
             {
                 var sessionName = _sessionName;
-                CleanupFailedStart();
+                CleanupFailedStart(clearTotals: false);
                 logger.LogError(
                     exception,
                     "Failed to start ETW network collector. SessionName: {SessionName}",
@@ -116,32 +127,23 @@ public sealed class EtwNetworkCollector(
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         Task? processingTask;
+        Task? adaptiveRestartTask;
         string? sessionName;
 
         lock (_syncRoot)
         {
-            if (!IsRunning)
+            if (!IsRunning && !_adaptiveRestartScheduled)
             {
                 return;
             }
 
+            RefreshLostEventsCore(logIfIncreased: true);
             processingTask = _processingTask;
+            adaptiveRestartTask = _adaptiveRestartTask;
             sessionName = _sessionName;
-
-            try
-            {
-                _session?.Stop();
-            }
-            catch (Exception exception)
-            {
-                logger.LogDebug(exception, "Ignoring ETW session stop exception.");
-            }
-
-            _session?.Dispose();
-            _session = null;
-            _processingTask = null;
-            _sessionName = null;
-            IsRunning = false;
+            _adaptiveRestartScheduled = false;
+            StopSessionCore();
+            _adaptiveRestartTask = null;
         }
 
         if (processingTask is not null)
@@ -160,7 +162,43 @@ public sealed class EtwNetworkCollector(
             }
         }
 
+        if (adaptiveRestartTask is not null)
+        {
+            try
+            {
+                await adaptiveRestartTask.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                logger.LogDebug(exception, "ETW adaptive restart task ended with exception during stop.");
+            }
+        }
+
         logger.LogInformation("ETW network collector stopped. SessionName: {SessionName}", sessionName);
+    }
+
+    public NetworkCollectorDiagnosticsSnapshot GetSnapshot()
+    {
+        lock (_syncRoot)
+        {
+            RefreshLostEventsCore(logIfIncreased: false);
+            return new NetworkCollectorDiagnosticsSnapshot
+            {
+                IsRunning = IsRunning,
+                SessionName = _sessionName,
+                BufferSizeMb = _bufferSizeMb,
+                StartedAt = _startedAt,
+                PublishedEvents = Interlocked.Read(ref _sessionPublishedEvents),
+                LostEvents = Interlocked.Read(ref _sessionLostEvents),
+                TotalPublishedEvents = Interlocked.Read(ref _totalPublishedEvents),
+                TotalLostEvents = Interlocked.Read(ref _totalLostEvents),
+                AdaptiveRestartCount = _adaptiveRestartCount
+            };
+        }
     }
 
     public void Dispose()
@@ -179,6 +217,8 @@ public sealed class EtwNetworkCollector(
 
             try
             {
+                RefreshLostEventsCore(logIfIncreased: true);
+                _adaptiveRestartScheduled = false;
                 _session?.Dispose();
             }
             catch (Exception exception)
@@ -189,6 +229,7 @@ public sealed class EtwNetworkCollector(
             {
                 _session = null;
                 _processingTask = null;
+                _adaptiveRestartTask = null;
                 _sessionName = null;
                 IsRunning = false;
                 _disposed = true;
@@ -329,7 +370,166 @@ public sealed class EtwNetworkCollector(
             return;
         }
 
+        lock (_syncRoot)
+        {
+            RefreshLostEventsCore(logIfIncreased: true);
+        }
+
+        Interlocked.Increment(ref _sessionPublishedEvents);
+        Interlocked.Increment(ref _totalPublishedEvents);
         EventReceived?.Invoke(traceEvent);
+    }
+
+    private void RefreshLostEventsCore(bool logIfIncreased)
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        long currentLostEvents;
+        try
+        {
+            currentLostEvents = _session.EventsLost;
+        }
+        catch (Exception exception)
+        {
+            logger.LogDebug(exception, "Failed to read ETW lost-events counter.");
+            return;
+        }
+
+        var previousLostEvents = Interlocked.Read(ref _sessionLostEvents);
+        if (currentLostEvents <= previousLostEvents)
+        {
+            return;
+        }
+
+        var delta = currentLostEvents - previousLostEvents;
+        Interlocked.Exchange(ref _sessionLostEvents, currentLostEvents);
+        Interlocked.Add(ref _totalLostEvents, delta);
+
+        if (logIfIncreased)
+        {
+            var lastLoggedLostEvents = Interlocked.Read(ref _lastLoggedLostEvents);
+            if (currentLostEvents > lastLoggedLostEvents)
+            {
+                Interlocked.Exchange(ref _lastLoggedLostEvents, currentLostEvents);
+                var publishedEvents = Interlocked.Read(ref _sessionPublishedEvents);
+                var totalObserved = publishedEvents + currentLostEvents;
+                var lossRate = totalObserved > 0
+                    ? currentLostEvents * 100d / totalObserved
+                    : 0d;
+
+                logger.LogWarning(
+                    "ETW network collector lost events detected. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}, LostEvents: {LostEvents}, PublishedEvents: {PublishedEvents}, LossRate: {LossRate:F4}%",
+                    _sessionName,
+                    _bufferSizeMb,
+                    currentLostEvents,
+                    publishedEvents,
+                    lossRate);
+            }
+        }
+
+        ScheduleAdaptiveBufferIncreaseCore();
+    }
+
+    private void ScheduleAdaptiveBufferIncreaseCore()
+    {
+        if (_adaptiveRestartScheduled || !IsRunning || _session is null)
+        {
+            return;
+        }
+
+        var nextBufferSizeMb = GetNextAdaptiveBufferSize(_bufferSizeMb);
+        if (nextBufferSizeMb <= _bufferSizeMb)
+        {
+            return;
+        }
+
+        _adaptiveRestartScheduled = true;
+        logger.LogWarning(
+            "ETW network collector will increase buffer size from {CurrentBufferSizeMB}MB to {NextBufferSizeMB}MB because lost events were detected.",
+            _bufferSizeMb,
+            nextBufferSizeMb);
+
+        _adaptiveRestartTask = Task.Run(() => IncreaseBufferAsync(nextBufferSizeMb));
+    }
+
+    private async Task IncreaseBufferAsync(int targetBufferSizeMb)
+    {
+        Task? previousProcessingTask = null;
+        string? previousSessionName = null;
+
+        try
+        {
+            lock (_syncRoot)
+            {
+                if (_disposed || !IsRunning || _session is null || targetBufferSizeMb <= _bufferSizeMb)
+                {
+                    _adaptiveRestartScheduled = false;
+                    _adaptiveRestartTask = null;
+                    return;
+                }
+
+                previousProcessingTask = _processingTask;
+                previousSessionName = _sessionName;
+                StopSessionCore();
+                _sessionName = BuildSessionName();
+                StartSessionCore(targetBufferSizeMb);
+                _adaptiveRestartCount++;
+                _adaptiveRestartScheduled = false;
+                _adaptiveRestartTask = null;
+            }
+
+            if (previousProcessingTask is not null)
+            {
+                try
+                {
+                    await previousProcessingTask;
+                }
+                catch (Exception exception)
+                {
+                    logger.LogDebug(exception, "Previous ETW processing task ended with exception after adaptive buffer restart.");
+                }
+            }
+
+            logger.LogInformation(
+                "ETW network collector buffer increased adaptively from previous session {PreviousSessionName} to {CurrentBufferSizeMB}MB.",
+                previousSessionName,
+                targetBufferSizeMb);
+        }
+        catch (Exception exception)
+        {
+            lock (_syncRoot)
+            {
+                CleanupFailedStart(clearTotals: false);
+            }
+
+            logger.LogError(
+                exception,
+                "Failed to adaptively restart ETW network collector with buffer size {TargetBufferSizeMB}MB.",
+                targetBufferSizeMb);
+        }
+    }
+
+    private void StopSessionCore()
+    {
+        try
+        {
+            _session?.Stop();
+        }
+        catch (Exception exception)
+        {
+            logger.LogDebug(exception, "Ignoring ETW session stop exception.");
+        }
+
+        _session?.Dispose();
+        _session = null;
+        _processingTask = null;
+        _sessionName = null;
+        _startedAt = null;
+        _bufferSizeMb = 0;
+        IsRunning = false;
     }
 
     private void ThrowIfDisposed()
@@ -337,17 +537,30 @@ public sealed class EtwNetworkCollector(
         ObjectDisposedException.ThrowIf(_disposed, this);
     }
 
-    private void CleanupFailedStart()
+    private void CleanupFailedStart(bool clearTotals)
     {
         _session?.Dispose();
         _session = null;
         _processingTask = null;
         _sessionName = null;
+        _startedAt = null;
+        _bufferSizeMb = 0;
+        _adaptiveRestartScheduled = false;
+        _adaptiveRestartTask = null;
+        Interlocked.Exchange(ref _sessionPublishedEvents, 0);
+        Interlocked.Exchange(ref _sessionLostEvents, 0);
+        Interlocked.Exchange(ref _lastLoggedLostEvents, 0);
+
+        if (clearTotals)
+        {
+            Interlocked.Exchange(ref _totalPublishedEvents, 0);
+            Interlocked.Exchange(ref _totalLostEvents, 0);
+            _adaptiveRestartCount = 0;
+        }
     }
 
-    private void StartSessionCore()
+    private void StartSessionCore(int bufferSizeMb)
     {
-        var bufferSizeMb = Math.Clamp(settingsMonitor.CurrentValue.EtwBufferSizeMb, 1, 128);
         var sessionOptions = TraceEventSessionOptions.Create |
                              TraceEventSessionOptions.NoPerProcessorBuffering;
 
@@ -357,6 +570,12 @@ public sealed class EtwNetworkCollector(
         _session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
 
         RegisterHandlers(_session.Source.Kernel);
+
+        _startedAt = DateTimeOffset.UtcNow;
+        _bufferSizeMb = bufferSizeMb;
+        Interlocked.Exchange(ref _sessionPublishedEvents, 0);
+        Interlocked.Exchange(ref _sessionLostEvents, 0);
+        Interlocked.Exchange(ref _lastLoggedLostEvents, 0);
 
         _processingTask = Task.Factory.StartNew(
             () => ProcessSession(_session, logger),
@@ -370,6 +589,38 @@ public sealed class EtwNetworkCollector(
             _sessionName,
             bufferSizeMb,
             sessionOptions);
+    }
+
+    private int GetInitialAdaptiveBufferSize()
+    {
+        var configuredBufferSizeMb = settingsMonitor.Current.EtwBufferSizeMb;
+        foreach (var candidate in AdaptiveBufferSizesMb)
+        {
+            if (configuredBufferSizeMb <= candidate)
+            {
+                return candidate;
+            }
+        }
+
+        return AdaptiveBufferSizesMb[^1];
+    }
+
+    private static int GetNextAdaptiveBufferSize(int currentBufferSizeMb)
+    {
+        foreach (var candidate in AdaptiveBufferSizesMb)
+        {
+            if (candidate > currentBufferSizeMb)
+            {
+                return candidate;
+            }
+        }
+
+        return currentBufferSizeMb;
+    }
+
+    private static string BuildSessionName()
+    {
+        return $"{SessionNamePrefix}{Environment.ProcessId}.{Guid.NewGuid():N}";
     }
 
     private int TryCleanupStaleMonitorSessions()
@@ -412,3 +663,6 @@ public sealed class EtwNetworkCollector(
         }
     }
 }
+
+
+

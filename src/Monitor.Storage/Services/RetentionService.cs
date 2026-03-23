@@ -1,5 +1,4 @@
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Logging;
 using Monitor.Contracts.Options;
 using Monitor.Storage.Abstractions;
 
@@ -7,12 +6,12 @@ namespace Monitor.Storage.Services;
 
 public sealed class RetentionService(
     IDbConnectionFactory dbConnectionFactory,
-    IOptionsMonitor<MonitorSettings> settingsMonitor,
+    IMonitorSettingsProvider settingsMonitor,
     ILogger<RetentionService> logger)
 {
     public async Task CleanupAsync(CancellationToken cancellationToken = default)
     {
-        var retentionDays = settingsMonitor.CurrentValue.HistoryRetentionDays;
+        var retentionDays = settingsMonitor.Current.HistoryRetentionDays;
         if (retentionDays <= 0)
         {
             logger.LogInformation("Retention cleanup skipped because HistoryRetentionDays is {RetentionDays}.", retentionDays);

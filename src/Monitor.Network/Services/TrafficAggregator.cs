@@ -1,5 +1,4 @@
 ﻿using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Monitor.Contracts.Options;
 using Monitor.Network.Abstractions;
 using Monitor.Network.Enums;
@@ -22,14 +21,14 @@ public sealed class TrafficAggregator : INetworkAggregator
     private readonly INetworkCollector _networkCollector;
     private readonly IAppRegistry _appRegistry;
     private readonly IAddressClassifier _addressClassifier;
-    private readonly IOptionsMonitor<MonitorSettings> _settingsMonitor;
+    private readonly IMonitorSettingsProvider _settingsMonitor;
     private readonly ILogger<TrafficAggregator> _logger;
 
     public TrafficAggregator(
         INetworkCollector networkCollector,
         IAppRegistry appRegistry,
         IAddressClassifier addressClassifier,
-        IOptionsMonitor<MonitorSettings> settingsMonitor,
+        IMonitorSettingsProvider settingsMonitor,
         ILogger<TrafficAggregator> logger)
     {
         _networkCollector = networkCollector;
@@ -179,7 +178,7 @@ public sealed class TrafficAggregator : INetworkAggregator
         AddressScopeType scopeType,
         long bytes)
     {
-        var bucketGranularitySeconds = _settingsMonitor.CurrentValue.AggregateIntervalSeconds;
+        var bucketGranularitySeconds = _settingsMonitor.Current.AggregateIntervalSeconds;
         var bucketStartTime = AlignToBucketStart(timestamp, bucketGranularitySeconds);
         var key = new BucketKey(bucketStartTime, bucketGranularitySeconds, appKey, direction, scopeType);
 
@@ -200,7 +199,7 @@ public sealed class TrafficAggregator : INetworkAggregator
             return;
         }
 
-        var settings = _settingsMonitor.CurrentValue;
+        var settings = _settingsMonitor.Current;
         var currentBucketStart = AlignToBucketStart(referenceTime, settings.AggregateIntervalSeconds);
         var completedKeys = new List<BucketKey>();
 
@@ -225,7 +224,7 @@ public sealed class TrafficAggregator : INetworkAggregator
 
     private RealtimeView BuildRealtimeViewCore(DateTimeOffset referenceTime)
     {
-        var intervalSeconds = Math.Max(_settingsMonitor.CurrentValue.NetworkSampleIntervalMs / 1000d, 0.1d);
+        var intervalSeconds = Math.Max(_settingsMonitor.Current.NetworkSampleIntervalMs / 1000d, 0.1d);
         if (_realtimeSlots.Length == 0)
         {
             return new RealtimeView(0, 0, 0, 0, 0, 0, Array.Empty<AppTrafficUsage>());
@@ -351,7 +350,7 @@ public sealed class TrafficAggregator : INetworkAggregator
 
     private TimeSpan GetRealtimeRetentionWindow()
     {
-        var settings = _settingsMonitor.CurrentValue;
+        var settings = _settingsMonitor.Current;
         var realtimeWindow = TimeSpan.FromMilliseconds(settings.NetworkSampleIntervalMs);
         var aggregateWindow = TimeSpan.FromSeconds(settings.AggregateIntervalSeconds * 2d);
         return new[]
@@ -591,3 +590,5 @@ public sealed class TrafficAggregator : INetworkAggregator
         double LanDownloadBytesPerSecond,
         IReadOnlyList<AppTrafficUsage> AppUsages);
 }
+
+

@@ -1,5 +1,4 @@
-﻿using Microsoft.Extensions.Options;
-using Monitor.Contracts.Options;
+﻿using Monitor.Contracts.Options;
 using Monitor.Hardware.Abstractions;
 using Monitor.Network.Abstractions;
 using Monitor.WebApi.Endpoints;
@@ -27,11 +26,14 @@ public static class WebApplicationExtensions
             IHardwareSnapshotBuffer hardwareSnapshotBuffer,
             INetworkAggregator networkAggregator,
             INetworkCollector networkCollector,
-            IOptionsMonitor<MonitorSettings> settings) =>
+            INetworkCollectorDiagnostics networkCollectorDiagnostics,
+            IMonitorSettingsProvider settings) =>
         {
             var utcNow = DateTimeOffset.UtcNow;
             var hardware = hardwareSnapshotBuffer.GetLatest();
             var network = networkAggregator.GetLatestRealtimeSnapshot();
+            var collectorDiagnostics = networkCollectorDiagnostics.GetSnapshot();
+            var currentSettings = settings.Current;
 
             var hardwareAgeSeconds = hardware is null
                 ? (double?)null
@@ -40,13 +42,22 @@ public static class WebApplicationExtensions
                 ? (double?)null
                 : (utcNow - network.SampleTime).TotalSeconds;
 
-            var hardwareThresholdSeconds = Math.Max(settings.CurrentValue.HardwareSampleIntervalMs / 1000d * 3d, 5d);
-            var networkThresholdSeconds = Math.Max(settings.CurrentValue.NetworkSampleIntervalMs / 1000d * 3d, 5d);
+            var hardwareThresholdSeconds = Math.Max(currentSettings.HardwareSampleIntervalMs / 1000d * 3d, 5d);
+            var networkThresholdSeconds = Math.Max(currentSettings.NetworkSampleIntervalMs / 1000d * 3d, 5d);
+            var sessionObservedEvents = collectorDiagnostics.PublishedEvents + collectorDiagnostics.LostEvents;
+            var sessionLossRate = sessionObservedEvents > 0
+                ? collectorDiagnostics.LostEvents * 100d / sessionObservedEvents
+                : 0d;
+            var totalObservedEvents = collectorDiagnostics.TotalPublishedEvents + collectorDiagnostics.TotalLostEvents;
+            var totalLossRate = totalObservedEvents > 0
+                ? collectorDiagnostics.TotalLostEvents * 100d / totalObservedEvents
+                : 0d;
 
             var hardwareHealthy = hardwareAgeSeconds.HasValue && hardwareAgeSeconds.Value <= hardwareThresholdSeconds;
             var networkHealthy = networkCollector.IsRunning &&
                                  networkAgeSeconds.HasValue &&
-                                 networkAgeSeconds.Value <= networkThresholdSeconds;
+                                 networkAgeSeconds.Value <= networkThresholdSeconds &&
+                                 collectorDiagnostics.LostEvents == 0;
 
             return Results.Ok(new
             {
@@ -65,7 +76,20 @@ public static class WebApplicationExtensions
                     latestSampleTime = network?.SampleTime,
                     sampleAgeSeconds = networkAgeSeconds,
                     thresholdSeconds = networkThresholdSeconds,
-                    isHealthy = networkHealthy
+                    isHealthy = networkHealthy,
+                    etw = new
+                    {
+                        collectorDiagnostics.SessionName,
+                        collectorDiagnostics.StartedAt,
+                        collectorDiagnostics.BufferSizeMb,
+                        collectorDiagnostics.AdaptiveRestartCount,
+                        sessionPublishedEvents = collectorDiagnostics.PublishedEvents,
+                        sessionLostEvents = collectorDiagnostics.LostEvents,
+                        sessionLossRate,
+                        totalPublishedEvents = collectorDiagnostics.TotalPublishedEvents,
+                        totalLostEvents = collectorDiagnostics.TotalLostEvents,
+                        totalLossRate
+                    }
                 }
             });
         });
