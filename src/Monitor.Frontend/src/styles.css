@@ -1384,6 +1384,26 @@ button:disabled {
   }
 }
 
+.ratio-summary-card-loopback {
+  border-color: rgba(139, 92, 246, 0.22);
+}
+
+.ratio-summary-card-loopback .ratio-summary-badge {
+  background: rgba(139, 92, 246, 0.14);
+  border-color: rgba(139, 92, 246, 0.22);
+  color: #7c3aed;
+}
+
+:root[data-theme='dark'] .ratio-summary-card-loopback .ratio-summary-badge {
+  color: #ddd6fe;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .ratio-summary-card-loopback .ratio-summary-badge {
+    color: #ddd6fe;
+  }
+}
+
 .ratio-group {
   display: grid;
   gap: 10px;
@@ -1420,6 +1440,10 @@ button:disabled {
 
 .ratio-bar-lan {
   background: linear-gradient(90deg, #10b981, #34d399);
+}
+
+.ratio-bar-loopback {
+  background: linear-gradient(90deg, #8b5cf6, #a78bfa);
 }
 
 .ranking-list {

@@ -4,7 +4,7 @@
       iconName="dashboard"
       kicker="首页"
       title="系统概览"
-      description="先看最关键的硬件状态，首页尽量保持清爽。"
+      description="实时展示 CPU、内存、磁盘等关键硬件状态。"
     >
       <template #actions>
         <button class="ghost-button" :disabled="isLoading" @click="loadOverview">
@@ -21,7 +21,7 @@
       </div>
       <div class="overview-meta-item">
         <span class="muted">采集模式</span>
-        <strong>硬件推送 + 网络累计</strong>
+        <strong>实时推送 + 历史聚合</strong>
       </div>
       <div class="overview-meta-item">
         <span class="muted">在线状态</span>
@@ -62,7 +62,7 @@
         <MetricCard
           label="CPU 当前温度"
           :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
-          :hint="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
+          :hint="formatTemperatureHint(hardware?.cpuTemperatureC)"
           :badge="temperatureBadge(hardware?.cpuTemperatureC)"
           :tone="temperatureTone(hardware?.cpuTemperatureC)"
           icon-name="temperature"
@@ -71,7 +71,7 @@
         <MetricCard
           label="CPU 当前功耗"
           :value="formatNullable(hardware?.cpuPowerWatts, 'W')"
-          :hint="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
+          :hint="formatPowerHint(hardware?.cpuPowerWatts)"
           badge="功耗"
           tone="info"
           icon-name="power"
@@ -83,7 +83,7 @@
           :hint="formatCpuHint(hardware?.cpuFrequencyMhz, hardware?.cpuPowerWatts)"
           :badge="usageBadge(hardware?.cpuUsagePercent)"
           :tone="usageTone(hardware?.cpuUsagePercent)"
-          icon-name="cpu"
+          icon-name="dashboard"
           :meter-percent="hardware?.cpuUsagePercent"
         />
         <MetricCard
@@ -301,6 +301,20 @@ function formatCpuHint(frequency?: number | null, power?: number | null) {
   const frequencyText = formatNullable(frequency, 'MHz');
   const powerText = formatNullable(power, 'W');
   return `频率 ${frequencyText} · 功耗 ${powerText}`;
+}
+
+function formatTemperatureHint(temperature?: number | null) {
+  if (temperature == null) return '温度数据不可用';
+  if (temperature >= 80) return '温度过高，建议检查散热';
+  if (temperature >= 65) return '温度偏高，注意通风';
+  return '温度正常，散热良好';
+}
+
+function formatPowerHint(power?: number | null) {
+  if (power == null) return '功耗数据不可用';
+  if (power >= 150) return '高负载运行';
+  if (power >= 80) return '中等负载运行';
+  return '低负载 / 空闲状态';
 }
 
 function formatDiskSize(value?: number | null) {

@@ -77,7 +77,7 @@
       </div>
       <div class="card metric-card metric-card-compact network-stat-card">
         <div class="metric-top">
-          <span class="metric-label metric-label-inline"><AppIcon name="apps" :size="14" />涉及应用数</span>
+          <span class="metric-label metric-label-inline"><AppIcon name="apps" :size="14" />应用数量</span>
         </div>
         <strong class="metric-value">{{ items.length }}</strong>
       </div>
@@ -125,6 +125,15 @@
             <small>{{ lanPercent.toFixed(1) }}%</small>
           </div>
 
+          <div class="ratio-summary-card ratio-summary-card-loopback">
+            <div class="ratio-summary-top">
+              <span class="ratio-summary-label">Loopback 流量</span>
+              <span class="ratio-summary-badge">本地</span>
+            </div>
+            <strong>{{ formatBytes(loopbackTotalBytes) }}</strong>
+            <small>{{ loopbackPercent.toFixed(1) }}%</small>
+          </div>
+
           <div class="ratio-summary-card ratio-summary-card-neutral">
             <div class="ratio-summary-top">
               <span class="ratio-summary-label">主导网络</span>
@@ -157,6 +166,17 @@
             </div>
             <small class="muted">{{ formatBytes(lanTotalBytes) }}</small>
           </div>
+
+          <div class="ratio-item">
+            <div class="ratio-header">
+              <strong>Loopback</strong>
+              <span>{{ loopbackPercent.toFixed(1) }}%</span>
+            </div>
+            <div class="ratio-track">
+              <div class="ratio-bar ratio-bar-loopback" :style="{ width: `${loopbackPercent}%` }"></div>
+            </div>
+            <small class="muted">{{ formatBytes(loopbackTotalBytes) }}</small>
+          </div>
         </div>
       </article>
 
@@ -166,7 +186,7 @@
             <span class="panel-icon"><AppIcon name="apps" :size="16" /></span>
             <div>
               <h3>应用流量排行</h3>
-              <p class="panel-subtitle">保持现有筛选逻辑，仅增强视觉层次。</p>
+              <p class="panel-subtitle">按选择的统计范围和方向排序显示应用流量排行。</p>
             </div>
           </div>
           <span class="section-tag">{{ rankingDescription }}</span>
@@ -205,6 +225,7 @@ const presetOptions = [
 
 const items = ref<AppTrafficSummaryDto[]>([]);
 const summary = ref<NetworkPeriodSummaryDto | null>(null);
+const overviewSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const isLoading = ref(false);
 const errorMessage = ref('');
 let autoRefreshTimer: number | null = null;
@@ -224,23 +245,41 @@ const totalDownloadBytes = computed(() =>
   summary.value?.totalDownloadBytes ?? 0
 );
 
-const wanTotalBytes = computed(() =>
-  (summary.value?.wanUploadBytes ?? 0) + (summary.value?.wanDownloadBytes ?? 0)
+// 占比面板数据 - 使用 overviewSummary（不受 scope 筛选影响）
+const overviewWanTotalBytes = computed(() =>
+  (overviewSummary.value?.wanUploadBytes ?? 0) + (overviewSummary.value?.wanDownloadBytes ?? 0)
 );
 
-const lanTotalBytes = computed(() =>
-  (summary.value?.lanUploadBytes ?? 0) + (summary.value?.lanDownloadBytes ?? 0)
+const overviewLanTotalBytes = computed(() =>
+  (overviewSummary.value?.lanUploadBytes ?? 0) + (overviewSummary.value?.lanDownloadBytes ?? 0)
 );
 
-const totalScopeBytes = computed(() => wanTotalBytes.value + lanTotalBytes.value);
+const overviewLoopbackTotalBytes = computed(() =>
+  (overviewSummary.value?.loopbackUploadBytes ?? 0) + (overviewSummary.value?.loopbackDownloadBytes ?? 0)
+);
+
+const overviewTotalBytes = computed(() =>
+  overviewWanTotalBytes.value + overviewLanTotalBytes.value + overviewLoopbackTotalBytes.value
+);
 
 const wanPercent = computed(() =>
-  totalScopeBytes.value === 0 ? 0 : (wanTotalBytes.value / totalScopeBytes.value) * 100
+  overviewTotalBytes.value === 0 ? 0 : (overviewWanTotalBytes.value / overviewTotalBytes.value) * 100
 );
 
 const lanPercent = computed(() =>
-  totalScopeBytes.value === 0 ? 0 : (lanTotalBytes.value / totalScopeBytes.value) * 100
+  overviewTotalBytes.value === 0 ? 0 : (overviewLanTotalBytes.value / overviewTotalBytes.value) * 100
 );
+
+const loopbackPercent = computed(() =>
+  overviewTotalBytes.value === 0 ? 0 : (overviewLoopbackTotalBytes.value / overviewTotalBytes.value) * 100
+);
+
+// 兼容旧代码，使用 overview 数据
+const wanTotalBytes = overviewWanTotalBytes;
+const lanTotalBytes = overviewLanTotalBytes;
+const loopbackTotalBytes = overviewLoopbackTotalBytes;
+
+const totalScopeBytes = computed(() => wanTotalBytes.value + lanTotalBytes.value + loopbackTotalBytes.value);
 
 const topRanking = computed(() => items.value.slice(0, filters.topN));
 
@@ -256,13 +295,17 @@ const activePresetHours = computed(() => getMatchedPresetHours(filters.from, fil
 const rangeParts = computed(() => formatRangeParts());
 
 const dominantScopeLabel = computed(() => {
-  if (wanTotalBytes.value === 0 && lanTotalBytes.value === 0) return '--';
-  if (Math.abs(wanPercent.value - lanPercent.value) < 1) return '基本均衡';
+  if (overviewTotalBytes.value === 0) return '--';
+  const max = Math.max(wanPercent.value, lanPercent.value, loopbackPercent.value);
+  if (max === loopbackPercent.value && loopbackPercent.value > 50) return 'Loopback 为主';
+  if (Math.abs(wanPercent.value - lanPercent.value) < 5) return '基本均衡';
   return wanPercent.value >= lanPercent.value ? 'WAN 为主' : 'LAN 为主';
 });
 
 const dominantScopeHint = computed(() => {
-  if (wanTotalBytes.value === 0 && lanTotalBytes.value === 0) return '当前没有流量数据';
+  if (overviewTotalBytes.value === 0) return '当前没有流量数据';
+  const max = Math.max(wanPercent.value, lanPercent.value, loopbackPercent.value);
+  if (max === loopbackPercent.value && loopbackPercent.value > 50) return `本地回环占 ${loopbackPercent.value.toFixed(1)}%`;
   return `差值 ${Math.abs(wanPercent.value - lanPercent.value).toFixed(1)}%`;
 });
 
@@ -298,7 +341,7 @@ async function loadApps() {
   try {
     const from = toIsoString(filters.from);
     const to = toIsoString(filters.to);
-    const [apps, periodSummary] = await Promise.all([
+    const [apps, periodSummary, overviewData] = await Promise.all([
       getNetworkApps({
         from,
         to,
@@ -311,11 +354,18 @@ async function loadApps() {
         to,
         scope: filters.scope,
         direction: filters.direction
+      }),
+      getNetworkSummary({
+        from,
+        to,
+        scope: 'all',
+        direction: filters.direction
       })
     ]);
 
     items.value = apps;
     summary.value = periodSummary;
+    overviewSummary.value = overviewData;
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载网络汇总失败。';
   } finally {

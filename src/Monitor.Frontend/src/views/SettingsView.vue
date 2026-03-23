@@ -67,7 +67,7 @@
               <span class="panel-icon"><AppIcon name="settings" :size="16" /></span>
               <div>
                 <h3>访问端口</h3>
-                <p class="panel-subtitle">仅调整展示样式，不改配置行为。</p>
+                <p class="panel-subtitle">配置 Web 服务的 HTTP 监听端口。</p>
               </div>
             </div>
             <span class="section-tag">HTTP 端口配置</span>
@@ -87,7 +87,7 @@
               <span class="panel-icon"><AppIcon name="network" :size="16" /></span>
               <div>
                 <h3>采样与统计</h3>
-                <p class="panel-subtitle">保持原有字段与保存逻辑，只做视觉升级。</p>
+                <p class="panel-subtitle">配置硬件和网络数据的采集频率及聚合粒度。</p>
               </div>
             </div>
             <span class="section-tag">实时采样频率</span>
@@ -121,7 +121,7 @@
               <span class="panel-icon"><AppIcon name="disk" :size="16" /></span>
               <div>
                 <h3>历史数据</h3>
-                <p class="panel-subtitle">清晰区分存储周期与默认展示配置。</p>
+                <p class="panel-subtitle">配置历史数据的保留时间和网络排行默认显示数量。</p>
               </div>
             </div>
             <span class="section-tag">存储与默认展示</span>
@@ -284,4 +284,3 @@ async function save() {
   }
 }
 </script>
-
