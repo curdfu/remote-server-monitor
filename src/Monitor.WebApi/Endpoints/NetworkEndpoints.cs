@@ -150,6 +150,7 @@ public static class NetworkEndpoints
         {
             "wan" => NetworkTrafficRepository.TrafficScopeFilter.Wan,
             "lan" => NetworkTrafficRepository.TrafficScopeFilter.Lan,
+            "loopback" => NetworkTrafficRepository.TrafficScopeFilter.Loopback,
             _ => NetworkTrafficRepository.TrafficScopeFilter.All
         };
     }

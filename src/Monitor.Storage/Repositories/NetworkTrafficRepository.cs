@@ -19,7 +19,8 @@ public sealed class NetworkTrafficRepository(
     {
         All,
         Wan,
-        Lan
+        Lan,
+        Loopback
     }
 
     public enum TrafficDirectionFilter
@@ -516,6 +517,12 @@ public sealed class NetworkTrafficRepository(
                 "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
             (TrafficScopeFilter.Lan, TrafficDirectionFilter.Total) =>
                 "SUM(CASE WHEN n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Loopback, TrafficDirectionFilter.Upload) =>
+                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'loopback' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Loopback, TrafficDirectionFilter.Download) =>
+                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'loopback' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Loopback, TrafficDirectionFilter.Total) =>
+                "SUM(CASE WHEN n.scope_type = 'loopback' THEN n.bytes ELSE 0 END)",
             (TrafficScopeFilter.All, TrafficDirectionFilter.Upload) =>
                 "SUM(CASE WHEN n.direction = 'outbound' THEN n.bytes ELSE 0 END)",
             (TrafficScopeFilter.All, TrafficDirectionFilter.Download) =>
@@ -529,6 +536,7 @@ public sealed class NetworkTrafficRepository(
     {
         TrafficScopeFilter.Wan => "wan",
         TrafficScopeFilter.Lan => "lan",
+        TrafficScopeFilter.Loopback => "loopback",
         _ => DBNull.Value
     };
 

@@ -33,6 +33,7 @@
           <option value="all">全部</option>
           <option value="wan">WAN</option>
           <option value="lan">LAN</option>
+          <option value="loopback">Loopback</option>
         </select>
       </label>
       <label>
@@ -211,7 +212,7 @@ const filters = reactive({
   from: toLocalInputValue(new Date(Date.now() - 24 * 60 * 60 * 1000)),
   to: toLocalInputValue(new Date()),
   topN: 10,
-  scope: 'wan' as 'all' | 'wan' | 'lan',
+  scope: 'wan' as 'all' | 'wan' | 'lan' | 'loopback',
   direction: 'upload' as 'total' | 'upload' | 'download'
 });
 
@@ -244,7 +245,7 @@ const lanPercent = computed(() =>
 const topRanking = computed(() => items.value.slice(0, filters.topN));
 
 const rankingDescription = computed(() => {
-  const scopeLabel = filters.scope === 'wan' ? 'WAN' : filters.scope === 'lan' ? 'LAN' : '全部';
+  const scopeLabel = filters.scope === 'wan' ? 'WAN' : filters.scope === 'lan' ? 'LAN' : filters.scope === 'loopback' ? 'Loopback' : '全部';
   const directionLabel =
     filters.direction === 'upload' ? '上传' : filters.direction === 'download' ? '下载' : '总流量';
   return `${scopeLabel} / ${directionLabel}`;
@@ -392,6 +393,12 @@ function getRankingValue(item: AppTrafficSummaryDto) {
     if (filters.direction === 'upload') return item.lanUploadBytes;
     if (filters.direction === 'download') return item.lanDownloadBytes;
     return item.lanUploadBytes + item.lanDownloadBytes;
+  }
+
+  if (filters.scope === 'loopback') {
+    if (filters.direction === 'upload') return item.loopbackUploadBytes;
+    if (filters.direction === 'download') return item.loopbackDownloadBytes;
+    return item.loopbackUploadBytes + item.loopbackDownloadBytes;
   }
 
   if (filters.direction === 'upload') return item.totalUploadBytes;
