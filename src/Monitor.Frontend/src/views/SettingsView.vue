@@ -33,14 +33,14 @@
           <span class="metric-label metric-label-inline"><AppIcon name="cpu" :size="14" />硬件采样间隔</span>
         </div>
         <strong class="metric-value">{{ form.hardwareSampleIntervalMs }} ms</strong>
-        <span class="metric-hint">越短越实时，但占用也会更高</span>
+        <span class="metric-hint">保存后会持久化，并在服务重启后生效</span>
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
           <span class="metric-label metric-label-inline"><AppIcon name="network" :size="14" />网络统计粒度</span>
         </div>
         <strong class="metric-value">{{ form.aggregateIntervalSeconds }} s</strong>
-        <span class="metric-hint">影响网络历史数据的聚合粒度</span>
+        <span class="metric-hint">保存后会持久化，并在服务重启后生效</span>
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
@@ -156,8 +156,8 @@
         </div>
 
         <ul class="simple-list compact">
-          <li>端口修改会写入 SQLite，并在下次启动后生效。</li>
-          <li>采样间隔和默认统计粒度会立即持久化保存。</li>
+          <li>所有设置都会先写入 SQLite 持久化保存。</li>
+          <li>运行中的服务不会热切换，新配置会在服务重启后统一生效。</li>
           <li>如果输入超出合法范围，前端会先拦截，再阻止提交。</li>
         </ul>
 
@@ -276,7 +276,7 @@ async function save() {
     const saved = await saveSettings({ ...form });
     Object.assign(form, saved);
     original.value = { ...saved };
-    successMessage.value = '设置已保存。端口修改会在下次启动时生效。';
+    successMessage.value = '设置已保存。新的配置会在服务重启后生效。';
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '保存设置失败。';
   } finally {

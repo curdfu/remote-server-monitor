@@ -241,11 +241,7 @@ const lanPercent = computed(() =>
   totalScopeBytes.value === 0 ? 0 : (lanTotalBytes.value / totalScopeBytes.value) * 100
 );
 
-const topRanking = computed(() =>
-  [...items.value]
-    .sort((left, right) => getRankingValue(right) - getRankingValue(left))
-    .slice(0, filters.topN)
-);
+const topRanking = computed(() => items.value.slice(0, filters.topN));
 
 const rankingDescription = computed(() => {
   const scopeLabel = filters.scope === 'wan' ? 'WAN' : filters.scope === 'lan' ? 'LAN' : '全部';
@@ -281,7 +277,7 @@ onUnmounted(() => {
 });
 
 watch(
-  () => [filters.from, filters.to, filters.scope, filters.direction],
+  () => [filters.from, filters.to, filters.topN, filters.scope, filters.direction],
   () => {
     if (autoRefreshTimer !== null) {
       window.clearTimeout(autoRefreshTimer);
@@ -340,7 +336,6 @@ function applyPreset(hours: number) {
   const now = new Date();
   filters.to = toLocalInputValue(now);
   filters.from = toLocalInputValue(new Date(now.getTime() - hours * 60 * 60 * 1000));
-  void loadApps();
 }
 
 function formatBytes(value: number) {

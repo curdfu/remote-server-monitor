@@ -1,3 +1,4 @@
+﻿using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Monitor.Network.Abstractions;
@@ -12,6 +13,8 @@ public sealed class NetworkTrafficRepository(
     IAppRegistry appRegistry,
     ILogger<NetworkTrafficRepository> logger)
 {
+    private const int AppIdLookupBatchSize = 200;
+
     public enum TrafficScopeFilter
     {
         All,
@@ -41,38 +44,46 @@ public sealed class NetworkTrafficRepository(
 
         var appIds = await UpsertAppRegistryAndGetIdsAsync(connection, transaction, buckets, cancellationToken);
 
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+                              INSERT INTO network_usage_agg (
+                                  bucket_start_time,
+                                  bucket_granularity_seconds,
+                                  app_id,
+                                  direction,
+                                  scope_type,
+                                  bytes,
+                                  packets
+                              )
+                              VALUES (
+                                  $bucketStartTime,
+                                  $bucketGranularitySeconds,
+                                  $appId,
+                                  $direction,
+                                  $scopeType,
+                                  $bytes,
+                                  $packets
+                              );
+                              """;
+
+        var bucketStartTimeParameter = command.Parameters.Add("$bucketStartTime", SqliteType.Text);
+        var bucketGranularityParameter = command.Parameters.Add("$bucketGranularitySeconds", SqliteType.Integer);
+        var appIdParameter = command.Parameters.Add("$appId", SqliteType.Integer);
+        var directionParameter = command.Parameters.Add("$direction", SqliteType.Text);
+        var scopeTypeParameter = command.Parameters.Add("$scopeType", SqliteType.Text);
+        var bytesParameter = command.Parameters.Add("$bytes", SqliteType.Integer);
+        var packetsParameter = command.Parameters.Add("$packets", SqliteType.Integer);
+
         foreach (var bucket in buckets)
         {
-            await using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = """
-                                  INSERT INTO network_usage_agg (
-                                      bucket_start_time,
-                                      bucket_granularity_seconds,
-                                      app_id,
-                                      direction,
-                                      scope_type,
-                                      bytes,
-                                      packets
-                                  )
-                                  VALUES (
-                                      $bucketStartTime,
-                                      $bucketGranularitySeconds,
-                                      $appId,
-                                      $direction,
-                                      $scopeType,
-                                      $bytes,
-                                      $packets
-                                  );
-                                  """;
-
-            command.Parameters.AddWithValue("$bucketStartTime", bucket.BucketStartTime.ToString("O"));
-            command.Parameters.AddWithValue("$bucketGranularitySeconds", bucket.BucketGranularitySeconds);
-            command.Parameters.AddWithValue("$appId", appIds[bucket.AppKey]);
-            command.Parameters.AddWithValue("$direction", MapDirection(bucket.Direction));
-            command.Parameters.AddWithValue("$scopeType", MapScopeType(bucket.ScopeType));
-            command.Parameters.AddWithValue("$bytes", bucket.Bytes);
-            command.Parameters.AddWithValue("$packets", bucket.Packets);
+            bucketStartTimeParameter.Value = bucket.BucketStartTime.ToString("O");
+            bucketGranularityParameter.Value = bucket.BucketGranularitySeconds;
+            appIdParameter.Value = appIds[bucket.AppKey];
+            directionParameter.Value = MapDirection(bucket.Direction);
+            scopeTypeParameter.Value = MapScopeType(bucket.ScopeType);
+            bytesParameter.Value = bucket.Bytes;
+            packetsParameter.Value = bucket.Packets;
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -316,6 +327,179 @@ public sealed class NetworkTrafficRepository(
         };
     }
 
+    public async Task UpsertAppRegistryAsync(
+        IReadOnlyCollection<AppRegistryEntry> entries,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = dbConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);
+        var transaction = (SqliteTransaction)transactionHandle;
+
+        await using var command = CreateUpsertAppRegistryCommand(connection, transaction);
+        foreach (var entry in entries)
+        {
+            await ExecuteUpsertAppRegistryEntryAsync(command, entry, cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        logger.LogDebug("Upserted {Count} app registry entries into SQLite.", entries.Count);
+    }
+
+    private async Task<Dictionary<string, long>> UpsertAppRegistryAndGetIdsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyList<TrafficBucket> buckets,
+        CancellationToken cancellationToken)
+    {
+        var appKeys = new List<string>();
+        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var bucket in buckets)
+        {
+            if (string.IsNullOrWhiteSpace(bucket.AppKey) || !seenKeys.Add(bucket.AppKey))
+            {
+                continue;
+            }
+
+            appKeys.Add(bucket.AppKey);
+        }
+
+        if (appKeys.Count == 0)
+        {
+            return new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        await using var upsertCommand = CreateUpsertAppRegistryCommand(connection, transaction);
+        foreach (var appKey in appKeys)
+        {
+            var entry = appRegistry.GetByAppKey(appKey) ?? CreateFallbackEntry(appKey);
+            await ExecuteUpsertAppRegistryEntryAsync(upsertCommand, entry, cancellationToken);
+        }
+
+        return await GetAppIdsByKeysAsync(connection, transaction, appKeys, cancellationToken);
+    }
+
+    private static AppRegistryEntry CreateFallbackEntry(string appKey)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new AppRegistryEntry
+        {
+            AppKey = appKey,
+            ProcessName = appKey,
+            FirstSeenAt = now,
+            LastSeenAt = now
+        };
+    }
+
+    private static SqliteCommand CreateUpsertAppRegistryCommand(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
+    {
+        var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+                              INSERT INTO app_registry (
+                                  app_key,
+                                  process_name,
+                                  display_name,
+                                  executable_path,
+                                  first_seen_at,
+                                  last_seen_at
+                              )
+                              VALUES (
+                                  $appKey,
+                                  $processName,
+                                  $displayName,
+                                  $executablePath,
+                                  $firstSeenAt,
+                                  $lastSeenAt
+                              )
+                              ON CONFLICT(app_key) DO UPDATE SET
+                                  process_name = excluded.process_name,
+                                  display_name = COALESCE(excluded.display_name, app_registry.display_name),
+                                  executable_path = COALESCE(excluded.executable_path, app_registry.executable_path),
+                                  last_seen_at = excluded.last_seen_at;
+                              """;
+
+        command.Parameters.Add("$appKey", SqliteType.Text);
+        command.Parameters.Add("$processName", SqliteType.Text);
+        command.Parameters.Add("$displayName", SqliteType.Text);
+        command.Parameters.Add("$executablePath", SqliteType.Text);
+        command.Parameters.Add("$firstSeenAt", SqliteType.Text);
+        command.Parameters.Add("$lastSeenAt", SqliteType.Text);
+        return command;
+    }
+
+    private static async Task ExecuteUpsertAppRegistryEntryAsync(
+        SqliteCommand command,
+        AppRegistryEntry entry,
+        CancellationToken cancellationToken)
+    {
+        command.Parameters["$appKey"].Value = entry.AppKey;
+        command.Parameters["$processName"].Value = entry.ProcessName;
+        command.Parameters["$displayName"].Value = ToDbValue(entry.DisplayName);
+        command.Parameters["$executablePath"].Value = ToDbValue(entry.ExecutablePath);
+        command.Parameters["$firstSeenAt"].Value = entry.FirstSeenAt.ToString("O");
+        command.Parameters["$lastSeenAt"].Value = entry.LastSeenAt.ToString("O");
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<Dictionary<string, long>> GetAppIdsByKeysAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyList<string> appKeys,
+        CancellationToken cancellationToken)
+    {
+        var appIds = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        for (var offset = 0; offset < appKeys.Count; offset += AppIdLookupBatchSize)
+        {
+            var count = Math.Min(AppIdLookupBatchSize, appKeys.Count - offset);
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+
+            var sql = new StringBuilder();
+            sql.Append("SELECT id, app_key FROM app_registry WHERE app_key IN (");
+            for (var index = 0; index < count; index++)
+            {
+                if (index > 0)
+                {
+                    sql.Append(", ");
+                }
+
+                var parameterName = $"$appKey{index}";
+                sql.Append(parameterName);
+                command.Parameters.AddWithValue(parameterName, appKeys[offset + index]);
+            }
+
+            sql.Append(");");
+            command.CommandText = sql.ToString();
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                appIds[reader.GetString(1)] = reader.GetInt64(0);
+            }
+        }
+
+        foreach (var appKey in appKeys)
+        {
+            if (!appIds.ContainsKey(appKey))
+            {
+                throw new InvalidOperationException($"App registry id not found for app key '{appKey}'.");
+            }
+        }
+
+        return appIds;
+    }
+
     private static string GetOrderByExpression(TrafficScopeFilter scopeFilter, TrafficDirectionFilter directionFilter)
     {
         return (scopeFilter, directionFilter) switch
@@ -354,126 +538,6 @@ public sealed class NetworkTrafficRepository(
         TrafficDirectionFilter.Download => "download",
         _ => "total"
     };
-
-    public async Task UpsertAppRegistryAsync(
-        IReadOnlyCollection<AppRegistryEntry> entries,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(entries);
-        if (entries.Count == 0)
-        {
-            return;
-        }
-
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
-        await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);
-        var transaction = (SqliteTransaction)transactionHandle;
-
-        foreach (var entry in entries)
-        {
-            await UpsertAppRegistryEntryAsync(connection, transaction, entry, cancellationToken);
-        }
-
-        await transaction.CommitAsync(cancellationToken);
-        logger.LogDebug("Upserted {Count} app registry entries into SQLite.", entries.Count);
-    }
-
-    private async Task<Dictionary<string, long>> UpsertAppRegistryAndGetIdsAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        IReadOnlyList<TrafficBucket> buckets,
-        CancellationToken cancellationToken)
-    {
-        var appKeys = buckets
-            .Select(static x => x.AppKey)
-            .Where(static x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        var appIds = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-        foreach (var appKey in appKeys)
-        {
-            var entry = appRegistry.GetByAppKey(appKey) ?? CreateFallbackEntry(appKey);
-            await UpsertAppRegistryEntryAsync(connection, transaction, entry, cancellationToken);
-            appIds[appKey] = await GetAppIdByKeyAsync(connection, transaction, appKey, cancellationToken);
-        }
-
-        return appIds;
-    }
-
-    private static AppRegistryEntry CreateFallbackEntry(string appKey)
-    {
-        var now = DateTimeOffset.UtcNow;
-        return new AppRegistryEntry
-        {
-            AppKey = appKey,
-            ProcessName = appKey,
-            FirstSeenAt = now,
-            LastSeenAt = now
-        };
-    }
-
-    private static async Task UpsertAppRegistryEntryAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        AppRegistryEntry entry,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-                              INSERT INTO app_registry (
-                                  app_key,
-                                  process_name,
-                                  display_name,
-                                  executable_path,
-                                  first_seen_at,
-                                  last_seen_at
-                              )
-                              VALUES (
-                                  $appKey,
-                                  $processName,
-                                  $displayName,
-                                  $executablePath,
-                                  $firstSeenAt,
-                                  $lastSeenAt
-                              )
-                              ON CONFLICT(app_key) DO UPDATE SET
-                                  process_name = excluded.process_name,
-                                  display_name = COALESCE(excluded.display_name, app_registry.display_name),
-                                  executable_path = COALESCE(excluded.executable_path, app_registry.executable_path),
-                                  last_seen_at = excluded.last_seen_at;
-                              """;
-
-        command.Parameters.AddWithValue("$appKey", entry.AppKey);
-        command.Parameters.AddWithValue("$processName", entry.ProcessName);
-        command.Parameters.AddWithValue("$displayName", ToDbValue(entry.DisplayName));
-        command.Parameters.AddWithValue("$executablePath", ToDbValue(entry.ExecutablePath));
-        command.Parameters.AddWithValue("$firstSeenAt", entry.FirstSeenAt.ToString("O"));
-        command.Parameters.AddWithValue("$lastSeenAt", entry.LastSeenAt.ToString("O"));
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static async Task<long> GetAppIdByKeyAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        string appKey,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = "SELECT id FROM app_registry WHERE app_key = $appKey LIMIT 1;";
-        command.Parameters.AddWithValue("$appKey", appKey);
-        var result = await command.ExecuteScalarAsync(cancellationToken);
-
-        if (result is null || result == DBNull.Value)
-        {
-            throw new InvalidOperationException($"App registry id not found for app key '{appKey}'.");
-        }
-
-        return Convert.ToInt64(result);
-    }
 
     private static object ToDbValue(string? value) => string.IsNullOrWhiteSpace(value) ? DBNull.Value : value;
 

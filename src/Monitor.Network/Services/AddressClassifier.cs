@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
@@ -17,6 +17,7 @@ public sealed class AddressClassifier(
     private readonly object _syncRoot = new();
     private IReadOnlyList<SubnetDefinition> _localSubnets = [];
     private DateTimeOffset _nextRefreshAt = DateTimeOffset.MinValue;
+    private AdditionalSubnetCache _additionalSubnetCache = AdditionalSubnetCache.Empty;
 
     public AddressScopeType Classify(string? remoteAddress, string? localAddress = null)
     {
@@ -35,6 +36,7 @@ public sealed class AddressClassifier(
         var remote = Normalize(remoteAddress);
         var local = localAddress is null ? null : Normalize(localAddress);
         var settings = settingsMonitor.CurrentValue.AddressClassification;
+        var additionalSubnets = GetAdditionalSubnets(settings);
 
         if (settings.TreatLoopbackAsLoopback &&
             (IPAddress.IsLoopback(remote) || (local is not null && IPAddress.IsLoopback(local))))
@@ -47,12 +49,12 @@ public sealed class AddressClassifier(
             return AddressScopeType.Other;
         }
 
-        if (MatchesAny(settings.AdditionalWanCidrs, remote))
+        if (MatchesAny(additionalSubnets.WanSubnets, remote))
         {
             return AddressScopeType.Wan;
         }
 
-        if (MatchesAny(settings.AdditionalLanCidrs, remote))
+        if (MatchesAny(additionalSubnets.LanSubnets, remote))
         {
             return AddressScopeType.Lan;
         }
@@ -72,6 +74,26 @@ public sealed class AddressClassifier(
             : AddressScopeType.Other;
     }
 
+    private AdditionalSubnetCache GetAdditionalSubnets(AddressClassificationSettings settings)
+    {
+        var cache = Volatile.Read(ref _additionalSubnetCache);
+        if (cache.Matches(settings))
+        {
+            return cache;
+        }
+
+        lock (_syncRoot)
+        {
+            if (_additionalSubnetCache.Matches(settings))
+            {
+                return _additionalSubnetCache;
+            }
+
+            _additionalSubnetCache = AdditionalSubnetCache.Create(settings, logger);
+            return _additionalSubnetCache;
+        }
+    }
+
     private bool IsInLocalSubnet(IPAddress address)
     {
         RefreshLocalSubnetsIfNeeded();
@@ -82,15 +104,7 @@ public sealed class AddressClassifier(
             localSubnets = _localSubnets;
         }
 
-        foreach (var subnet in localSubnets)
-        {
-            if (subnet.Contains(address))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return MatchesAny(localSubnets, address);
     }
 
     private void RefreshLocalSubnetsIfNeeded()
@@ -149,20 +163,10 @@ public sealed class AddressClassifier(
         }
     }
 
-    private static bool MatchesAny(IEnumerable<string>? cidrs, IPAddress address)
+    private static bool MatchesAny(IEnumerable<SubnetDefinition> subnets, IPAddress address)
     {
-        if (cidrs is null)
+        foreach (var subnet in subnets)
         {
-            return false;
-        }
-
-        foreach (var cidr in cidrs)
-        {
-            if (!SubnetDefinition.TryParse(cidr, out var subnet))
-            {
-                continue;
-            }
-
             if (subnet.Contains(address))
             {
                 return true;
@@ -317,6 +321,58 @@ public sealed class AddressClassifier(
 
             subnet = new SubnetDefinition(normalized.AddressFamily, networkBytes, prefixLength);
             return true;
+        }
+    }
+
+    private sealed class AdditionalSubnetCache(
+        string[]? sourceLanCidrs,
+        string[]? sourceWanCidrs,
+        IReadOnlyList<SubnetDefinition> lanSubnets,
+        IReadOnlyList<SubnetDefinition> wanSubnets)
+    {
+        public static readonly AdditionalSubnetCache Empty = new(Array.Empty<string>(), Array.Empty<string>(), [], []);
+
+        public IReadOnlyList<SubnetDefinition> LanSubnets { get; } = lanSubnets;
+        public IReadOnlyList<SubnetDefinition> WanSubnets { get; } = wanSubnets;
+
+        public bool Matches(AddressClassificationSettings settings)
+        {
+            return ReferenceEquals(sourceLanCidrs, settings.AdditionalLanCidrs) &&
+                   ReferenceEquals(sourceWanCidrs, settings.AdditionalWanCidrs);
+        }
+
+        public static AdditionalSubnetCache Create(AddressClassificationSettings settings, ILogger logger)
+        {
+            return new AdditionalSubnetCache(
+                settings.AdditionalLanCidrs,
+                settings.AdditionalWanCidrs,
+                ParseSubnets(settings.AdditionalLanCidrs, logger, "LAN"),
+                ParseSubnets(settings.AdditionalWanCidrs, logger, "WAN"));
+        }
+
+        private static IReadOnlyList<SubnetDefinition> ParseSubnets(
+            IEnumerable<string>? cidrs,
+            ILogger logger,
+            string scopeName)
+        {
+            if (cidrs is null)
+            {
+                return [];
+            }
+
+            var subnets = new List<SubnetDefinition>();
+            foreach (var cidr in cidrs)
+            {
+                if (!SubnetDefinition.TryParse(cidr, out var subnet))
+                {
+                    logger.LogWarning("Skipped invalid additional {ScopeName} CIDR '{Cidr}'.", scopeName, cidr);
+                    continue;
+                }
+
+                subnets.Add(subnet);
+            }
+
+            return subnets;
         }
     }
 }

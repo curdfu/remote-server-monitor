@@ -98,9 +98,5 @@ public sealed class RetentionService(
         await using var checkpointCommand = connection.CreateCommand();
         checkpointCommand.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
         await checkpointCommand.ExecuteNonQueryAsync(cancellationToken);
-
-        await using var vacuumCommand = connection.CreateCommand();
-        vacuumCommand.CommandText = "VACUUM;";
-        await vacuumCommand.ExecuteNonQueryAsync(cancellationToken);
     }
 }

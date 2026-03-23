@@ -23,8 +23,11 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     private readonly Computer _computer;
     private readonly IReadOnlyList<DiskTopologyEntry> _diskTopologyEntries;
     private readonly object _syncRoot = new();
+    private readonly object _diskUsageSyncRoot = new();
+    private DiskUsageSnapshot? _diskUsageSnapshot;
     private bool _isOpen;
     private bool _disposed;
+    private static readonly TimeSpan DiskUsageCacheLifetime = TimeSpan.FromSeconds(10);
 
     public LibreHardwareCollector(ILogger<LibreHardwareCollector> logger)
     {
@@ -237,25 +240,13 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
             return new Dictionary<uint, long?>();
         }
 
-        var requestedEntries = diskNumbers
-            .Distinct()
-            .Select(diskNumber => new
-            {
-                DiskNumber = diskNumber,
-                Entry = ResolveDiskTopologyEntry(diskNumber)
-            })
-            .ToArray();
-
-        var usageByVolume = GetCurrentVolumeUsage(
-            requestedEntries
-                .SelectMany(item => item.Entry?.VolumeNames ?? Array.Empty<string>())
-                .Distinct(StringComparer.OrdinalIgnoreCase));
-
+        var snapshot = GetDiskUsageSnapshot();
         var results = new Dictionary<uint, long?>();
-
-        foreach (var item in requestedEntries)
+        foreach (var diskNumber in diskNumbers.Distinct())
         {
-            results[item.DiskNumber] = ResolveDiskUsedBytes(item.Entry, usageByVolume);
+            results[diskNumber] = snapshot.UsedBytesByDiskNumber.TryGetValue(diskNumber, out var usedBytes)
+                ? usedBytes
+                : null;
         }
 
         return results;
@@ -268,31 +259,55 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
             return Array.Empty<DiskSpaceInfo>();
         }
 
-        var usageByVolume = GetCurrentVolumeUsage(
-            _diskTopologyEntries
-                .SelectMany(entry => entry.VolumeNames)
-                .Distinct(StringComparer.OrdinalIgnoreCase));
+        return GetDiskUsageSnapshot().DiskSpaces;
+    }
 
-        return _diskTopologyEntries
-            .GroupBy(entry => entry.DiskNumber)
-            .Select(group =>
+    private DiskUsageSnapshot GetDiskUsageSnapshot()
+    {
+        var now = DateTimeOffset.UtcNow;
+        lock (_diskUsageSyncRoot)
+        {
+            if (_diskUsageSnapshot is not null && now - _diskUsageSnapshot.CreatedAt <= DiskUsageCacheLifetime)
             {
-                var entry = group.First();
-                var usedBytes = ResolveDiskUsedBytes(entry, usageByVolume);
-                var totalBytes = entry.SizeBytes;
-                return new DiskSpaceInfo
-                {
-                    Name = BuildDiskSpaceDisplayName(entry),
-                    DiskNumber = entry.DiskNumber,
-                    TotalBytes = totalBytes,
-                    UsedBytes = usedBytes,
-                    FreeBytes = usedBytes.HasValue
-                        ? Math.Max(0, totalBytes - usedBytes.Value)
-                        : null
-                };
-            })
-            .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                return _diskUsageSnapshot;
+            }
+
+            _diskUsageSnapshot = LoadDiskUsageSnapshot(now);
+            return _diskUsageSnapshot;
+        }
+    }
+
+    private DiskUsageSnapshot LoadDiskUsageSnapshot(DateTimeOffset createdAt)
+    {
+        var volumeNames = _diskTopologyEntries
+            .SelectMany(entry => entry.VolumeNames)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var usageByVolume = GetCurrentVolumeUsage(volumeNames);
+        var usedBytesByDiskNumber = new Dictionary<uint, long?>();
+        var diskSpaces = new List<DiskSpaceInfo>();
+
+        foreach (var group in _diskTopologyEntries.GroupBy(entry => entry.DiskNumber))
+        {
+            var entry = group.First();
+            var usedBytes = ResolveDiskUsedBytes(entry, usageByVolume);
+            usedBytesByDiskNumber[entry.DiskNumber] = usedBytes;
+            diskSpaces.Add(new DiskSpaceInfo
+            {
+                Name = BuildDiskSpaceDisplayName(entry),
+                DiskNumber = entry.DiskNumber,
+                TotalBytes = entry.SizeBytes,
+                UsedBytes = usedBytes,
+                FreeBytes = usedBytes.HasValue
+                    ? Math.Max(0, entry.SizeBytes - usedBytes.Value)
+                    : null
+            });
+        }
+
+        return new DiskUsageSnapshot(
+            createdAt,
+            usedBytesByDiskNumber,
+            diskSpaces.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
     public void Dispose()
@@ -1061,5 +1076,15 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         public byte RawDeviceProperties;
     }
 
+    private sealed record DiskUsageSnapshot(
+        DateTimeOffset CreatedAt,
+        IReadOnlyDictionary<uint, long?> UsedBytesByDiskNumber,
+        IReadOnlyList<DiskSpaceInfo> DiskSpaces);
+
     private sealed record DiskTopologyEntry(string NormalizedName, uint DiskNumber, long SizeBytes, IReadOnlyList<string> VolumeNames);
 }
+
+
+
+
+
