@@ -247,7 +247,7 @@ const totalDownloadBytes = computed(() =>
   totalsSummary.value?.totalDownloadBytes ?? 0
 );
 
-// 占比面板数据 - 使用 overviewSummary（不受 scope 筛选影响）
+// 占比面板数据 - 使用 overviewSummary（不受 scope 筛选影响，但受 direction 和时间范围影响）
 const overviewWanTotalBytes = computed(() =>
   (overviewSummary.value?.wanUploadBytes ?? 0) + (overviewSummary.value?.wanDownloadBytes ?? 0)
 );
@@ -361,7 +361,7 @@ async function loadApps() {
         from,
         to,
         scope: 'all',
-        direction: 'total'  // 占比面板不受 direction 影响
+        direction: filters.direction
       }),
       getNetworkSummary({
         from,
