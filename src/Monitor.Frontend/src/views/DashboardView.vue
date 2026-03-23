@@ -242,11 +242,14 @@ const bootTimeText = computed(() => {
 });
 
 onMounted(() => {
+  // 进入首页时先调用后端 /api/overview，保证首屏有完整概览数据
   void loadOverview();
+  // 再连接后端 /hubs/monitor，后续通过 SignalR 增量刷新硬件实时数据
   void startRealtimeConnection().catch(() => {
     errorMessage.value = 'SignalR 实时通道连接失败，将继续保留当前页面数据。';
   });
 
+  // 订阅后端 hardwareRealtime 推送：首页卡片收到新数据后直接更新本地状态
   unsubscribeHardware = subscribeHardwareRealtime((hardware) => {
     errorMessage.value = '';
     updateHardwareState(mergeHardwarePayload(hardware, hardwareState()));
@@ -262,6 +265,7 @@ async function loadOverview() {
   errorMessage.value = '';
 
   try {
+    // 调用后端 /api/overview：获取首页概览所需的硬件与网络快照
     const overview = await getOverview();
     updateHardwareState(mergeHardwarePayload(overview.hardware, hardwareState()));
   } catch (error) {

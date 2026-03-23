@@ -1,5 +1,6 @@
 ﻿<template>
   <section class="page network-page">
+    <!-- 页面头部：标题、说明和手动刷新按钮 -->
     <PageHeader
       iconName="network"
       kicker="网络"
@@ -14,6 +15,7 @@
       </template>
     </PageHeader>
 
+    <!-- 查询条件区：控制时间范围、排行数量、统计范围和统计方向 -->
     <article class="card filters-card filters-card-elevated">
       <label>
         开始时间
@@ -46,6 +48,7 @@
       </label>
     </article>
 
+    <!-- 快捷时间区：一键切换常用时间范围 -->
     <div class="preset-row">
       <button
         v-for="preset in presetOptions"
@@ -62,6 +65,7 @@
       {{ errorMessage }}
     </div>
 
+    <!-- 概览指标区：展示累计上传、累计下载、应用数量和当前统计时间范围 -->
     <div class="grid">
       <div class="card metric-card metric-card-compact network-stat-card">
         <div class="metric-top">
@@ -94,6 +98,7 @@
     </div>
 
     <section class="panel-grid">
+      <!-- 占比面板：展示 WAN / LAN / Loopback 在当前时间范围和方向下的占比 -->
       <article class="card dashboard-panel-card">
         <div class="panel-header">
           <div class="panel-title">
@@ -180,6 +185,7 @@
         </div>
       </article>
 
+      <!-- 排行面板：展示按当前 scope + direction 排序后的应用流量排行 -->
       <article class="card dashboard-panel-card">
         <div class="panel-header">
           <div class="panel-title">
@@ -214,6 +220,7 @@ import PageHeader from '../components/PageHeader.vue';
 import { getNetworkApps, getNetworkSummary } from '../services/api';
 import type { AppTrafficSummaryDto, NetworkPeriodSummaryDto } from '../types/monitor';
 
+// 常用时间预设，对应页面顶部的快捷时间按钮
 const presetOptions = [
   { hours: 1, label: '最近 1 小时' },
   { hours: 6, label: '最近 6 小时' },
@@ -223,6 +230,7 @@ const presetOptions = [
   { hours: 24 * 30, label: '最近 30 天' }
 ] as const;
 
+// 页面主数据：应用排行、汇总卡片、占比面板、加载状态
 const items = ref<AppTrafficSummaryDto[]>([]);
 const summary = ref<NetworkPeriodSummaryDto | null>(null);
 const overviewSummary = ref<NetworkPeriodSummaryDto | null>(null);
@@ -230,6 +238,8 @@ const totalsSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const isLoading = ref(false);
 const errorMessage = ref('');
 let autoRefreshTimer: number | null = null;
+
+// 查询条件：分别驱动筛选区、占比面板和应用排行
 const filters = reactive({
   from: toLocalInputValue(new Date(Date.now() - 24 * 60 * 60 * 1000)),
   to: toLocalInputValue(new Date()),
@@ -343,6 +353,11 @@ async function loadApps() {
   try {
     const from = toIsoString(filters.from);
     const to = toIsoString(filters.to);
+    // 这里集中调用网络页相关后端接口：
+    // 1. /api/network/apps：获取应用流量排行
+    // 2. /api/network/summary（当前 scope + 当前 direction）：获取当前筛选条件下的汇总
+    // 3. /api/network/summary（scope=all + 当前 direction）：获取占比面板数据，忽略 scope，但保留时间和方向
+    // 4. /api/network/summary（当前 scope + direction=total）：获取顶部累计上传/下载卡片数据，忽略方向
     const [apps, periodSummary, overviewData, totalsData] = await Promise.all([
       getNetworkApps({
         from,

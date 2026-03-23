@@ -27,6 +27,7 @@ let startPromise: Promise<void> | null = null;
 let reconnectTimer: number | null = null;
 let currentConnectionState: RealtimeConnectionState = 'disconnected';
 
+// 向页面广播实时连接状态，供首页等页面展示“已连接/重连中”等状态
 function emitConnectionState(state: RealtimeConnectionState) {
   currentConnectionState = state;
   connectionStateListeners.forEach((listener) => listener(state));
@@ -49,6 +50,7 @@ function clearReconnectTimer() {
   }
 }
 
+// SignalR 断开后兜底重连：后端 Hub 不可用时，前端每 5 秒再尝试一次
 function scheduleReconnect() {
   if (reconnectTimer !== null) {
     return;
@@ -62,6 +64,7 @@ function scheduleReconnect() {
   }, 5000);
 }
 
+// 创建并缓存 SignalR 连接，对应后端 /hubs/monitor 实时推送通道
 function ensureConnection() {
   if (connection) {
     return connection;
@@ -104,6 +107,7 @@ function ensureConnection() {
   return connection;
 }
 
+// 启动与后端 Hub 的实时连接：首页硬件卡片会依赖这条连接接收推送
 export async function startRealtimeConnection() {
   const hubConnection = ensureConnection();
   if (hubConnection.state === signalR.HubConnectionState.Connected) {
@@ -148,6 +152,7 @@ function subscribe<T>(listeners: Set<Listener<T>>, listener: Listener<T>) {
   };
 }
 
+// 首页使用：订阅后端推送的 hardwareRealtime 事件
 export function subscribeHardwareRealtime(listener: Listener<HardwareRealtimeDto>) {
   return subscribe(hardwareListeners, listener);
 }
@@ -162,6 +167,7 @@ export function subscribeTopAppsRealtime(listener: Listener<AppTrafficItemDto[]>
   return subscribe(topAppsListeners, listener);
 }
 
+// 页面可通过这个订阅连接状态变化，用于提示当前实时通道是否正常
 export function subscribeRealtimeConnectionState(listener: Listener<RealtimeConnectionState>) {
   listener(currentConnectionState);
   return subscribe(connectionStateListeners, listener);

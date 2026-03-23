@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   AppSettingsDto,
   AppTrafficSummaryDto,
   HardwareRealtimeDto,
@@ -9,6 +9,7 @@ import type {
 
 const apiBase = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? '';
 
+// 通用 HTTP 请求封装：统一拼接 API 基地址，并处理后端返回的错误文本
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, {
     headers: {
@@ -26,10 +27,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+// 调用后端 /api/overview：获取首页概览数据
 export function getOverview() {
   return request<RealtimeOverviewDto>('/api/overview');
 }
 
+// 调用后端 /api/hardware/history：获取硬件历史曲线数据
 export function getHardwareHistory(from?: string, to?: string) {
   const query = new URLSearchParams();
   if (from) query.set('from', from);
@@ -37,6 +40,7 @@ export function getHardwareHistory(from?: string, to?: string) {
   return request<HardwareRealtimeDto[]>(`/api/hardware/history${query.toString() ? `?${query}` : ''}`);
 }
 
+// 调用后端 /api/network/apps：获取网络页“应用流量排行”列表
 export function getNetworkApps(params?: {
   from?: string;
   to?: string;
@@ -53,6 +57,7 @@ export function getNetworkApps(params?: {
   return request<AppTrafficSummaryDto[]>(`/api/network/apps${query.toString() ? `?${query}` : ''}`);
 }
 
+// 调用后端 /api/network/summary：获取网络页“汇总卡片 / 占比面板”使用的汇总数据
 export function getNetworkSummary(params?: {
   from?: string;
   to?: string;
@@ -67,10 +72,12 @@ export function getNetworkSummary(params?: {
   return request<NetworkPeriodSummaryDto>(`/api/network/summary${query.toString() ? `?${query}` : ''}`);
 }
 
+// 调用后端 /api/settings：读取设置页表单初始值
 export function getSettings() {
   return request<AppSettingsDto>('/api/settings');
 }
 
+// 调用后端 /api/settings：保存设置页修改后的配置
 export function saveSettings(payload: AppSettingsDto) {
   return request<AppSettingsDto>('/api/settings', {
     method: 'POST',

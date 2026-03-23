@@ -245,6 +245,7 @@ async function loadSettings() {
   successMessage.value = '';
 
   try {
+    // 调用后端 /api/settings：加载设置页初始配置
     const loaded = await getSettings();
     Object.assign(form, loaded);
     original.value = { ...loaded };
@@ -273,6 +274,7 @@ async function save() {
   successMessage.value = '';
 
   try {
+    // 调用后端 /api/settings：把当前表单保存到服务端，并用返回值回填页面
     const saved = await saveSettings({ ...form });
     Object.assign(form, saved);
     original.value = { ...saved };
