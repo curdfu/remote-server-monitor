@@ -50,6 +50,7 @@
           badge="运行"
           tone="info"
           icon-name="uptime"
+          small-value
         />
         <MetricCard
           label="CPU 当前频率"
@@ -343,10 +344,10 @@ function formatUptime(value?: number | null) {
   const minutes = Math.floor((value % 3600) / 60);
 
   if (days > 0) {
-    return `${days}d ${hours}h ${minutes}m`;
+    return `${days}天 ${hours}小时 ${minutes}分`;
   }
 
-  return `${hours}h ${minutes}m`;
+  return `${hours}小时 ${minutes}分`;
 }
 
 function formatDateTime(value?: string | null) {

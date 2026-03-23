@@ -9,7 +9,7 @@
 
     <div class="metric-main">
       <div class="metric-copy">
-        <strong class="metric-value">{{ value }}</strong>
+        <strong class="metric-value" :class="{ 'metric-value-small': smallValue }">{{ value }}</strong>
         <span v-if="hint" class="metric-hint">{{ hint }}</span>
       </div>
 
@@ -55,6 +55,7 @@ const props = defineProps<{
   tone?: MetricTone;
   iconName?: MetricIconName;
   meterPercent?: number | null;
+  smallValue?: boolean;
 }>();
 
 const toneClass = computed(() => `metric-tone-${props.tone ?? 'default'}`);

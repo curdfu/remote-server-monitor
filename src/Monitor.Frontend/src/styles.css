@@ -662,6 +662,10 @@ button:disabled {
   line-height: 1.15;
 }
 
+.metric-value-small {
+  font-size: 20px;
+}
+
 .metric-card-compact .metric-value {
   font-size: 18px;
 }
