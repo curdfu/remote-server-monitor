@@ -226,6 +226,7 @@ const presetOptions = [
 const items = ref<AppTrafficSummaryDto[]>([]);
 const summary = ref<NetworkPeriodSummaryDto | null>(null);
 const overviewSummary = ref<NetworkPeriodSummaryDto | null>(null);
+const totalsSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const isLoading = ref(false);
 const errorMessage = ref('');
 let autoRefreshTimer: number | null = null;
@@ -237,12 +238,13 @@ const filters = reactive({
   direction: 'upload' as 'total' | 'upload' | 'download'
 });
 
+// 累计上传/下载 - 使用 totalsSummary（不受 direction 筛选影响）
 const totalUploadBytes = computed(() =>
-  summary.value?.totalUploadBytes ?? 0
+  totalsSummary.value?.totalUploadBytes ?? 0
 );
 
 const totalDownloadBytes = computed(() =>
-  summary.value?.totalDownloadBytes ?? 0
+  totalsSummary.value?.totalDownloadBytes ?? 0
 );
 
 // 占比面板数据 - 使用 overviewSummary（不受 scope 筛选影响）
@@ -341,7 +343,7 @@ async function loadApps() {
   try {
     const from = toIsoString(filters.from);
     const to = toIsoString(filters.to);
-    const [apps, periodSummary, overviewData] = await Promise.all([
+    const [apps, periodSummary, overviewData, totalsData] = await Promise.all([
       getNetworkApps({
         from,
         to,
@@ -359,13 +361,20 @@ async function loadApps() {
         from,
         to,
         scope: 'all',
-        direction: filters.direction
+        direction: 'total'  // 占比面板不受 direction 影响
+      }),
+      getNetworkSummary({
+        from,
+        to,
+        scope: filters.scope,
+        direction: 'total'  // 累计上传/下载不受 direction 影响
       })
     ]);
 
     items.value = apps;
     summary.value = periodSummary;
     overviewSummary.value = overviewData;
+    totalsSummary.value = totalsData;
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载网络汇总失败。';
   } finally {

@@ -3,7 +3,7 @@
     <aside class="sidebar">
       <div class="sidebar-brand">
         <p class="sidebar-kicker">系统监控</p>
-        <h1>Windows服务器远程监控</h1>
+        <h1>服务器远程监控</h1>
         <p class="sidebar-description">查看硬件状态、网络流量和基础配置。</p>
       </div>
       <nav class="sidebar-nav">
