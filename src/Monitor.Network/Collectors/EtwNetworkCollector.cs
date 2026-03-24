@@ -23,6 +23,8 @@ public sealed class EtwNetworkCollector(
     private TraceEventSession? _session;
     private Task? _processingTask;
     private Task? _adaptiveRestartTask;
+    private Task? _sessionMonitorTask;
+    private CancellationTokenSource? _sessionMonitorCancellation;
     private string? _sessionName;
     private DateTimeOffset? _startedAt;
     private int _bufferSizeMb;
@@ -128,6 +130,7 @@ public sealed class EtwNetworkCollector(
     {
         Task? processingTask;
         Task? adaptiveRestartTask;
+        Task? sessionMonitorTask;
         string? sessionName;
 
         lock (_syncRoot)
@@ -140,6 +143,7 @@ public sealed class EtwNetworkCollector(
             RefreshLostEventsCore(logIfIncreased: true);
             processingTask = _processingTask;
             adaptiveRestartTask = _adaptiveRestartTask;
+            sessionMonitorTask = _sessionMonitorTask;
             sessionName = _sessionName;
             _adaptiveRestartScheduled = false;
             StopSessionCore();
@@ -159,6 +163,22 @@ public sealed class EtwNetworkCollector(
             catch (Exception exception)
             {
                 logger.LogDebug(exception, "ETW processing task ended with exception during stop.");
+            }
+        }
+
+        if (sessionMonitorTask is not null)
+        {
+            try
+            {
+                await sessionMonitorTask.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                logger.LogDebug(exception, "ETW session monitor task ended with exception during stop.");
             }
         }
 
@@ -219,6 +239,7 @@ public sealed class EtwNetworkCollector(
             {
                 RefreshLostEventsCore(logIfIncreased: true);
                 _adaptiveRestartScheduled = false;
+                _sessionMonitorCancellation?.Cancel();
                 _session?.Dispose();
             }
             catch (Exception exception)
@@ -230,6 +251,8 @@ public sealed class EtwNetworkCollector(
                 _session = null;
                 _processingTask = null;
                 _adaptiveRestartTask = null;
+                _sessionMonitorTask = null;
+                _sessionMonitorCancellation = null;
                 _sessionName = null;
                 IsRunning = false;
                 _disposed = true;
@@ -258,6 +281,37 @@ public sealed class EtwNetworkCollector(
         catch (Exception exception)
         {
             logger.LogDebug(exception, "ETW session processing loop exited with exception.");
+        }
+    }
+
+    private async Task MonitorSessionAsync(TraceEventSession session, CancellationTokenSource cancellationTokenSource)
+    {
+        using (cancellationTokenSource)
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+
+            try
+            {
+                while (await timer.WaitForNextTickAsync(cancellationTokenSource.Token))
+                {
+                    lock (_syncRoot)
+                    {
+                        if (_disposed || !IsRunning || !ReferenceEquals(session, _session))
+                        {
+                            return;
+                        }
+
+                        RefreshLostEventsCore(session, logIfIncreased: true);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception exception)
+            {
+                logger.LogDebug(exception, "ETW session monitor loop exited with exception.");
+            }
         }
     }
 
@@ -370,11 +424,6 @@ public sealed class EtwNetworkCollector(
             return;
         }
 
-        lock (_syncRoot)
-        {
-            RefreshLostEventsCore(logIfIncreased: true);
-        }
-
         Interlocked.Increment(ref _sessionPublishedEvents);
         Interlocked.Increment(ref _totalPublishedEvents);
         EventReceived?.Invoke(traceEvent);
@@ -382,7 +431,15 @@ public sealed class EtwNetworkCollector(
 
     private void RefreshLostEventsCore(bool logIfIncreased)
     {
-        if (_session is null)
+        if (_session is not null)
+        {
+            RefreshLostEventsCore(_session, logIfIncreased);
+        }
+    }
+
+    private void RefreshLostEventsCore(TraceEventSession session, bool logIfIncreased)
+    {
+        if (!ReferenceEquals(session, _session))
         {
             return;
         }
@@ -390,7 +447,7 @@ public sealed class EtwNetworkCollector(
         long currentLostEvents;
         try
         {
-            currentLostEvents = _session.EventsLost;
+            currentLostEvents = session.EventsLost;
         }
         catch (Exception exception)
         {
@@ -458,6 +515,7 @@ public sealed class EtwNetworkCollector(
     private async Task IncreaseBufferAsync(int targetBufferSizeMb)
     {
         Task? previousProcessingTask = null;
+        Task? previousSessionMonitorTask = null;
         string? previousSessionName = null;
 
         try
@@ -472,6 +530,7 @@ public sealed class EtwNetworkCollector(
                 }
 
                 previousProcessingTask = _processingTask;
+                previousSessionMonitorTask = _sessionMonitorTask;
                 previousSessionName = _sessionName;
                 StopSessionCore();
                 _sessionName = BuildSessionName();
@@ -490,6 +549,18 @@ public sealed class EtwNetworkCollector(
                 catch (Exception exception)
                 {
                     logger.LogDebug(exception, "Previous ETW processing task ended with exception after adaptive buffer restart.");
+                }
+            }
+
+            if (previousSessionMonitorTask is not null)
+            {
+                try
+                {
+                    await previousSessionMonitorTask;
+                }
+                catch (Exception exception)
+                {
+                    logger.LogDebug(exception, "Previous ETW session monitor task ended with exception after adaptive buffer restart.");
                 }
             }
 
@@ -514,6 +585,9 @@ public sealed class EtwNetworkCollector(
 
     private void StopSessionCore()
     {
+        _sessionMonitorCancellation?.Cancel();
+        _sessionMonitorCancellation = null;
+
         try
         {
             _session?.Stop();
@@ -526,6 +600,7 @@ public sealed class EtwNetworkCollector(
         _session?.Dispose();
         _session = null;
         _processingTask = null;
+        _sessionMonitorTask = null;
         _sessionName = null;
         _startedAt = null;
         _bufferSizeMb = 0;
@@ -539,9 +614,12 @@ public sealed class EtwNetworkCollector(
 
     private void CleanupFailedStart(bool clearTotals)
     {
+        _sessionMonitorCancellation?.Cancel();
+        _sessionMonitorCancellation = null;
         _session?.Dispose();
         _session = null;
         _processingTask = null;
+        _sessionMonitorTask = null;
         _sessionName = null;
         _startedAt = null;
         _bufferSizeMb = 0;
@@ -564,24 +642,28 @@ public sealed class EtwNetworkCollector(
         var sessionOptions = TraceEventSessionOptions.Create |
                              TraceEventSessionOptions.NoPerProcessorBuffering;
 
-        _session = new TraceEventSession(_sessionName, sessionOptions);
-        _session.StopOnDispose = true;
-        _session.BufferSizeMB = bufferSizeMb;
-        _session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
+        var session = new TraceEventSession(_sessionName, sessionOptions);
+        session.StopOnDispose = true;
+        session.BufferSizeMB = bufferSizeMb;
+        session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
+        RegisterHandlers(session.Source.Kernel);
 
-        RegisterHandlers(_session.Source.Kernel);
+        var sessionMonitorCancellation = new CancellationTokenSource();
 
+        _session = session;
         _startedAt = DateTimeOffset.UtcNow;
         _bufferSizeMb = bufferSizeMb;
+        _sessionMonitorCancellation = sessionMonitorCancellation;
         Interlocked.Exchange(ref _sessionPublishedEvents, 0);
         Interlocked.Exchange(ref _sessionLostEvents, 0);
         Interlocked.Exchange(ref _lastLoggedLostEvents, 0);
 
         _processingTask = Task.Factory.StartNew(
-            () => ProcessSession(_session, logger),
+            () => ProcessSession(session, logger),
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
+        _sessionMonitorTask = Task.Run(() => MonitorSessionAsync(session, sessionMonitorCancellation));
 
         IsRunning = true;
         logger.LogInformation(
@@ -663,6 +745,3 @@ public sealed class EtwNetworkCollector(
         }
     }
 }
-
-
-

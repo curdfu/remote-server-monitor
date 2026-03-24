@@ -8,15 +8,27 @@ using Monitor.Network.Enums;
 
 namespace Monitor.Network.Services;
 
-public sealed class AddressClassifier(
-    IMonitorSettingsProvider settingsMonitor,
-    ILogger<AddressClassifier> logger) : IAddressClassifier
+public sealed class AddressClassifier : IAddressClassifier, IDisposable
 {
     private static readonly TimeSpan LocalSubnetRefreshInterval = TimeSpan.FromSeconds(30);
+
     private readonly object _syncRoot = new();
+    private readonly ILogger<AddressClassifier> _logger;
+    private readonly IDisposable _settingsRegistration;
     private IReadOnlyList<SubnetDefinition> _localSubnets = [];
     private DateTimeOffset _nextRefreshAt = DateTimeOffset.MinValue;
     private AdditionalSubnetCache _additionalSubnetCache = AdditionalSubnetCache.Empty;
+    private AddressClassificationSettings _settings;
+    private bool _disposed;
+
+    public AddressClassifier(
+        IMonitorSettingsProvider settingsMonitor,
+        ILogger<AddressClassifier> logger)
+    {
+        _logger = logger;
+        _settings = CloneSettings(settingsMonitor.Current.AddressClassification);
+        _settingsRegistration = settingsMonitor.RegisterChangeCallback(OnSettingsChanged);
+    }
 
     public AddressScopeType Classify(string? remoteAddress, string? localAddress = null)
     {
@@ -27,6 +39,8 @@ public sealed class AddressClassifier(
 
     public AddressScopeType Classify(IPAddress? remoteAddress, IPAddress? localAddress = null)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         if (remoteAddress is null)
         {
             return AddressScopeType.Other;
@@ -34,7 +48,7 @@ public sealed class AddressClassifier(
 
         var remote = Normalize(remoteAddress);
         var local = localAddress is null ? null : Normalize(localAddress);
-        var settings = settingsMonitor.Current.AddressClassification;
+        var settings = Volatile.Read(ref _settings);
         var additionalSubnets = GetAdditionalSubnets(settings);
 
         if (settings.TreatLoopbackAsLoopback &&
@@ -73,6 +87,28 @@ public sealed class AddressClassifier(
             : AddressScopeType.Other;
     }
 
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _settingsRegistration.Dispose();
+        _disposed = true;
+    }
+
+    private void OnSettingsChanged(MonitorSettings updatedSettings)
+    {
+        Volatile.Write(ref _settings, CloneSettings(updatedSettings.AddressClassification));
+
+        lock (_syncRoot)
+        {
+            _additionalSubnetCache = AdditionalSubnetCache.Empty;
+            _nextRefreshAt = DateTimeOffset.MinValue;
+        }
+    }
+
     private AdditionalSubnetCache GetAdditionalSubnets(AddressClassificationSettings settings)
     {
         var cache = Volatile.Read(ref _additionalSubnetCache);
@@ -88,7 +124,7 @@ public sealed class AddressClassifier(
                 return _additionalSubnetCache;
             }
 
-            _additionalSubnetCache = AdditionalSubnetCache.Create(settings, logger);
+            _additionalSubnetCache = AdditionalSubnetCache.Create(settings, _logger);
             return _additionalSubnetCache;
         }
     }
@@ -157,9 +193,22 @@ public sealed class AddressClassifier(
         }
         catch (Exception exception)
         {
-            logger.LogWarning(exception, "Failed to enumerate local network subnets for LAN classification.");
+            _logger.LogWarning(exception, "Failed to enumerate local network subnets for LAN classification.");
             return [];
         }
+    }
+
+    private static AddressClassificationSettings CloneSettings(AddressClassificationSettings? settings)
+    {
+        var source = settings ?? new AddressClassificationSettings();
+        return new AddressClassificationSettings
+        {
+            TreatPrivateAddressesAsLan = source.TreatPrivateAddressesAsLan,
+            TreatLocalSubnetsAsLan = source.TreatLocalSubnetsAsLan,
+            TreatLoopbackAsLoopback = source.TreatLoopbackAsLoopback,
+            AdditionalLanCidrs = source.AdditionalLanCidrs?.ToArray() ?? [],
+            AdditionalWanCidrs = source.AdditionalWanCidrs?.ToArray() ?? []
+        };
     }
 
     private static bool MatchesAny(IEnumerable<SubnetDefinition> subnets, IPAddress address)
@@ -375,5 +424,3 @@ public sealed class AddressClassifier(
         }
     }
 }
-
-

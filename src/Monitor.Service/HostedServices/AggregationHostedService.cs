@@ -7,6 +7,7 @@ namespace Monitor.Service.HostedServices;
 public sealed class AggregationHostedService(
     ILogger<AggregationHostedService> logger,
     INetworkAggregator networkAggregator,
+    INetworkCollector networkCollector,
     NetworkTrafficRepository networkTrafficRepository,
     IMonitorSettingsProvider settings) : BackgroundService
 {
@@ -32,6 +33,8 @@ public sealed class AggregationHostedService(
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        await networkCollector.StopAsync(cancellationToken);
+        await networkAggregator.FlushAsync(cancellationToken);
         await PersistPendingBucketsAsync(cancellationToken);
         await base.StopAsync(cancellationToken);
     }

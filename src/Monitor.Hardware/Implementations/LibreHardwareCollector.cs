@@ -1,4 +1,4 @@
-using LibreHardwareMonitor.Hardware;
+Ôªøusing LibreHardwareMonitor.Hardware;
 using Microsoft.Extensions.Logging;
 using Monitor.Hardware.Abstractions;
 using Monitor.Hardware.Models;
@@ -25,6 +25,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     private readonly object _syncRoot = new();
     private readonly object _diskUsageSyncRoot = new();
     private DiskUsageSnapshot? _diskUsageSnapshot;
+    private SensorCache? _sensorCache;
     private bool _isOpen;
     private bool _disposed;
     private static readonly TimeSpan DiskUsageCacheLifetime = TimeSpan.FromSeconds(10);
@@ -59,125 +60,18 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
             }
 
             RefreshHardwareTree();
+            var sensorCache = GetOrBuildSensorCacheCore();
 
-            var cpuHardware = _computer.Hardware.FirstOrDefault(hardware => hardware.HardwareType == HardwareType.Cpu);
-            var totalMemoryHardware = _computer.Hardware.FirstOrDefault(hardware =>
-                hardware.HardwareType == HardwareType.Memory &&
-                hardware.Name.Equals("Total Memory", StringComparison.OrdinalIgnoreCase));
+            var cpuUsage = ReadSensorValue(sensorCache.CpuUsageSensor);
+            var (cpuTemperature, cpuTemperatureSource) = ReadPreferredCpuTemperature(sensorCache);
+            var (cpuFrequencyMhz, cpuFrequencySource) = ReadCpuClock(sensorCache.CpuSensors);
+            var (cpuPowerWatts, cpuPowerSource) = ReadCpuPower(sensorCache.CpuSensors);
 
-            var cpuSensors = EnumerateSensors(hardware => hardware.HardwareType == HardwareType.Cpu).ToArray();
-            var memorySensors = EnumerateSensors(hardware => hardware.HardwareType == HardwareType.Memory).ToArray();
-            var storageSensors = EnumerateSensors(hardware => hardware.HardwareType == HardwareType.Storage).ToArray();
+            var memoryUsed = ReadSensorValue(sensorCache.MemoryUsedSensor);
+            var memoryAvailable = ReadSensorValue(sensorCache.MemoryAvailableSensor);
+            var memoryUsagePercent = ReadSensorValue(sensorCache.MemoryUsageSensor);
 
-            var cpuUsage = ReadSensorValue(
-                cpuSensors,
-                sensor => sensor.SensorType == SensorType.Load &&
-                          sensor.Name.Contains("CPU Total", StringComparison.OrdinalIgnoreCase));
-
-            var (cpuTemperature, cpuTemperatureSource) = ReadFirstSensor(
-                cpuSensors,
-                sensor => sensor.SensorType == SensorType.Temperature &&
-                          sensor.Name.Equals("CPU Package", StringComparison.OrdinalIgnoreCase),
-                sensor => sensor.Name);
-
-            if (!cpuTemperature.HasValue)
-            {
-                (cpuTemperature, cpuTemperatureSource) = ReadFirstSensor(
-                    cpuSensors,
-                    sensor => sensor.SensorType == SensorType.Temperature &&
-                              sensor.Name.Equals("Core Max", StringComparison.OrdinalIgnoreCase),
-                    sensor => sensor.Name);
-            }
-
-            var (cpuFrequencyMhz, cpuFrequencySource) = ReadCpuClock(cpuSensors);
-            var (cpuPowerWatts, cpuPowerSource) = ReadCpuPower(cpuSensors);
-
-            var (memoryUsed, _) = ReadFirstSensor(
-                memorySensors,
-                sensor => sensor.SensorType == SensorType.Data &&
-                          sensor.Name.Equals("Memory Used", StringComparison.OrdinalIgnoreCase) &&
-                          sensor.Hardware.Name.Equals("Total Memory", StringComparison.OrdinalIgnoreCase),
-                sensor => sensor.Name);
-
-            var (memoryAvailable, _) = ReadFirstSensor(
-                memorySensors,
-                sensor => sensor.SensorType == SensorType.Data &&
-                          sensor.Name.Equals("Memory Available", StringComparison.OrdinalIgnoreCase) &&
-                          sensor.Hardware.Name.Equals("Total Memory", StringComparison.OrdinalIgnoreCase),
-                sensor => sensor.Name);
-
-            var memoryUsagePercent = ReadSensorValue(
-                memorySensors,
-                sensor => sensor.SensorType == SensorType.Load &&
-                          sensor.Name.Equals("Memory", StringComparison.OrdinalIgnoreCase) &&
-                          sensor.Hardware.Name.Equals("Total Memory", StringComparison.OrdinalIgnoreCase));
-
-            var diskTemperatureCandidates = storageSensors
-                .Where(sensor => sensor.SensorType == SensorType.Temperature)
-                .Select(sensor => new
-                {
-                    Value = Normalize(sensor.Value),
-                    Source = $"{sensor.Hardware.Name}/{sensor.Name}"
-                })
-                .Where(item => item.Value.HasValue)
-                .ToArray();
-
-            var diskDrives = storageSensors
-                .Where(sensor => sensor.SensorType == SensorType.Temperature)
-                .GroupBy(sensor => sensor.Hardware.Name, StringComparer.OrdinalIgnoreCase)
-                .Select(group =>
-                {
-                    var candidates = group
-                        .Select(sensor => new
-                        {
-                            Value = Normalize(sensor.Value),
-                            Source = $"{sensor.Hardware.Name}/{sensor.Name}"
-                        })
-                        .Where(item => item.Value.HasValue)
-                        .ToArray();
-
-                    var driveTemperature = candidates
-                        .Select(item => item.Value!.Value)
-                        .DefaultIfEmpty()
-                        .Max() is var maxTemperature && maxTemperature > 0
-                            ? maxTemperature
-                            : (double?)null;
-
-                    var topologyEntry = ResolveDiskTopologyEntry(group.Key);
-
-                    _logger.LogDebug(
-                        "Disk temperature mapping. HardwareName={HardwareName}, MatchedDiskNumber={DiskNumber}, SizeBytes={SizeBytes}, Temperature={Temperature}, Volumes={Volumes}",
-                        group.Key,
-                        topologyEntry?.DiskNumber,
-                        topologyEntry?.SizeBytes,
-                        driveTemperature,
-                        topologyEntry is null ? "<none>" : string.Join(", ", topologyEntry.VolumeNames));
-
-                    return new DiskDriveMetrics
-                    {
-                        Name = group.Key,
-                        DiskNumber = topologyEntry?.DiskNumber,
-                        SizeBytes = topologyEntry?.SizeBytes,
-                        TemperatureC = driveTemperature,
-                        TemperatureSource = driveTemperature.HasValue
-                            ? candidates.FirstOrDefault(item => item.Value == driveTemperature)?.Source
-                            : null
-                    };
-                })
-                .OrderBy(drive => drive.Name, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
-            var diskTemperature = diskTemperatureCandidates
-                .Select(item => item.Value!.Value)
-                .DefaultIfEmpty()
-                .Max() is var maxTemperature && maxTemperature > 0
-                    ? maxTemperature
-                    : (double?)null;
-
-            var diskTemperatureSource = diskTemperature.HasValue
-                ? diskTemperatureCandidates.FirstOrDefault(item => item.Value == diskTemperature)?.Source
-                : null;
-
+            var (diskDrives, diskTemperature, diskTemperatureSource) = ReadDiskMetrics(sensorCache);
             var uptimeSeconds = Environment.TickCount64 / 1000;
             var sampleTime = DateTimeOffset.UtcNow;
 
@@ -194,7 +88,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
                             !diskTemperature.HasValue,
                 Cpu = new CpuMetrics
                 {
-                    Name = cpuHardware?.Name,
+                    Name = sensorCache.CpuHardwareName,
                     UsagePercent = cpuUsage,
                     TemperatureC = cpuTemperature,
                     TemperatureSource = cpuTemperatureSource,
@@ -205,7 +99,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
                 },
                 Memory = new MemoryMetrics
                 {
-                    Name = totalMemoryHardware?.Name,
+                    Name = sensorCache.TotalMemoryHardwareName,
                     TotalMb = memoryUsed.HasValue && memoryAvailable.HasValue
                         ? memoryUsed.Value + memoryAvailable.Value
                         : null,
@@ -229,6 +123,96 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
             return Task.FromResult(snapshot);
         }
+    }
+
+    private SensorCache GetOrBuildSensorCacheCore()
+    {
+        if (_sensorCache is not null)
+        {
+            return _sensorCache;
+        }
+
+        var builder = new SensorCacheBuilder();
+        foreach (var hardware in _computer.Hardware)
+        {
+            builder.Visit(hardware);
+        }
+
+        _sensorCache = builder.Build(this);
+        return _sensorCache;
+    }
+
+    private static (double? Value, string? Source) ReadPreferredCpuTemperature(SensorCache sensorCache)
+    {
+        var preferred = ReadSensor(sensorCache.CpuPackageTemperatureSensor, sensorCache.CpuPackageTemperatureSource);
+        if (preferred.Value.HasValue)
+        {
+            return preferred;
+        }
+
+        return ReadSensor(sensorCache.CpuCoreMaxTemperatureSensor, sensorCache.CpuCoreMaxTemperatureSource);
+    }
+
+    private static double? ReadSensorValue(ISensor? sensor)
+    {
+        return sensor is null ? null : Normalize(sensor.Value);
+    }
+
+    private static (double? Value, string? Source) ReadSensor(ISensor? sensor, string? source)
+    {
+        var value = ReadSensorValue(sensor);
+        return value.HasValue ? (value.Value, source) : (null, null);
+    }
+
+    private static (DiskDriveMetrics[] Drives, double? Temperature, string? TemperatureSource) ReadDiskMetrics(SensorCache sensorCache)
+    {
+        if (sensorCache.StorageTemperatureGroups.Count == 0)
+        {
+            return (Array.Empty<DiskDriveMetrics>(), null, null);
+        }
+
+        var diskDrives = new DiskDriveMetrics[sensorCache.StorageTemperatureGroups.Count];
+        double? diskTemperature = null;
+        string? diskTemperatureSource = null;
+
+        for (var index = 0; index < sensorCache.StorageTemperatureGroups.Count; index++)
+        {
+            var group = sensorCache.StorageTemperatureGroups[index];
+            double? driveTemperature = null;
+            string? driveTemperatureSource = null;
+
+            foreach (var sensor in group.Sensors)
+            {
+                var value = Normalize(sensor.Value);
+                if (!value.HasValue)
+                {
+                    continue;
+                }
+
+                if (!driveTemperature.HasValue || value.Value > driveTemperature.Value)
+                {
+                    driveTemperature = value.Value;
+                    driveTemperatureSource = $"{group.HardwareName}/{sensor.Name}";
+                }
+            }
+
+            if (driveTemperature.HasValue && (!diskTemperature.HasValue || driveTemperature.Value > diskTemperature.Value))
+            {
+                diskTemperature = driveTemperature.Value;
+                diskTemperatureSource = driveTemperatureSource;
+            }
+
+            diskDrives[index] = new DiskDriveMetrics
+            {
+                Name = group.HardwareName,
+                DiskNumber = group.TopologyEntry?.DiskNumber,
+                SizeBytes = group.TopologyEntry?.SizeBytes,
+                TemperatureC = driveTemperature,
+                TemperatureSource = driveTemperatureSource
+            };
+        }
+
+        return (diskDrives, diskTemperature, diskTemperatureSource);
     }
 
     public IReadOnlyDictionary<uint, long?> GetCurrentUsedBytesByDiskNumber(IEnumerable<uint> diskNumbers)
@@ -348,6 +332,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         try
         {
             _computer.Open();
+            _sensorCache = null;
             _isOpen = true;
             _logger.LogInformation("LibreHardwareMonitor initialized with CPU/Memory/Storage sensors enabled.");
         }
@@ -463,7 +448,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
             // ---------- Frequency ----------
             if (sensor.SensorType == SensorType.Frequency)
             {
-                // ”≈œ» Total / CPU
+                // ‰ºòÂÖà‰ΩøÁî® Total / CPU
                 if (freqTotal == null &&
                     (name.Contains("Total", StringComparison.OrdinalIgnoreCase) ||
                      name.Contains("CPU", StringComparison.OrdinalIgnoreCase)))
@@ -488,14 +473,14 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
                     continue;
                 }
 
-                // ≈≈≥˝ Bus
+                // ÊéíÈô§ Bus
                 if (name.Contains("Bus", StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 clockSum += value.Value;
                 clockCount++;
 
-                // Core ”≈œ»
+                // Core È¢ëÁéá
                 if (name.Contains("Core", StringComparison.OrdinalIgnoreCase))
                 {
                     coreClockSum += value.Value;
@@ -782,7 +767,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
         return pathNames.Length > 0
             ? string.Join(" + ", pathNames)
-            : $"¥≈≈Ã {entry.DiskNumber}";
+            : $"Á£ÅÁõò {entry.DiskNumber}";
     }
 
     private DiskTopologyEntry? ResolveDiskTopologyEntry(string hardwareName)
@@ -1082,6 +1067,209 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         IReadOnlyList<DiskSpaceInfo> DiskSpaces);
 
     private sealed record DiskTopologyEntry(string NormalizedName, uint DiskNumber, long SizeBytes, IReadOnlyList<string> VolumeNames);
+
+    private sealed class SensorCache(
+        string? cpuHardwareName,
+        string? totalMemoryHardwareName,
+        IReadOnlyList<ISensor> cpuSensors,
+        ISensor? cpuUsageSensor,
+        ISensor? cpuPackageTemperatureSensor,
+        string? cpuPackageTemperatureSource,
+        ISensor? cpuCoreMaxTemperatureSensor,
+        string? cpuCoreMaxTemperatureSource,
+        ISensor? memoryUsedSensor,
+        ISensor? memoryAvailableSensor,
+        ISensor? memoryUsageSensor,
+        IReadOnlyList<StorageTemperatureGroup> storageTemperatureGroups)
+    {
+        public string? CpuHardwareName { get; } = cpuHardwareName;
+        public string? TotalMemoryHardwareName { get; } = totalMemoryHardwareName;
+        public IReadOnlyList<ISensor> CpuSensors { get; } = cpuSensors;
+        public ISensor? CpuUsageSensor { get; } = cpuUsageSensor;
+        public ISensor? CpuPackageTemperatureSensor { get; } = cpuPackageTemperatureSensor;
+        public string? CpuPackageTemperatureSource { get; } = cpuPackageTemperatureSource;
+        public ISensor? CpuCoreMaxTemperatureSensor { get; } = cpuCoreMaxTemperatureSensor;
+        public string? CpuCoreMaxTemperatureSource { get; } = cpuCoreMaxTemperatureSource;
+        public ISensor? MemoryUsedSensor { get; } = memoryUsedSensor;
+        public ISensor? MemoryAvailableSensor { get; } = memoryAvailableSensor;
+        public ISensor? MemoryUsageSensor { get; } = memoryUsageSensor;
+        public IReadOnlyList<StorageTemperatureGroup> StorageTemperatureGroups { get; } = storageTemperatureGroups;
+    }
+
+    private sealed class StorageTemperatureGroup(string hardwareName, DiskTopologyEntry? topologyEntry, IReadOnlyList<ISensor> sensors)
+    {
+        public string HardwareName { get; } = hardwareName;
+        public DiskTopologyEntry? TopologyEntry { get; } = topologyEntry;
+        public IReadOnlyList<ISensor> Sensors { get; } = sensors;
+    }
+
+    private sealed class SensorCacheBuilder
+    {
+        private readonly List<ISensor> _cpuSensors = [];
+        private readonly Dictionary<string, List<ISensor>> _storageTemperatureSensors = new(StringComparer.OrdinalIgnoreCase);
+
+        public string? CpuHardwareName { get; private set; }
+        public string? TotalMemoryHardwareName { get; private set; }
+        public ISensor? CpuUsageSensor { get; private set; }
+        public ISensor? CpuPackageTemperatureSensor { get; private set; }
+        public string? CpuPackageTemperatureSource { get; private set; }
+        public ISensor? CpuCoreMaxTemperatureSensor { get; private set; }
+        public string? CpuCoreMaxTemperatureSource { get; private set; }
+        public ISensor? MemoryUsedSensor { get; private set; }
+        public ISensor? MemoryAvailableSensor { get; private set; }
+        public ISensor? MemoryUsageSensor { get; private set; }
+
+        public void Visit(IHardware hardware)
+        {
+            VisitCore(hardware);
+        }
+
+        public SensorCache Build(LibreHardwareCollector owner)
+        {
+            var storageTemperatureGroups = _storageTemperatureSensors
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair =>
+                {
+                    var topologyEntry = owner.ResolveDiskTopologyEntry(pair.Key);
+                    if (owner._logger.IsEnabled(LogLevel.Debug))
+                    {
+                        owner._logger.LogDebug(
+                            "Disk temperature mapping cached. HardwareName={HardwareName}, MatchedDiskNumber={DiskNumber}, SizeBytes={SizeBytes}, Volumes={Volumes}",
+                            pair.Key,
+                            topologyEntry?.DiskNumber,
+                            topologyEntry?.SizeBytes,
+                            topologyEntry is null ? "<none>" : string.Join(", ", topologyEntry.VolumeNames));
+                    }
+
+                    return new StorageTemperatureGroup(pair.Key, topologyEntry, pair.Value.ToArray());
+                })
+                .ToArray();
+
+            return new SensorCache(
+                CpuHardwareName,
+                TotalMemoryHardwareName,
+                _cpuSensors.ToArray(),
+                CpuUsageSensor,
+                CpuPackageTemperatureSensor,
+                CpuPackageTemperatureSource,
+                CpuCoreMaxTemperatureSensor,
+                CpuCoreMaxTemperatureSource,
+                MemoryUsedSensor,
+                MemoryAvailableSensor,
+                MemoryUsageSensor,
+                storageTemperatureGroups);
+        }
+
+        private void VisitCore(IHardware hardware)
+        {
+            switch (hardware.HardwareType)
+            {
+                case HardwareType.Cpu:
+                    CpuHardwareName ??= hardware.Name;
+                    CollectCpuSensors(hardware);
+                    break;
+                case HardwareType.Memory:
+                    CollectMemorySensors(hardware);
+                    break;
+                case HardwareType.Storage:
+                    CollectStorageSensors(hardware);
+                    break;
+            }
+
+            foreach (var subHardware in hardware.SubHardware)
+            {
+                VisitCore(subHardware);
+            }
+        }
+
+        private void CollectCpuSensors(IHardware hardware)
+        {
+            foreach (var sensor in hardware.Sensors)
+            {
+                _cpuSensors.Add(sensor);
+
+                if (CpuUsageSensor is null &&
+                    sensor.SensorType == SensorType.Load &&
+                    sensor.Name.Contains("CPU Total", StringComparison.OrdinalIgnoreCase))
+                {
+                    CpuUsageSensor = sensor;
+                }
+
+                if (CpuPackageTemperatureSensor is null &&
+                    sensor.SensorType == SensorType.Temperature &&
+                    sensor.Name.Equals("CPU Package", StringComparison.OrdinalIgnoreCase))
+                {
+                    CpuPackageTemperatureSensor = sensor;
+                    CpuPackageTemperatureSource = sensor.Name;
+                }
+
+                if (CpuCoreMaxTemperatureSensor is null &&
+                    sensor.SensorType == SensorType.Temperature &&
+                    sensor.Name.Equals("Core Max", StringComparison.OrdinalIgnoreCase))
+                {
+                    CpuCoreMaxTemperatureSensor = sensor;
+                    CpuCoreMaxTemperatureSource = sensor.Name;
+                }
+            }
+        }
+
+        private void CollectMemorySensors(IHardware hardware)
+        {
+            var isTotalMemoryHardware = hardware.Name.Equals("Total Memory", StringComparison.OrdinalIgnoreCase);
+            if (isTotalMemoryHardware)
+            {
+                TotalMemoryHardwareName ??= hardware.Name;
+            }
+
+            foreach (var sensor in hardware.Sensors)
+            {
+                if (!isTotalMemoryHardware)
+                {
+                    continue;
+                }
+
+                if (MemoryUsedSensor is null &&
+                    sensor.SensorType == SensorType.Data &&
+                    sensor.Name.Equals("Memory Used", StringComparison.OrdinalIgnoreCase))
+                {
+                    MemoryUsedSensor = sensor;
+                }
+
+                if (MemoryAvailableSensor is null &&
+                    sensor.SensorType == SensorType.Data &&
+                    sensor.Name.Equals("Memory Available", StringComparison.OrdinalIgnoreCase))
+                {
+                    MemoryAvailableSensor = sensor;
+                }
+
+                if (MemoryUsageSensor is null &&
+                    sensor.SensorType == SensorType.Load &&
+                    sensor.Name.Equals("Memory", StringComparison.OrdinalIgnoreCase))
+                {
+                    MemoryUsageSensor = sensor;
+                }
+            }
+        }
+
+        private void CollectStorageSensors(IHardware hardware)
+        {
+            foreach (var sensor in hardware.Sensors)
+            {
+                if (sensor.SensorType != SensorType.Temperature)
+                {
+                    continue;
+                }
+
+                if (!_storageTemperatureSensors.TryGetValue(hardware.Name, out var sensors))
+                {
+                    sensors = [];
+                    _storageTemperatureSensors[hardware.Name] = sensors;
+                }
+
+                sensors.Add(sensor);
+            }
+        }
+    }
 }
 
 
