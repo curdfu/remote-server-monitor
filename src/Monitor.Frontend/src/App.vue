@@ -34,7 +34,7 @@
               <AppIcon name="status" :size="12" />
               <span>实时通道</span>
             </span>
-            <small>{{ connectionStatusText }}</small>
+            <small :style="{ marginLeft: '18px' }">{{ connectionStatusText }}</small>
           </div>
 
           <label class="sidebar-mini-card theme-field">
