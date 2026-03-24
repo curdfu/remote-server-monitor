@@ -1569,6 +1569,22 @@ button:disabled {
   font-size: 11px;
 }
 
+.network-mobile-toggle {
+  width: 100%;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.network-mobile-toggle-active {
+  border-color: var(--accent);
+  background: var(--button-ghost-hover-bg);
+}
+
+.network-mobile-toggle-icon {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
 .preset-row {
   flex: 1;
 }
@@ -2374,6 +2390,18 @@ button:disabled {
 
   .network-page .filters-card {
     gap: 10px;
+  }
+
+  .network-page .preset-toolbar {
+    order: 1;
+  }
+
+  .network-page .network-mobile-toggle {
+    order: 2;
+  }
+
+  .network-page .filters-toolbar {
+    order: 3;
   }
 
   .filters-toolbar,

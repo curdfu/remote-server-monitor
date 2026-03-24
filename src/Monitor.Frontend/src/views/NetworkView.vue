@@ -17,7 +17,7 @@
 
     <!-- 查询条件区：按工具栏分组展示时间、范围、方向和 TopN -->
     <article class="card filters-card filters-card-elevated">
-      <div class="filters-toolbar">
+      <div id="network-filters-toolbar" v-show="showAdvancedFilters" class="filters-toolbar">
         <section class="filter-group filter-group-time">
           <div class="filter-group-title">
             <strong>时间</strong>
@@ -101,6 +101,19 @@
           </button>
         </div>
       </div>
+
+      <button
+        v-if="isMobileViewport"
+        type="button"
+        class="ghost-button network-mobile-toggle"
+        :class="{ 'network-mobile-toggle-active': isMobileFiltersExpanded }"
+        :aria-expanded="isMobileFiltersExpanded"
+        aria-controls="network-filters-toolbar"
+        @click="toggleMobileFilters"
+      >
+        <span>{{ isMobileFiltersExpanded ? '收起更多筛选' : '展开更多筛选' }}</span>
+        <span class="network-mobile-toggle-icon" aria-hidden="true">{{ isMobileFiltersExpanded ? '▴' : '▾' }}</span>
+      </button>
     </article>
 
     <div v-if="errorMessage" class="card state-card error-state">
@@ -300,7 +313,10 @@ const overviewSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const totalsSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const isLoading = ref(false);
 const errorMessage = ref('');
+const isMobileViewport = ref(false);
+const isMobileFiltersExpanded = ref(false);
 let autoRefreshTimer: number | null = null;
+let mobileViewportQuery: MediaQueryList | null = null;
 
 // 查询条件：分别驱动筛选区、占比面板和应用排行
 const filters = reactive({
@@ -369,6 +385,7 @@ const rankingDescription = computed(() => {
 });
 
 const activePresetHours = computed(() => getMatchedPresetHours(filters.from, filters.to));
+const showAdvancedFilters = computed(() => !isMobileViewport.value || isMobileFiltersExpanded.value);
 
 const rangeParts = computed(() => formatRangeParts());
 
@@ -388,6 +405,12 @@ const dominantScopeHint = computed(() => {
 });
 
 onMounted(() => {
+  if (typeof window !== 'undefined' && 'matchMedia' in window) {
+    mobileViewportQuery = window.matchMedia('(max-width: 720px)');
+    syncMobileViewportState(mobileViewportQuery.matches);
+    mobileViewportQuery.addEventListener('change', handleMobileViewportChange);
+  }
+
   void loadApps();
 });
 
@@ -395,6 +418,11 @@ onUnmounted(() => {
   if (autoRefreshTimer !== null) {
     window.clearTimeout(autoRefreshTimer);
     autoRefreshTimer = null;
+  }
+
+  if (mobileViewportQuery) {
+    mobileViewportQuery.removeEventListener('change', handleMobileViewportChange);
+    mobileViewportQuery = null;
   }
 });
 
@@ -471,6 +499,22 @@ function refreshApps() {
   }
 
   void loadApps();
+}
+
+function toggleMobileFilters() {
+  if (!isMobileViewport.value) {
+    return;
+  }
+
+  isMobileFiltersExpanded.value = !isMobileFiltersExpanded.value;
+}
+
+function handleMobileViewportChange(event: MediaQueryListEvent) {
+  syncMobileViewportState(event.matches);
+}
+
+function syncMobileViewportState(matches: boolean) {
+  isMobileViewport.value = matches;
 }
 
 function applyPreset(hours: number) {
