@@ -15,51 +15,93 @@
       </template>
     </PageHeader>
 
-    <!-- 查询条件区：控制时间范围、排行数量、统计范围和统计方向 -->
+    <!-- 查询条件区：按工具栏分组展示时间、范围、方向和 TopN -->
     <article class="card filters-card filters-card-elevated">
-      <label>
-        开始时间
-        <input v-model="filters.from" type="datetime-local" />
-      </label>
-      <label>
-        结束时间
-        <input v-model="filters.to" type="datetime-local" />
-      </label>
-      <label>
-        排行数量
-        <input v-model.number="filters.topN" type="number" min="1" max="100" />
-      </label>
-      <label>
-        统计范围
-        <select v-model="filters.scope">
-          <option value="all">全部</option>
-          <option value="wan">WAN</option>
-          <option value="lan">LAN</option>
-          <option value="loopback">Loopback</option>
-        </select>
-      </label>
-      <label>
-        统计方向
-        <select v-model="filters.direction">
-          <option value="total">总流量</option>
-          <option value="upload">上传</option>
-          <option value="download">下载</option>
-        </select>
-      </label>
-    </article>
+      <div class="filters-toolbar">
+        <section class="filter-group filter-group-time">
+          <div class="filter-group-title">
+            <strong>时间</strong>
+            <small>选择统计区间</small>
+          </div>
+          <div class="filter-group-fields filter-group-fields-time">
+            <label class="filter-field">
+              <span>开始时间</span>
+              <input v-model="filters.from" type="datetime-local" />
+            </label>
+            <label class="filter-field">
+              <span>结束时间</span>
+              <input v-model="filters.to" type="datetime-local" />
+            </label>
+          </div>
+        </section>
 
-    <!-- 快捷时间区：一键切换常用时间范围 -->
-    <div class="preset-row">
-      <button
-        v-for="preset in presetOptions"
-        :key="preset.hours"
-        class="chip-button"
-        :class="{ 'chip-button-active': activePresetHours === preset.hours }"
-        @click="applyPreset(preset.hours)"
-      >
-        {{ preset.label }}
-      </button>
-    </div>
+        <section class="filter-group">
+          <div class="filter-group-title">
+            <strong>范围</strong>
+            <small>选择网络范围</small>
+          </div>
+          <div class="filter-group-fields">
+            <label class="filter-field">
+              <span>统计范围</span>
+              <select v-model="filters.scope">
+                <option value="all">全部</option>
+                <option value="wan">WAN</option>
+                <option value="lan">LAN</option>
+                <option value="loopback">Loopback</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="filter-group">
+          <div class="filter-group-title">
+            <strong>方向</strong>
+            <small>选择统计方向</small>
+          </div>
+          <div class="filter-group-fields">
+            <label class="filter-field">
+              <span>统计方向</span>
+              <select v-model="filters.direction">
+                <option value="total">总流量</option>
+                <option value="upload">上传</option>
+                <option value="download">下载</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="filter-group filter-group-topn">
+          <div class="filter-group-title">
+            <strong>TopN</strong>
+            <small>控制排行数量</small>
+          </div>
+          <div class="filter-group-fields">
+            <label class="filter-field">
+              <span>排行数量</span>
+              <input v-model.number="filters.topN" type="number" min="1" max="100" />
+            </label>
+          </div>
+        </section>
+      </div>
+
+      <div class="preset-toolbar">
+        <div class="preset-toolbar-title">
+          <strong>常用预设</strong>
+          <small>快速切换常见时间范围</small>
+        </div>
+        <div class="preset-row">
+          <button
+            v-for="preset in presetOptions"
+            :key="preset.hours"
+            class="chip-button"
+            :class="{ 'chip-button-active': activePresetHours === preset.hours }"
+            @click="applyPreset(preset.hours)"
+          >
+            {{ preset.label }}
+          </button>
+        </div>
+      </div>
+    </article>
 
     <div v-if="errorMessage" class="card state-card error-state">
       {{ errorMessage }}
@@ -198,13 +240,33 @@
           <span class="section-tag">{{ rankingDescription }}</span>
         </div>
         <ol class="ranking-list">
-          <li v-for="(item, index) in topRanking" :key="item.appKey">
+          <li
+            v-for="(item, index) in topRanking"
+            :key="item.appKey"
+            class="ranking-item"
+            :class="index < 3 ? [`ranking-item-top`, `ranking-item-top-${index + 1}`] : []"
+          >
             <div class="ranking-main">
               <span class="ranking-index">{{ index + 1 }}</span>
               <strong>{{ item.displayName || item.processName }}</strong>
               <small class="muted">{{ item.processName }}</small>
             </div>
-            <span class="ranking-value">{{ formatBytes(getRankingValue(item)) }}</span>
+            <div class="ranking-side">
+              <span class="ranking-value">{{ formatBytes(getRankingValue(item)) }}</span>
+              <div class="ranking-breakdown">
+                <span class="ranking-flow">
+                  <AppIcon name="upload" :size="12" />
+                  {{ formatBytes(getScopedUploadBytes(item)) }}
+                </span>
+                <span class="ranking-flow">
+                  <AppIcon name="download" :size="12" />
+                  {{ formatBytes(getScopedDownloadBytes(item)) }}
+                </span>
+              </div>
+              <div class="ranking-progress" aria-hidden="true">
+                <div class="ranking-progress-bar" :style="{ width: `${getRankingPercent(item)}%` }"></div>
+              </div>
+            </div>
           </li>
           <li v-if="!topRanking.length" class="muted">当前还没有可展示的排行数据。</li>
         </ol>
@@ -294,6 +356,9 @@ const loopbackTotalBytes = overviewLoopbackTotalBytes;
 const totalScopeBytes = computed(() => wanTotalBytes.value + lanTotalBytes.value + loopbackTotalBytes.value);
 
 const topRanking = computed(() => items.value.slice(0, filters.topN));
+const rankingMaxValue = computed(() =>
+  topRanking.value.reduce((max, item) => Math.max(max, getRankingValue(item)), 0)
+);
 
 const rankingDescription = computed(() => {
   const scopeLabel = filters.scope === 'wan' ? 'WAN' : filters.scope === 'lan' ? 'LAN' : filters.scope === 'loopback' ? 'Loopback' : '全部';
@@ -478,5 +543,32 @@ function getRankingValue(item: AppTrafficSummaryDto) {
   if (filters.direction === 'upload') return item.totalUploadBytes;
   if (filters.direction === 'download') return item.totalDownloadBytes;
   return item.totalUploadBytes + item.totalDownloadBytes;
+}
+
+function getScopedUploadBytes(item: AppTrafficSummaryDto) {
+  if (filters.scope === 'wan') return item.wanUploadBytes;
+  if (filters.scope === 'lan') return item.lanUploadBytes;
+  if (filters.scope === 'loopback') return item.loopbackUploadBytes;
+  return item.totalUploadBytes;
+}
+
+function getScopedDownloadBytes(item: AppTrafficSummaryDto) {
+  if (filters.scope === 'wan') return item.wanDownloadBytes;
+  if (filters.scope === 'lan') return item.lanDownloadBytes;
+  if (filters.scope === 'loopback') return item.loopbackDownloadBytes;
+  return item.totalDownloadBytes;
+}
+
+function getRankingPercent(item: AppTrafficSummaryDto) {
+  const value = getRankingValue(item);
+  if (rankingMaxValue.value <= 0) {
+    return 0;
+  }
+
+  if (value <= 0) {
+    return 0;
+  }
+
+  return Math.max(6, (value / rankingMaxValue.value) * 100);
 }
 </script>
