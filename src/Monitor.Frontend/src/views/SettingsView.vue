@@ -3,18 +3,18 @@
     <PageHeader
       iconName="settings"
       kicker="设置"
-      title="系统设置"
-      description="这里调整访问端口、采样间隔、默认统计粒度和历史保留时间。"
+      title="设置"
+      description="调整端口、采样间隔、统计粒度和历史保留时间。"
     >
       <template #actions>
         <div class="actions-row settings-actions">
           <button class="chip-button settings-action-button" :disabled="isLoading || isSaving" @click="loadSettings">
             <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
-            重新加载
+            刷新
           </button>
           <button class="ghost-button settings-action-button" :disabled="!isDirty || isSaving" @click="save">
             <span class="button-inline-icon"><AppIcon name="settings" :size="14" /></span>
-            {{ isSaving ? '保存中...' : '保存设置' }}
+            {{ isSaving ? '保存中...' : '保存' }}
           </button>
         </div>
       </template>
@@ -164,11 +164,11 @@
         <div class="settings-side-actions">
           <button class="chip-button" :disabled="!isDirty || isSaving" @click="resetForm">
             <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
-            撤销修改
+            重置
           </button>
           <button class="ghost-button" :disabled="isSaving || !canSave || !isDirty" @click="save">
             <span class="button-inline-icon"><AppIcon name="settings" :size="14" /></span>
-            提交保存
+            {{ isSaving ? '保存中...' : '保存' }}
           </button>
         </div>
       </aside>

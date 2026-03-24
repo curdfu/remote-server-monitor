@@ -4,13 +4,13 @@
     <PageHeader
       iconName="network"
       kicker="网络"
-      title="网络流量"
-      description="这里主要看一段时间内的累计流量、占比和应用排行。"
+      title="网络"
+      description="查看一段时间内的流量汇总、占比和应用排行。"
     >
       <template #actions>
         <button class="ghost-button" :disabled="isLoading" @click="refreshApps">
           <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
-          {{ isLoading ? '查询中...' : '重新查询' }}
+          {{ isLoading ? '刷新中...' : '刷新' }}
         </button>
       </template>
     </PageHeader>

@@ -3,8 +3,8 @@
     <PageHeader
       iconName="dashboard"
       kicker="首页"
-      title="系统概览"
-      description="实时展示 CPU、内存、磁盘等关键硬件状态。"
+      title="概览"
+      description="查看 CPU、内存、磁盘等关键硬件状态。"
     >
       <template #actions>
         <button class="ghost-button" :disabled="isLoading" @click="loadOverview">
