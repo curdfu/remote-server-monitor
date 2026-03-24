@@ -1,5 +1,5 @@
+﻿using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Monitor.Contracts.Options;
 using Monitor.Network.Abstractions;
 using Monitor.Network.Enums;
@@ -7,81 +7,99 @@ using Monitor.Network.Models;
 
 namespace Monitor.Network.Services;
 
-public sealed class TrafficAggregator : INetworkAggregator
+public sealed class TrafficAggregator : INetworkAggregator, IDisposable
 {
     private static readonly TimeSpan MinimumRealtimeRetention = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan RealtimeSlotDuration = TimeSpan.FromMilliseconds(250);
+
     private readonly object _syncRoot = new();
-    private readonly Queue<RealtimeTrafficEvent> _recentEvents = new();
     private readonly Dictionary<BucketKey, BucketAccumulator> _activeBuckets = new();
     private readonly Queue<TrafficBucket> _pendingBuckets = new();
-    private NetworkRealtimeSnapshot? _latestRealtimeSnapshot;
-    private IReadOnlyList<AppTrafficUsage> _latestTopApps = Array.Empty<AppTrafficUsage>();
-
     private readonly INetworkCollector _networkCollector;
     private readonly IAppRegistry _appRegistry;
     private readonly IAddressClassifier _addressClassifier;
-    private readonly IOptionsMonitor<MonitorSettings> _settingsMonitor;
     private readonly ILogger<TrafficAggregator> _logger;
+    private readonly IDisposable _settingsRegistration;
+    private readonly Channel<QueuedTraceEvent> _eventChannel;
+    private readonly Task _eventProcessingTask;
+
+    private RealtimeSlot[] _realtimeSlots = Array.Empty<RealtimeSlot>();
+    private NetworkRealtimeSnapshot? _latestRealtimeSnapshot;
+    private IReadOnlyList<AppTrafficUsage> _latestTopApps = Array.Empty<AppTrafficUsage>();
+    private AggregationSettingsSnapshot _settingsSnapshot;
+    private long _enqueuedSequence;
+    private long _processedSequence;
+    private bool _disposed;
 
     public TrafficAggregator(
         INetworkCollector networkCollector,
         IAppRegistry appRegistry,
         IAddressClassifier addressClassifier,
-        IOptionsMonitor<MonitorSettings> settingsMonitor,
+        IMonitorSettingsProvider settingsMonitor,
         ILogger<TrafficAggregator> logger)
     {
         _networkCollector = networkCollector;
         _appRegistry = appRegistry;
         _addressClassifier = addressClassifier;
-        _settingsMonitor = settingsMonitor;
         _logger = logger;
+        _settingsSnapshot = AggregationSettingsSnapshot.From(settingsMonitor.Current);
+        _settingsRegistration = settingsMonitor.RegisterChangeCallback(OnSettingsChanged);
+        _eventChannel = Channel.CreateUnbounded<QueuedTraceEvent>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            AllowSynchronousContinuations = false
+        });
+        _eventProcessingTask = Task.Run(ProcessEventsAsync);
 
         _networkCollector.EventReceived += OnEventReceived;
     }
 
-    public Task<NetworkRealtimeSnapshot> GetRealtimeSnapshotAsync(CancellationToken cancellationToken = default)
+    public async Task<NetworkRealtimeSnapshot> GetRealtimeSnapshotAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        await WaitForEventProcessingAsync(cancellationToken);
 
         NetworkRealtimeSnapshot snapshot;
         var now = DateTimeOffset.UtcNow;
         lock (_syncRoot)
         {
             RotateBucketsCore(now);
-            CleanupExpiredRealtimeEventsCore(now);
+            EnsureRealtimeSlotsCapacityCore();
             var view = BuildRealtimeViewCore(now);
             snapshot = UpdateLatestRealtimeCacheCore(now, view);
         }
 
-        return Task.FromResult(snapshot);
+        return snapshot;
     }
 
-    public Task<IReadOnlyList<AppTrafficUsage>> GetTopAppsAsync(int topN, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<AppTrafficUsage>> GetTopAppsAsync(int topN, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         if (topN <= 0)
         {
-            return Task.FromResult<IReadOnlyList<AppTrafficUsage>>(Array.Empty<AppTrafficUsage>());
+            return Array.Empty<AppTrafficUsage>();
         }
+
+        await WaitForEventProcessingAsync(cancellationToken);
 
         RealtimeView view;
         var now = DateTimeOffset.UtcNow;
         lock (_syncRoot)
         {
             RotateBucketsCore(now);
-            CleanupExpiredRealtimeEventsCore(now);
+            EnsureRealtimeSlotsCapacityCore();
             view = BuildRealtimeViewCore(now);
         }
 
-        var apps = view.AppUsages
-            .OrderByDescending(static x => x.UploadBytesPerSecond + x.DownloadBytesPerSecond)
-            .ThenByDescending(static x => x.DownloadBytesPerSecond)
-            .ThenBy(static x => x.ProcessName, StringComparer.OrdinalIgnoreCase)
-            .Take(topN)
-            .ToArray();
+        return SortAndTakeTopApps(view.AppUsages, topN);
+    }
 
-        return Task.FromResult<IReadOnlyList<AppTrafficUsage>>(apps);
+    public async Task FlushAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await WaitForEventProcessingAsync(cancellationToken);
     }
 
     public NetworkRealtimeSnapshot? GetLatestRealtimeSnapshot()
@@ -133,49 +151,149 @@ public sealed class TrafficAggregator : INetworkAggregator
         }
     }
 
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _networkCollector.EventReceived -= OnEventReceived;
+        _settingsRegistration.Dispose();
+        _eventChannel.Writer.TryComplete();
+
+        try
+        {
+            _eventProcessingTask.Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception exception)
+        {
+            _logger.LogDebug(exception, "Failed while waiting for network aggregation event processor to stop.");
+        }
+    }
+
+    private void OnSettingsChanged(MonitorSettings settings)
+    {
+        Volatile.Write(ref _settingsSnapshot, AggregationSettingsSnapshot.From(settings));
+    }
+
     private void OnEventReceived(NetworkTraceEvent traceEvent)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var sequence = Interlocked.Increment(ref _enqueuedSequence);
+        if (!_eventChannel.Writer.TryWrite(new QueuedTraceEvent(sequence, traceEvent)))
+        {
+            Interlocked.Decrement(ref _enqueuedSequence);
+            _logger.LogDebug("Dropped network trace event because the aggregation queue is no longer accepting items.");
+        }
+    }
+
+    private async Task ProcessEventsAsync()
     {
         try
         {
-            var timestamp = traceEvent.Timestamp == default ? DateTimeOffset.UtcNow : traceEvent.Timestamp;
-            var appEntry = _appRegistry.GetOrAdd(traceEvent.ProcessId);
-            var scopeType = _addressClassifier.Classify(traceEvent.RemoteAddress, traceEvent.LocalAddress);
-
-            var realtimeEvent = new RealtimeTrafficEvent
+            await foreach (var queuedTraceEvent in _eventChannel.Reader.ReadAllAsync())
             {
-                Timestamp = timestamp,
-                AppKey = appEntry.AppKey,
-                ProcessName = appEntry.ProcessName,
-                DisplayName = appEntry.DisplayName,
-                Direction = traceEvent.Direction,
-                ScopeType = scopeType,
-                Bytes = traceEvent.Bytes
-            };
-
-            lock (_syncRoot)
-            {
-                RotateBucketsCore(timestamp);
-                _recentEvents.Enqueue(realtimeEvent);
-                AddToBucketCore(realtimeEvent);
-                CleanupExpiredRealtimeEventsCore(timestamp);
+                try
+                {
+                    ProcessTraceEvent(queuedTraceEvent.TraceEvent);
+                }
+                catch (Exception exception)
+                {
+                    _logger.LogDebug(exception, "Failed to aggregate network trace event.");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _processedSequence, queuedTraceEvent.Sequence);
+                }
             }
         }
         catch (Exception exception)
         {
-            _logger.LogDebug(exception, "Failed to aggregate network trace event.");
+            _logger.LogDebug(exception, "Network aggregation event processor stopped with exception.");
         }
     }
 
-    private void AddToBucketCore(RealtimeTrafficEvent realtimeEvent)
+    private void ProcessTraceEvent(NetworkTraceEvent traceEvent)
     {
-        var bucketGranularitySeconds = _settingsMonitor.CurrentValue.AggregateIntervalSeconds;
-        var bucketStartTime = AlignToBucketStart(realtimeEvent.Timestamp, bucketGranularitySeconds);
-        var key = new BucketKey(
-            bucketStartTime,
-            bucketGranularitySeconds,
-            realtimeEvent.AppKey,
-            realtimeEvent.Direction,
-            realtimeEvent.ScopeType);
+        var timestamp = traceEvent.Timestamp == default ? DateTimeOffset.UtcNow : traceEvent.Timestamp;
+        var appEntry = _appRegistry.GetOrAdd(traceEvent.ProcessId);
+        var scopeType = _addressClassifier.Classify(traceEvent.RemoteAddress, traceEvent.LocalAddress);
+
+        lock (_syncRoot)
+        {
+            RotateBucketsCore(timestamp);
+            EnsureRealtimeSlotsCapacityCore();
+            AddToRealtimeSlotsCore(timestamp, appEntry, traceEvent.Direction, scopeType, traceEvent.Bytes);
+            AddToBucketCore(timestamp, appEntry.AppKey, traceEvent.Direction, scopeType, traceEvent.Bytes);
+        }
+    }
+
+    private async Task WaitForEventProcessingAsync(CancellationToken cancellationToken)
+    {
+        var targetSequence = Interlocked.Read(ref _enqueuedSequence);
+        await WaitForEventProcessingAsync(targetSequence, cancellationToken);
+    }
+
+    private async Task WaitForEventProcessingAsync(long targetSequence, CancellationToken cancellationToken)
+    {
+        if (targetSequence <= 0)
+        {
+            return;
+        }
+
+        var spinner = new SpinWait();
+        while (Interlocked.Read(ref _processedSequence) < targetSequence)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (spinner.Count < 10)
+            {
+                spinner.SpinOnce();
+                continue;
+            }
+
+            await Task.Delay(1, cancellationToken);
+        }
+    }
+
+    private void AddToRealtimeSlotsCore(
+        DateTimeOffset timestamp,
+        AppRegistryEntry appEntry,
+        TrafficDirection direction,
+        AddressScopeType scopeType,
+        long bytes)
+    {
+        if (_realtimeSlots.Length == 0)
+        {
+            return;
+        }
+
+        var slotIndex = GetRealtimeSlotIndex(timestamp);
+        var slot = _realtimeSlots[(int)(slotIndex % _realtimeSlots.Length)];
+        if (slot.SlotIndex != slotIndex)
+        {
+            slot.Reset(slotIndex);
+        }
+
+        slot.Add(appEntry.AppKey, appEntry.ProcessName, appEntry.DisplayName, direction, scopeType, bytes);
+    }
+
+    private void AddToBucketCore(
+        DateTimeOffset timestamp,
+        string appKey,
+        TrafficDirection direction,
+        AddressScopeType scopeType,
+        long bytes)
+    {
+        var settings = Volatile.Read(ref _settingsSnapshot);
+        var bucketStartTime = AlignToBucketStart(timestamp, settings.AggregateIntervalSeconds);
+        var key = new BucketKey(bucketStartTime, settings.AggregateIntervalSeconds, appKey, direction, scopeType);
 
         if (!_activeBuckets.TryGetValue(key, out var accumulator))
         {
@@ -183,7 +301,7 @@ public sealed class TrafficAggregator : INetworkAggregator
             _activeBuckets[key] = accumulator;
         }
 
-        accumulator.Bytes += realtimeEvent.Bytes;
+        accumulator.Bytes += bytes;
         accumulator.Packets += 1;
     }
 
@@ -194,7 +312,7 @@ public sealed class TrafficAggregator : INetworkAggregator
             return;
         }
 
-        var settings = _settingsMonitor.CurrentValue;
+        var settings = Volatile.Read(ref _settingsSnapshot);
         var currentBucketStart = AlignToBucketStart(referenceTime, settings.AggregateIntervalSeconds);
         var completedKeys = new List<BucketKey>();
 
@@ -217,89 +335,77 @@ public sealed class TrafficAggregator : INetworkAggregator
         }
     }
 
-    private void CleanupExpiredRealtimeEventsCore(DateTimeOffset referenceTime)
-    {
-        var retention = GetRealtimeRetentionWindow();
-        var cutoff = referenceTime - retention;
-
-        while (_recentEvents.Count > 0 && _recentEvents.Peek().Timestamp < cutoff)
-        {
-            _recentEvents.Dequeue();
-        }
-    }
-
     private RealtimeView BuildRealtimeViewCore(DateTimeOffset referenceTime)
     {
-        var intervalSeconds = Math.Max(_settingsMonitor.CurrentValue.NetworkSampleIntervalMs / 1000d, 0.1d);
-        var windowStart = referenceTime.AddSeconds(-intervalSeconds);
+        var settings = Volatile.Read(ref _settingsSnapshot);
+        var intervalSeconds = Math.Max(settings.NetworkSampleIntervalMs / 1000d, 0.1d);
+        if (_realtimeSlots.Length == 0)
+        {
+            return new RealtimeView(0, 0, 0, 0, 0, 0, Array.Empty<AppTrafficUsage>());
+        }
+
+        var currentSlotIndex = GetRealtimeSlotIndex(referenceTime);
+        var windowSlotCount = Math.Max(1, (int)Math.Ceiling(intervalSeconds / RealtimeSlotDuration.TotalSeconds));
+        var minimumSlotIndex = currentSlotIndex - windowSlotCount + 1;
         var appUsageMap = new Dictionary<string, AppUsageAccumulator>(StringComparer.OrdinalIgnoreCase);
 
-        double totalUpload = 0;
-        double totalDownload = 0;
-        double wanUpload = 0;
-        double wanDownload = 0;
-        double lanUpload = 0;
-        double lanDownload = 0;
+        long totalUploadBytes = 0;
+        long totalDownloadBytes = 0;
+        long wanUploadBytes = 0;
+        long wanDownloadBytes = 0;
+        long lanUploadBytes = 0;
+        long lanDownloadBytes = 0;
 
-        foreach (var traceEvent in _recentEvents)
+        foreach (var slot in _realtimeSlots)
         {
-            if (traceEvent.Timestamp < windowStart)
+            if (!slot.IsValid || slot.SlotIndex < minimumSlotIndex || slot.SlotIndex > currentSlotIndex)
             {
                 continue;
             }
 
-            var rate = traceEvent.Bytes / intervalSeconds;
-            if (!appUsageMap.TryGetValue(traceEvent.AppKey, out var appUsage))
-            {
-                appUsage = new AppUsageAccumulator(traceEvent.AppKey, traceEvent.ProcessName, traceEvent.DisplayName);
-                appUsageMap[traceEvent.AppKey] = appUsage;
-            }
+            totalUploadBytes += slot.TotalUploadBytes;
+            totalDownloadBytes += slot.TotalDownloadBytes;
+            wanUploadBytes += slot.WanUploadBytes;
+            wanDownloadBytes += slot.WanDownloadBytes;
+            lanUploadBytes += slot.LanUploadBytes;
+            lanDownloadBytes += slot.LanDownloadBytes;
 
-            if (traceEvent.Direction == TrafficDirection.Outbound)
+            foreach (var pair in slot.AppUsages)
             {
-                totalUpload += rate;
-                appUsage.UploadBytesPerSecond += rate;
+                if (!appUsageMap.TryGetValue(pair.Key, out var accumulator))
+                {
+                    accumulator = new AppUsageAccumulator(pair.Key, pair.Value.ProcessName, pair.Value.DisplayName);
+                    appUsageMap[pair.Key] = accumulator;
+                }
 
-                if (traceEvent.ScopeType == AddressScopeType.Wan)
-                {
-                    wanUpload += rate;
-                    appUsage.WanUploadBytesPerSecond += rate;
-                }
-                else if (traceEvent.ScopeType == AddressScopeType.Lan)
-                {
-                    lanUpload += rate;
-                    appUsage.LanUploadBytesPerSecond += rate;
-                }
-            }
-            else
-            {
-                totalDownload += rate;
-                appUsage.DownloadBytesPerSecond += rate;
-
-                if (traceEvent.ScopeType == AddressScopeType.Wan)
-                {
-                    wanDownload += rate;
-                    appUsage.WanDownloadBytesPerSecond += rate;
-                }
-                else if (traceEvent.ScopeType == AddressScopeType.Lan)
-                {
-                    lanDownload += rate;
-                    appUsage.LanDownloadBytesPerSecond += rate;
-                }
+                accumulator.UploadBytes += pair.Value.UploadBytes;
+                accumulator.DownloadBytes += pair.Value.DownloadBytes;
+                accumulator.WanUploadBytes += pair.Value.WanUploadBytes;
+                accumulator.WanDownloadBytes += pair.Value.WanDownloadBytes;
+                accumulator.LanUploadBytes += pair.Value.LanUploadBytes;
+                accumulator.LanDownloadBytes += pair.Value.LanDownloadBytes;
             }
         }
 
+        var appUsages = new List<AppTrafficUsage>(appUsageMap.Count);
+        foreach (var pair in appUsageMap)
+        {
+            if (pair.Value.UploadBytes <= 0 && pair.Value.DownloadBytes <= 0)
+            {
+                continue;
+            }
+
+            appUsages.Add(pair.Value.ToModel(intervalSeconds));
+        }
+
         return new RealtimeView(
-            totalUpload,
-            totalDownload,
-            wanUpload,
-            wanDownload,
-            lanUpload,
-            lanDownload,
-            appUsageMap.Values
-                .Where(static x => x.UploadBytesPerSecond > 0 || x.DownloadBytesPerSecond > 0)
-                .Select(static x => x.ToModel())
-                .ToArray());
+            totalUploadBytes / intervalSeconds,
+            totalDownloadBytes / intervalSeconds,
+            wanUploadBytes / intervalSeconds,
+            wanDownloadBytes / intervalSeconds,
+            lanUploadBytes / intervalSeconds,
+            lanDownloadBytes / intervalSeconds,
+            appUsages.ToArray());
     }
 
     private NetworkRealtimeSnapshot UpdateLatestRealtimeCacheCore(DateTimeOffset sampleTime, RealtimeView view)
@@ -317,18 +423,48 @@ public sealed class TrafficAggregator : INetworkAggregator
         };
 
         _latestRealtimeSnapshot = snapshot;
-        _latestTopApps = view.AppUsages
-            .OrderByDescending(static x => x.UploadBytesPerSecond + x.DownloadBytesPerSecond)
-            .ThenByDescending(static x => x.DownloadBytesPerSecond)
-            .ThenBy(static x => x.ProcessName, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        _latestTopApps = SortAndTakeTopApps(view.AppUsages, null);
 
         return snapshot;
     }
 
+    private void EnsureRealtimeSlotsCapacityCore()
+    {
+        var requiredSlotCount = Math.Max(
+            2,
+            (int)Math.Ceiling(GetRealtimeRetentionWindow().TotalMilliseconds / RealtimeSlotDuration.TotalMilliseconds) + 2);
+
+        if (_realtimeSlots.Length == requiredSlotCount)
+        {
+            return;
+        }
+
+        var resizedSlots = new RealtimeSlot[requiredSlotCount];
+        for (var index = 0; index < resizedSlots.Length; index++)
+        {
+            resizedSlots[index] = new RealtimeSlot();
+        }
+
+        foreach (var slot in _realtimeSlots)
+        {
+            if (!slot.IsValid)
+            {
+                continue;
+            }
+
+            var target = resizedSlots[(int)(slot.SlotIndex % resizedSlots.Length)];
+            if (!target.IsValid || target.SlotIndex < slot.SlotIndex)
+            {
+                target.CopyFrom(slot);
+            }
+        }
+
+        _realtimeSlots = resizedSlots;
+    }
+
     private TimeSpan GetRealtimeRetentionWindow()
     {
-        var settings = _settingsMonitor.CurrentValue;
+        var settings = Volatile.Read(ref _settingsSnapshot);
         var realtimeWindow = TimeSpan.FromMilliseconds(settings.NetworkSampleIntervalMs);
         var aggregateWindow = TimeSpan.FromSeconds(settings.AggregateIntervalSeconds * 2d);
         return new[]
@@ -339,12 +475,62 @@ public sealed class TrafficAggregator : INetworkAggregator
         }.Max();
     }
 
+    private static long GetRealtimeSlotIndex(DateTimeOffset timestamp)
+    {
+        return timestamp.UtcTicks / RealtimeSlotDuration.Ticks;
+    }
+
+    private static IReadOnlyList<AppTrafficUsage> SortAndTakeTopApps(IReadOnlyList<AppTrafficUsage> appUsages, int? topN)
+    {
+        if (appUsages.Count == 0)
+        {
+            return Array.Empty<AppTrafficUsage>();
+        }
+
+        var items = appUsages.ToArray();
+        Array.Sort(items, static (left, right) =>
+        {
+            var leftTotal = left.UploadBytesPerSecond + left.DownloadBytesPerSecond;
+            var rightTotal = right.UploadBytesPerSecond + right.DownloadBytesPerSecond;
+            var totalComparison = rightTotal.CompareTo(leftTotal);
+            if (totalComparison != 0)
+            {
+                return totalComparison;
+            }
+
+            var downloadComparison = right.DownloadBytesPerSecond.CompareTo(left.DownloadBytesPerSecond);
+            if (downloadComparison != 0)
+            {
+                return downloadComparison;
+            }
+
+            return StringComparer.OrdinalIgnoreCase.Compare(left.ProcessName, right.ProcessName);
+        });
+
+        if (topN.HasValue && topN.Value < items.Length)
+        {
+            Array.Resize(ref items, topN.Value);
+        }
+
+        return items;
+    }
+
     private static DateTimeOffset AlignToBucketStart(DateTimeOffset timestamp, int granularitySeconds)
     {
         var ticksPerBucket = TimeSpan.FromSeconds(granularitySeconds).Ticks;
         var alignedTicks = timestamp.UtcTicks - (timestamp.UtcTicks % ticksPerBucket);
         return new DateTimeOffset(alignedTicks, TimeSpan.Zero);
     }
+
+    private sealed record AggregationSettingsSnapshot(int AggregateIntervalSeconds, int NetworkSampleIntervalMs)
+    {
+        public static AggregationSettingsSnapshot From(MonitorSettings settings)
+        {
+            return new AggregationSettingsSnapshot(settings.AggregateIntervalSeconds, settings.NetworkSampleIntervalMs);
+        }
+    }
+
+    private sealed record QueuedTraceEvent(long Sequence, NetworkTraceEvent TraceEvent);
 
     private sealed class BucketAccumulator(BucketKey key)
     {
@@ -372,39 +558,144 @@ public sealed class TrafficAggregator : INetworkAggregator
         public string AppKey { get; } = appKey;
         public string ProcessName { get; } = processName;
         public string? DisplayName { get; } = displayName;
-        public double UploadBytesPerSecond { get; set; }
-        public double DownloadBytesPerSecond { get; set; }
-        public double WanUploadBytesPerSecond { get; set; }
-        public double WanDownloadBytesPerSecond { get; set; }
-        public double LanUploadBytesPerSecond { get; set; }
-        public double LanDownloadBytesPerSecond { get; set; }
+        public long UploadBytes { get; set; }
+        public long DownloadBytes { get; set; }
+        public long WanUploadBytes { get; set; }
+        public long WanDownloadBytes { get; set; }
+        public long LanUploadBytes { get; set; }
+        public long LanDownloadBytes { get; set; }
 
-        public AppTrafficUsage ToModel()
+        public AppTrafficUsage ToModel(double intervalSeconds)
         {
             return new AppTrafficUsage
             {
                 AppKey = AppKey,
                 ProcessName = ProcessName,
                 DisplayName = DisplayName,
-                UploadBytesPerSecond = UploadBytesPerSecond,
-                DownloadBytesPerSecond = DownloadBytesPerSecond,
-                WanUploadBytesPerSecond = WanUploadBytesPerSecond,
-                WanDownloadBytesPerSecond = WanDownloadBytesPerSecond,
-                LanUploadBytesPerSecond = LanUploadBytesPerSecond,
-                LanDownloadBytesPerSecond = LanDownloadBytesPerSecond
+                UploadBytesPerSecond = UploadBytes / intervalSeconds,
+                DownloadBytesPerSecond = DownloadBytes / intervalSeconds,
+                WanUploadBytesPerSecond = WanUploadBytes / intervalSeconds,
+                WanDownloadBytesPerSecond = WanDownloadBytes / intervalSeconds,
+                LanUploadBytesPerSecond = LanUploadBytes / intervalSeconds,
+                LanDownloadBytesPerSecond = LanDownloadBytes / intervalSeconds
             };
         }
     }
 
-    private sealed record RealtimeTrafficEvent
+    private sealed class RealtimeSlot
     {
-        public DateTimeOffset Timestamp { get; init; }
-        public string AppKey { get; init; } = string.Empty;
-        public string ProcessName { get; init; } = string.Empty;
-        public string? DisplayName { get; init; }
-        public TrafficDirection Direction { get; init; }
-        public AddressScopeType ScopeType { get; init; }
-        public long Bytes { get; init; }
+        private readonly Dictionary<string, SlotAppUsageAccumulator> _appUsages = new(StringComparer.OrdinalIgnoreCase);
+
+        public long SlotIndex { get; private set; } = -1;
+        public bool IsValid => SlotIndex >= 0;
+        public long TotalUploadBytes { get; private set; }
+        public long TotalDownloadBytes { get; private set; }
+        public long WanUploadBytes { get; private set; }
+        public long WanDownloadBytes { get; private set; }
+        public long LanUploadBytes { get; private set; }
+        public long LanDownloadBytes { get; private set; }
+        public IReadOnlyDictionary<string, SlotAppUsageAccumulator> AppUsages => _appUsages;
+
+        public void Reset(long slotIndex)
+        {
+            SlotIndex = slotIndex;
+            TotalUploadBytes = 0;
+            TotalDownloadBytes = 0;
+            WanUploadBytes = 0;
+            WanDownloadBytes = 0;
+            LanUploadBytes = 0;
+            LanDownloadBytes = 0;
+            _appUsages.Clear();
+        }
+
+        public void CopyFrom(RealtimeSlot other)
+        {
+            Reset(other.SlotIndex);
+            TotalUploadBytes = other.TotalUploadBytes;
+            TotalDownloadBytes = other.TotalDownloadBytes;
+            WanUploadBytes = other.WanUploadBytes;
+            WanDownloadBytes = other.WanDownloadBytes;
+            LanUploadBytes = other.LanUploadBytes;
+            LanDownloadBytes = other.LanDownloadBytes;
+
+            foreach (var pair in other._appUsages)
+            {
+                _appUsages[pair.Key] = pair.Value.Clone();
+            }
+        }
+
+        public void Add(
+            string appKey,
+            string processName,
+            string? displayName,
+            TrafficDirection direction,
+            AddressScopeType scopeType,
+            long bytes)
+        {
+            if (!_appUsages.TryGetValue(appKey, out var appUsage))
+            {
+                appUsage = new SlotAppUsageAccumulator(processName, displayName);
+                _appUsages[appKey] = appUsage;
+            }
+
+            if (direction == TrafficDirection.Outbound)
+            {
+                TotalUploadBytes += bytes;
+                appUsage.UploadBytes += bytes;
+
+                if (scopeType == AddressScopeType.Wan)
+                {
+                    WanUploadBytes += bytes;
+                    appUsage.WanUploadBytes += bytes;
+                }
+                else if (scopeType == AddressScopeType.Lan)
+                {
+                    LanUploadBytes += bytes;
+                    appUsage.LanUploadBytes += bytes;
+                }
+            }
+            else
+            {
+                TotalDownloadBytes += bytes;
+                appUsage.DownloadBytes += bytes;
+
+                if (scopeType == AddressScopeType.Wan)
+                {
+                    WanDownloadBytes += bytes;
+                    appUsage.WanDownloadBytes += bytes;
+                }
+                else if (scopeType == AddressScopeType.Lan)
+                {
+                    LanDownloadBytes += bytes;
+                    appUsage.LanDownloadBytes += bytes;
+                }
+            }
+        }
+    }
+
+    private sealed class SlotAppUsageAccumulator(string processName, string? displayName)
+    {
+        public string ProcessName { get; } = processName;
+        public string? DisplayName { get; } = displayName;
+        public long UploadBytes { get; set; }
+        public long DownloadBytes { get; set; }
+        public long WanUploadBytes { get; set; }
+        public long WanDownloadBytes { get; set; }
+        public long LanUploadBytes { get; set; }
+        public long LanDownloadBytes { get; set; }
+
+        public SlotAppUsageAccumulator Clone()
+        {
+            return new SlotAppUsageAccumulator(ProcessName, DisplayName)
+            {
+                UploadBytes = UploadBytes,
+                DownloadBytes = DownloadBytes,
+                WanUploadBytes = WanUploadBytes,
+                WanDownloadBytes = WanDownloadBytes,
+                LanUploadBytes = LanUploadBytes,
+                LanDownloadBytes = LanDownloadBytes
+            };
+        }
     }
 
     private sealed record BucketKey(

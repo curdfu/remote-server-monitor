@@ -25,7 +25,7 @@ public sealed class MonitorSettings : IValidatableObject
     public int TopNDefault { get; set; } = 10;
 
     [Range(1, 128)]
-    public int EtwBufferSizeMb { get; set; } = 1;
+    public int EtwBufferSizeMb { get; set; } = 4;
 
     [Required]
     public AddressClassificationSettings AddressClassification { get; set; } = new();
@@ -51,3 +51,4 @@ public sealed class MonitorSettings : IValidatableObject
         }
     }
 }
+

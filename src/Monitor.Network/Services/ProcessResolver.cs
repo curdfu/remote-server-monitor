@@ -11,7 +11,12 @@ namespace Monitor.Network.Services;
 public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessResolver
 {
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DisplayNameCacheLifetime = TimeSpan.FromHours(6);
+    private const int PruneFrequency = 256;
+
     private readonly ConcurrentDictionary<int, CacheItem> _cache = new();
+    private readonly ConcurrentDictionary<string, DisplayNameCacheItem> _displayNameCache = new(StringComparer.OrdinalIgnoreCase);
+    private int _resolveCount;
 
     public ResolvedProcessInfo Resolve(int pid)
     {
@@ -23,6 +28,7 @@ public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessR
 
         var resolved = ResolveCore(pid, now);
         _cache[pid] = new CacheItem(resolved, now);
+        PruneIfNeeded(now);
         return resolved;
     }
 
@@ -33,7 +39,7 @@ public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessR
             using var process = Process.GetProcessById(pid);
             var processName = process.ProcessName;
             var executablePath = TryGetExecutablePath(process);
-            var displayName = TryGetDisplayName(executablePath);
+            var displayName = TryGetDisplayName(executablePath, resolvedAt);
 
             return new ResolvedProcessInfo
             {
@@ -72,21 +78,55 @@ public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessR
         }
     }
 
-    private static string? TryGetDisplayName(string? executablePath)
+    private string? TryGetDisplayName(string? executablePath, DateTimeOffset resolvedAt)
     {
-        if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath))
+        if (string.IsNullOrWhiteSpace(executablePath))
         {
             return null;
         }
 
+        if (_displayNameCache.TryGetValue(executablePath, out var cached) &&
+            resolvedAt - cached.StoredAt <= DisplayNameCacheLifetime)
+        {
+            return cached.Value;
+        }
+
+        string? displayName;
         try
         {
             var info = FileVersionInfo.GetVersionInfo(executablePath);
-            return string.IsNullOrWhiteSpace(info.FileDescription) ? null : info.FileDescription;
+            displayName = string.IsNullOrWhiteSpace(info.FileDescription) ? null : info.FileDescription;
         }
         catch
         {
-            return null;
+            displayName = null;
+        }
+
+        _displayNameCache[executablePath] = new DisplayNameCacheItem(displayName, resolvedAt);
+        return displayName;
+    }
+
+    private void PruneIfNeeded(DateTimeOffset now)
+    {
+        if (Interlocked.Increment(ref _resolveCount) % PruneFrequency != 0)
+        {
+            return;
+        }
+
+        foreach (var pair in _cache)
+        {
+            if (now - pair.Value.StoredAt > CacheLifetime)
+            {
+                _cache.TryRemove(pair.Key, out _);
+            }
+        }
+
+        foreach (var pair in _displayNameCache)
+        {
+            if (now - pair.Value.StoredAt > DisplayNameCacheLifetime)
+            {
+                _displayNameCache.TryRemove(pair.Key, out _);
+            }
         }
     }
 
@@ -105,4 +145,6 @@ public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessR
     }
 
     private sealed record CacheItem(ResolvedProcessInfo Value, DateTimeOffset StoredAt);
+    private sealed record DisplayNameCacheItem(string? Value, DateTimeOffset StoredAt);
 }
+

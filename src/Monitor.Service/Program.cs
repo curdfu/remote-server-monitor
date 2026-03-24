@@ -1,4 +1,5 @@
-﻿using Monitor.Service.Configuration;
+﻿using System.Net;
+using Monitor.Service.Configuration;
 using Monitor.Service.HostedServices;
 using Monitor.Service.Infrastructure;
 using Monitor.Storage.Configuration;
@@ -38,15 +39,37 @@ builder.Services
 
 var app = builder.Build();
 var appConfiguration = app.Services.GetRequiredService<IAppConfigurationProvider>();
+var currentSettings = appConfiguration.Current;
+var listenAddress = builder.Configuration["Monitor:ListenAddress"];
+if (string.IsNullOrWhiteSpace(listenAddress))
+{
+    listenAddress = IPAddress.Loopback.ToString();
+}
 
 app.UseSerilogRequestLogging();
-app.Urls.Add($"http://0.0.0.0:{appConfiguration.Current.HttpPort}");
+app.Urls.Add($"http://{listenAddress}:{currentSettings.HttpPort}");
 
-app.Logger.LogInformation(
-    "Monitor service starting on port {Port}, hardware interval {HardwareInterval}ms, network interval {NetworkInterval}ms.",
-    appConfiguration.Current.HttpPort,
-    appConfiguration.Current.HardwareSampleIntervalMs,
-    appConfiguration.Current.NetworkSampleIntervalMs);
+Log.ForContext("ImportantInfo", true).Information(
+    "Monitor service listen configuration applied. ListenAddress={ListenAddress}, Port={Port}, PersistedSettingsLoaded={PersistedSettingsLoaded}",
+    listenAddress,
+    currentSettings.HttpPort,
+    persistedSettings.Count > 0);
+
+Log.ForContext("ImportantInfo", true).Information(
+    "Monitor service runtime configuration applied. HardwareIntervalMs={HardwareIntervalMs}, NetworkIntervalMs={NetworkIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}, EtwBufferSizeMb={EtwBufferSizeMb}",
+    currentSettings.HardwareSampleIntervalMs,
+    currentSettings.NetworkSampleIntervalMs,
+    currentSettings.AggregateIntervalSeconds,
+    currentSettings.HistoryRetentionDays,
+    currentSettings.TopNDefault,
+    currentSettings.EtwBufferSizeMb);
+
+if (!IPAddress.TryParse(listenAddress, out var parsedListenAddress) || !IPAddress.IsLoopback(parsedListenAddress))
+{
+    app.Logger.LogWarning(
+        "Monitor service is listening on a non-loopback address ({ListenAddress}). Ensure the host firewall and reverse proxy rules are configured appropriately.",
+        listenAddress);
+}
 
 app.MapMonitorWebApi();
 

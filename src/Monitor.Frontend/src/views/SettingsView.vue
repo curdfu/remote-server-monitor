@@ -3,44 +3,44 @@
     <PageHeader
       iconName="settings"
       kicker="设置"
-      title="系统设置"
-      description="这里调整访问端口、采样间隔、默认统计粒度和历史保留时间。"
+      title="设置"
+      description="调整端口、采样间隔、统计粒度和历史保留时间。"
     >
       <template #actions>
-        <div class="actions-row settings-actions">
+        <div class="actions-row settings-actions page-tier-toolbar-inline">
           <button class="chip-button settings-action-button" :disabled="isLoading || isSaving" @click="loadSettings">
             <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
-            重新加载
+            刷新
           </button>
           <button class="ghost-button settings-action-button" :disabled="!isDirty || isSaving" @click="save">
             <span class="button-inline-icon"><AppIcon name="settings" :size="14" /></span>
-            {{ isSaving ? '保存中...' : '保存设置' }}
+            {{ isSaving ? '保存中...' : '保存' }}
           </button>
         </div>
       </template>
     </PageHeader>
 
-    <div class="grid">
+    <div class="grid page-tier-stats">
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
           <span class="metric-label metric-label-inline"><AppIcon name="settings" :size="14" />当前访问端口</span>
         </div>
         <strong class="metric-value">{{ form.httpPort }}</strong>
-        <span class="metric-hint">修改后下次启动生效</span>
+        <span class="metric-hint">保存后会持久化，端口变更仍需重启</span>
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
           <span class="metric-label metric-label-inline"><AppIcon name="cpu" :size="14" />硬件采样间隔</span>
         </div>
         <strong class="metric-value">{{ form.hardwareSampleIntervalMs }} ms</strong>
-        <span class="metric-hint">越短越实时，但占用也会更高</span>
+        <span class="metric-hint">保存后会实时生效</span>
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
           <span class="metric-label metric-label-inline"><AppIcon name="network" :size="14" />网络统计粒度</span>
         </div>
         <strong class="metric-value">{{ form.aggregateIntervalSeconds }} s</strong>
-        <span class="metric-hint">影响网络历史数据的聚合粒度</span>
+        <span class="metric-hint">保存后会实时生效</span>
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
@@ -60,14 +60,14 @@
     </div>
 
     <section class="panel-grid">
-      <form class="card settings-layout settings-layout-elevated" @submit.prevent="save">
+      <form class="card settings-layout settings-layout-elevated page-tier-panel" @submit.prevent="save">
         <div class="settings-group">
           <div class="section-header">
             <div class="panel-title">
               <span class="panel-icon"><AppIcon name="settings" :size="16" /></span>
               <div>
                 <h3>访问端口</h3>
-                <p class="panel-subtitle">仅调整展示样式，不改配置行为。</p>
+                <p class="panel-subtitle">配置 Web 服务的 HTTP 监听端口。</p>
               </div>
             </div>
             <span class="section-tag">HTTP 端口配置</span>
@@ -87,7 +87,7 @@
               <span class="panel-icon"><AppIcon name="network" :size="16" /></span>
               <div>
                 <h3>采样与统计</h3>
-                <p class="panel-subtitle">保持原有字段与保存逻辑，只做视觉升级。</p>
+                <p class="panel-subtitle">配置硬件和网络数据的采集频率及聚合粒度。</p>
               </div>
             </div>
             <span class="section-tag">实时采样频率</span>
@@ -121,7 +121,7 @@
               <span class="panel-icon"><AppIcon name="disk" :size="16" /></span>
               <div>
                 <h3>历史数据</h3>
-                <p class="panel-subtitle">清晰区分存储周期与默认展示配置。</p>
+                <p class="panel-subtitle">配置历史数据的保留时间和网络排行默认显示数量。</p>
               </div>
             </div>
             <span class="section-tag">存储与默认展示</span>
@@ -143,7 +143,7 @@
         </div>
       </form>
 
-      <aside class="card settings-side settings-side-elevated">
+      <aside class="card settings-side settings-side-elevated page-tier-panel">
         <div class="section-header">
           <div class="panel-title">
             <span class="panel-icon"><AppIcon name="status" :size="16" /></span>
@@ -156,19 +156,19 @@
         </div>
 
         <ul class="simple-list compact">
-          <li>端口修改会写入 SQLite，并在下次启动后生效。</li>
-          <li>采样间隔和默认统计粒度会立即持久化保存。</li>
+          <li>所有设置都会先写入 SQLite 持久化保存。</li>
+          <li>除访问端口外，其余采样、聚合和展示配置会在运行中实时生效。</li>
           <li>如果输入超出合法范围，前端会先拦截，再阻止提交。</li>
         </ul>
 
         <div class="settings-side-actions">
           <button class="chip-button" :disabled="!isDirty || isSaving" @click="resetForm">
             <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
-            撤销修改
+            重置
           </button>
           <button class="ghost-button" :disabled="isSaving || !canSave || !isDirty" @click="save">
             <span class="button-inline-icon"><AppIcon name="settings" :size="14" /></span>
-            提交保存
+            {{ isSaving ? '保存中...' : '保存' }}
           </button>
         </div>
       </aside>
@@ -245,6 +245,7 @@ async function loadSettings() {
   successMessage.value = '';
 
   try {
+    // 调用后端 /api/settings：加载设置页初始配置
     const loaded = await getSettings();
     Object.assign(form, loaded);
     original.value = { ...loaded };
@@ -273,10 +274,11 @@ async function save() {
   successMessage.value = '';
 
   try {
+    // 调用后端 /api/settings：把当前表单保存到服务端，并用返回值回填页面
     const saved = await saveSettings({ ...form });
     Object.assign(form, saved);
     original.value = { ...saved };
-    successMessage.value = '设置已保存。端口修改会在下次启动时生效。';
+    successMessage.value = '设置已保存。除访问端口外，其余配置已实时生效；端口变更仍需重启服务。';
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '保存设置失败。';
   } finally {

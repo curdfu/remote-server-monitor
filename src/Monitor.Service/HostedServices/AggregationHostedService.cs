@@ -1,5 +1,4 @@
-using Microsoft.Extensions.Options;
-using Monitor.Contracts.Options;
+﻿using Monitor.Contracts.Options;
 using Monitor.Network.Abstractions;
 using Monitor.Storage.Repositories;
 
@@ -8,26 +7,52 @@ namespace Monitor.Service.HostedServices;
 public sealed class AggregationHostedService(
     ILogger<AggregationHostedService> logger,
     INetworkAggregator networkAggregator,
+    INetworkCollector networkCollector,
     NetworkTrafficRepository networkTrafficRepository,
-    IOptionsMonitor<MonitorSettings> settings) : BackgroundService
+    IMonitorSettingsProvider settings) : BackgroundService
 {
     private const int PersistenceBatchSize = 500;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await RefreshRealtimeCacheAsync(stoppingToken);
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(settings.CurrentValue.NetworkSampleIntervalMs));
 
-        while (!stoppingToken.IsCancellationRequested && await timer.WaitForNextTickAsync(stoppingToken))
+        while (!stoppingToken.IsCancellationRequested)
         {
+            var interval = TimeSpan.FromMilliseconds(settings.Current.NetworkSampleIntervalMs);
+            var settingsChanged = await WaitForIntervalOrSettingsChangeAsync(interval, stoppingToken);
+            if (settingsChanged)
+            {
+                await RefreshRealtimeCacheAsync(stoppingToken);
+                continue;
+            }
+
             await RefreshRealtimeCacheAsync(stoppingToken);
         }
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        await networkCollector.StopAsync(cancellationToken);
+        await networkAggregator.FlushAsync(cancellationToken);
         await PersistPendingBucketsAsync(cancellationToken);
         await base.StopAsync(cancellationToken);
+    }
+
+    private async Task<bool> WaitForIntervalOrSettingsChangeAsync(TimeSpan interval, CancellationToken cancellationToken)
+    {
+        var settingsChangedSource = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = settings.RegisterChangeCallback(_ => settingsChangedSource.TrySetResult());
+        var delayTask = Task.Delay(interval, cancellationToken);
+        var completedTask = await Task.WhenAny(delayTask, settingsChangedSource.Task);
+
+        if (completedTask == delayTask)
+        {
+            await delayTask;
+            return false;
+        }
+
+        return true;
     }
 
     private async Task PersistPendingBucketsAsync(CancellationToken cancellationToken)

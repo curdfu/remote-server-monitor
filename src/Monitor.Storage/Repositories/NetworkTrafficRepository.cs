@@ -1,3 +1,4 @@
+﻿using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Monitor.Network.Abstractions;
@@ -12,11 +13,14 @@ public sealed class NetworkTrafficRepository(
     IAppRegistry appRegistry,
     ILogger<NetworkTrafficRepository> logger)
 {
+    private const int AppIdLookupBatchSize = 200;
+
     public enum TrafficScopeFilter
     {
         All,
         Wan,
-        Lan
+        Lan,
+        Loopback
     }
 
     public enum TrafficDirectionFilter
@@ -41,38 +45,46 @@ public sealed class NetworkTrafficRepository(
 
         var appIds = await UpsertAppRegistryAndGetIdsAsync(connection, transaction, buckets, cancellationToken);
 
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+                              INSERT INTO network_usage_agg (
+                                  bucket_start_time,
+                                  bucket_granularity_seconds,
+                                  app_id,
+                                  direction,
+                                  scope_type,
+                                  bytes,
+                                  packets
+                              )
+                              VALUES (
+                                  $bucketStartTime,
+                                  $bucketGranularitySeconds,
+                                  $appId,
+                                  $direction,
+                                  $scopeType,
+                                  $bytes,
+                                  $packets
+                              );
+                              """;
+
+        var bucketStartTimeParameter = command.Parameters.Add("$bucketStartTime", SqliteType.Text);
+        var bucketGranularityParameter = command.Parameters.Add("$bucketGranularitySeconds", SqliteType.Integer);
+        var appIdParameter = command.Parameters.Add("$appId", SqliteType.Integer);
+        var directionParameter = command.Parameters.Add("$direction", SqliteType.Text);
+        var scopeTypeParameter = command.Parameters.Add("$scopeType", SqliteType.Text);
+        var bytesParameter = command.Parameters.Add("$bytes", SqliteType.Integer);
+        var packetsParameter = command.Parameters.Add("$packets", SqliteType.Integer);
+
         foreach (var bucket in buckets)
         {
-            await using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = """
-                                  INSERT INTO network_usage_agg (
-                                      bucket_start_time,
-                                      bucket_granularity_seconds,
-                                      app_id,
-                                      direction,
-                                      scope_type,
-                                      bytes,
-                                      packets
-                                  )
-                                  VALUES (
-                                      $bucketStartTime,
-                                      $bucketGranularitySeconds,
-                                      $appId,
-                                      $direction,
-                                      $scopeType,
-                                      $bytes,
-                                      $packets
-                                  );
-                                  """;
-
-            command.Parameters.AddWithValue("$bucketStartTime", bucket.BucketStartTime.ToString("O"));
-            command.Parameters.AddWithValue("$bucketGranularitySeconds", bucket.BucketGranularitySeconds);
-            command.Parameters.AddWithValue("$appId", appIds[bucket.AppKey]);
-            command.Parameters.AddWithValue("$direction", MapDirection(bucket.Direction));
-            command.Parameters.AddWithValue("$scopeType", MapScopeType(bucket.ScopeType));
-            command.Parameters.AddWithValue("$bytes", bucket.Bytes);
-            command.Parameters.AddWithValue("$packets", bucket.Packets);
+            bucketStartTimeParameter.Value = bucket.BucketStartTime.ToString("O");
+            bucketGranularityParameter.Value = bucket.BucketGranularitySeconds;
+            appIdParameter.Value = appIds[bucket.AppKey];
+            directionParameter.Value = MapDirection(bucket.Direction);
+            scopeTypeParameter.Value = MapScopeType(bucket.ScopeType);
+            bytesParameter.Value = bucket.Bytes;
+            packetsParameter.Value = bucket.Packets;
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -206,28 +218,113 @@ public sealed class NetworkTrafficRepository(
         return results;
     }
 
-    private static string GetOrderByExpression(TrafficScopeFilter scopeFilter, TrafficDirectionFilter directionFilter)
+    public async Task<AppTrafficPeriodSummary> QueryTotalsAsync(
+        DateTimeOffset from,
+        DateTimeOffset to,
+        TrafficScopeFilter scopeFilter = TrafficScopeFilter.All,
+        TrafficDirectionFilter directionFilter = TrafficDirectionFilter.Total,
+        CancellationToken cancellationToken = default)
     {
-        return (scopeFilter, directionFilter) switch
+        await using var connection = dbConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+                              SELECT COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'download' AND n.direction = 'outbound'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS total_upload_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'upload' AND n.direction = 'inbound'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS total_download_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'download'
+                                                           AND n.direction = 'outbound'
+                                                           AND n.scope_type = 'wan'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS wan_upload_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'upload'
+                                                           AND n.direction = 'inbound'
+                                                           AND n.scope_type = 'wan'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS wan_download_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'download'
+                                                           AND n.direction = 'outbound'
+                                                           AND n.scope_type = 'lan'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS lan_upload_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'upload'
+                                                           AND n.direction = 'inbound'
+                                                           AND n.scope_type = 'lan'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS lan_download_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'download'
+                                                           AND n.direction = 'outbound'
+                                                           AND n.scope_type = 'loopback'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS loopback_upload_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'upload'
+                                                           AND n.direction = 'inbound'
+                                                           AND n.scope_type = 'loopback'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS loopback_download_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'download'
+                                                           AND n.direction = 'outbound'
+                                                           AND n.scope_type = 'other'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS other_upload_bytes,
+                                     COALESCE(SUM(CASE
+                                                      WHEN $directionFilter <> 'upload'
+                                                           AND n.direction = 'inbound'
+                                                           AND n.scope_type = 'other'
+                                                      THEN n.bytes
+                                                      ELSE 0
+                                                  END), 0) AS other_download_bytes
+                              FROM network_usage_agg n
+                              WHERE n.bucket_start_time >= $from
+                                AND n.bucket_start_time < $to
+                                AND ($scopeType IS NULL OR n.scope_type = $scopeType);
+                              """;
+
+        command.Parameters.AddWithValue("$from", from.ToString("O"));
+        command.Parameters.AddWithValue("$to", to.ToString("O"));
+        command.Parameters.AddWithValue("$scopeType", MapScopeFilterToDbValue(scopeFilter));
+        command.Parameters.AddWithValue("$directionFilter", MapDirectionFilter(directionFilter));
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
         {
-            (TrafficScopeFilter.Wan, TrafficDirectionFilter.Upload) =>
-                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
-            (TrafficScopeFilter.Wan, TrafficDirectionFilter.Download) =>
-                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
-            (TrafficScopeFilter.Wan, TrafficDirectionFilter.Total) =>
-                "SUM(CASE WHEN n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
-            (TrafficScopeFilter.Lan, TrafficDirectionFilter.Upload) =>
-                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
-            (TrafficScopeFilter.Lan, TrafficDirectionFilter.Download) =>
-                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
-            (TrafficScopeFilter.Lan, TrafficDirectionFilter.Total) =>
-                "SUM(CASE WHEN n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
-            (TrafficScopeFilter.All, TrafficDirectionFilter.Upload) =>
-                "SUM(CASE WHEN n.direction = 'outbound' THEN n.bytes ELSE 0 END)",
-            (TrafficScopeFilter.All, TrafficDirectionFilter.Download) =>
-                "SUM(CASE WHEN n.direction = 'inbound' THEN n.bytes ELSE 0 END)",
-            _ =>
-                "SUM(n.bytes)"
+            return new AppTrafficPeriodSummary();
+        }
+
+        return new AppTrafficPeriodSummary
+        {
+            TotalUploadBytes = reader.GetInt64(0),
+            TotalDownloadBytes = reader.GetInt64(1),
+            WanUploadBytes = reader.GetInt64(2),
+            WanDownloadBytes = reader.GetInt64(3),
+            LanUploadBytes = reader.GetInt64(4),
+            LanDownloadBytes = reader.GetInt64(5),
+            LoopbackUploadBytes = reader.GetInt64(6),
+            LoopbackDownloadBytes = reader.GetInt64(7),
+            OtherUploadBytes = reader.GetInt64(8),
+            OtherDownloadBytes = reader.GetInt64(9)
         };
     }
 
@@ -246,9 +343,10 @@ public sealed class NetworkTrafficRepository(
         await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);
         var transaction = (SqliteTransaction)transactionHandle;
 
+        await using var command = CreateUpsertAppRegistryCommand(connection, transaction);
         foreach (var entry in entries)
         {
-            await UpsertAppRegistryEntryAsync(connection, transaction, entry, cancellationToken);
+            await ExecuteUpsertAppRegistryEntryAsync(command, entry, cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -261,21 +359,32 @@ public sealed class NetworkTrafficRepository(
         IReadOnlyList<TrafficBucket> buckets,
         CancellationToken cancellationToken)
     {
-        var appKeys = buckets
-            .Select(static x => x.AppKey)
-            .Where(static x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var appKeys = new List<string>();
+        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var appIds = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        foreach (var bucket in buckets)
+        {
+            if (string.IsNullOrWhiteSpace(bucket.AppKey) || !seenKeys.Add(bucket.AppKey))
+            {
+                continue;
+            }
+
+            appKeys.Add(bucket.AppKey);
+        }
+
+        if (appKeys.Count == 0)
+        {
+            return new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        await using var upsertCommand = CreateUpsertAppRegistryCommand(connection, transaction);
         foreach (var appKey in appKeys)
         {
             var entry = appRegistry.GetByAppKey(appKey) ?? CreateFallbackEntry(appKey);
-            await UpsertAppRegistryEntryAsync(connection, transaction, entry, cancellationToken);
-            appIds[appKey] = await GetAppIdByKeyAsync(connection, transaction, appKey, cancellationToken);
+            await ExecuteUpsertAppRegistryEntryAsync(upsertCommand, entry, cancellationToken);
         }
 
-        return appIds;
+        return await GetAppIdsByKeysAsync(connection, transaction, appKeys, cancellationToken);
     }
 
     private static AppRegistryEntry CreateFallbackEntry(string appKey)
@@ -290,13 +399,11 @@ public sealed class NetworkTrafficRepository(
         };
     }
 
-    private static async Task UpsertAppRegistryEntryAsync(
+    private static SqliteCommand CreateUpsertAppRegistryCommand(
         SqliteConnection connection,
-        SqliteTransaction transaction,
-        AppRegistryEntry entry,
-        CancellationToken cancellationToken)
+        SqliteTransaction transaction)
     {
-        await using var command = connection.CreateCommand();
+        var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
                               INSERT INTO app_registry (
@@ -322,34 +429,123 @@ public sealed class NetworkTrafficRepository(
                                   last_seen_at = excluded.last_seen_at;
                               """;
 
-        command.Parameters.AddWithValue("$appKey", entry.AppKey);
-        command.Parameters.AddWithValue("$processName", entry.ProcessName);
-        command.Parameters.AddWithValue("$displayName", ToDbValue(entry.DisplayName));
-        command.Parameters.AddWithValue("$executablePath", ToDbValue(entry.ExecutablePath));
-        command.Parameters.AddWithValue("$firstSeenAt", entry.FirstSeenAt.ToString("O"));
-        command.Parameters.AddWithValue("$lastSeenAt", entry.LastSeenAt.ToString("O"));
+        command.Parameters.Add("$appKey", SqliteType.Text);
+        command.Parameters.Add("$processName", SqliteType.Text);
+        command.Parameters.Add("$displayName", SqliteType.Text);
+        command.Parameters.Add("$executablePath", SqliteType.Text);
+        command.Parameters.Add("$firstSeenAt", SqliteType.Text);
+        command.Parameters.Add("$lastSeenAt", SqliteType.Text);
+        return command;
+    }
+
+    private static async Task ExecuteUpsertAppRegistryEntryAsync(
+        SqliteCommand command,
+        AppRegistryEntry entry,
+        CancellationToken cancellationToken)
+    {
+        command.Parameters["$appKey"].Value = entry.AppKey;
+        command.Parameters["$processName"].Value = entry.ProcessName;
+        command.Parameters["$displayName"].Value = ToDbValue(entry.DisplayName);
+        command.Parameters["$executablePath"].Value = ToDbValue(entry.ExecutablePath);
+        command.Parameters["$firstSeenAt"].Value = entry.FirstSeenAt.ToString("O");
+        command.Parameters["$lastSeenAt"].Value = entry.LastSeenAt.ToString("O");
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task<long> GetAppIdByKeyAsync(
+    private static async Task<Dictionary<string, long>> GetAppIdsByKeysAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        string appKey,
+        IReadOnlyList<string> appKeys,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = "SELECT id FROM app_registry WHERE app_key = $appKey LIMIT 1;";
-        command.Parameters.AddWithValue("$appKey", appKey);
-        var result = await command.ExecuteScalarAsync(cancellationToken);
+        var appIds = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 
-        if (result is null || result == DBNull.Value)
+        for (var offset = 0; offset < appKeys.Count; offset += AppIdLookupBatchSize)
         {
-            throw new InvalidOperationException($"App registry id not found for app key '{appKey}'.");
+            var count = Math.Min(AppIdLookupBatchSize, appKeys.Count - offset);
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+
+            var sql = new StringBuilder();
+            sql.Append("SELECT id, app_key FROM app_registry WHERE app_key IN (");
+            for (var index = 0; index < count; index++)
+            {
+                if (index > 0)
+                {
+                    sql.Append(", ");
+                }
+
+                var parameterName = $"$appKey{index}";
+                sql.Append(parameterName);
+                command.Parameters.AddWithValue(parameterName, appKeys[offset + index]);
+            }
+
+            sql.Append(");");
+            command.CommandText = sql.ToString();
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                appIds[reader.GetString(1)] = reader.GetInt64(0);
+            }
         }
 
-        return Convert.ToInt64(result);
+        foreach (var appKey in appKeys)
+        {
+            if (!appIds.ContainsKey(appKey))
+            {
+                throw new InvalidOperationException($"App registry id not found for app key '{appKey}'.");
+            }
+        }
+
+        return appIds;
     }
+
+    private static string GetOrderByExpression(TrafficScopeFilter scopeFilter, TrafficDirectionFilter directionFilter)
+    {
+        return (scopeFilter, directionFilter) switch
+        {
+            (TrafficScopeFilter.Wan, TrafficDirectionFilter.Upload) =>
+                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Wan, TrafficDirectionFilter.Download) =>
+                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Wan, TrafficDirectionFilter.Total) =>
+                "SUM(CASE WHEN n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Lan, TrafficDirectionFilter.Upload) =>
+                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Lan, TrafficDirectionFilter.Download) =>
+                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Lan, TrafficDirectionFilter.Total) =>
+                "SUM(CASE WHEN n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Loopback, TrafficDirectionFilter.Upload) =>
+                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'loopback' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Loopback, TrafficDirectionFilter.Download) =>
+                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'loopback' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.Loopback, TrafficDirectionFilter.Total) =>
+                "SUM(CASE WHEN n.scope_type = 'loopback' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.All, TrafficDirectionFilter.Upload) =>
+                "SUM(CASE WHEN n.direction = 'outbound' THEN n.bytes ELSE 0 END)",
+            (TrafficScopeFilter.All, TrafficDirectionFilter.Download) =>
+                "SUM(CASE WHEN n.direction = 'inbound' THEN n.bytes ELSE 0 END)",
+            _ =>
+                "SUM(n.bytes)"
+        };
+    }
+
+    private static object MapScopeFilterToDbValue(TrafficScopeFilter scopeFilter) => scopeFilter switch
+    {
+        TrafficScopeFilter.Wan => "wan",
+        TrafficScopeFilter.Lan => "lan",
+        TrafficScopeFilter.Loopback => "loopback",
+        _ => DBNull.Value
+    };
+
+    private static string MapDirectionFilter(TrafficDirectionFilter directionFilter) => directionFilter switch
+    {
+        TrafficDirectionFilter.Upload => "upload",
+        TrafficDirectionFilter.Download => "download",
+        _ => "total"
+    };
 
     private static object ToDbValue(string? value) => string.IsNullOrWhiteSpace(value) ? DBNull.Value : value;
 

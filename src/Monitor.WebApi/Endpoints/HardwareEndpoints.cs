@@ -6,6 +6,8 @@ namespace Monitor.WebApi.Endpoints;
 
 public static class HardwareEndpoints
 {
+    private const int MaxHistoryPoints = 2000;
+
     public static IEndpointRouteBuilder MapHardwareEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/hardware/realtime", (
@@ -34,7 +36,11 @@ public static class HardwareEndpoints
                 return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
             }
 
-            var snapshots = await hardwareRepository.QueryRangeAsync(rangeFrom, rangeTo, cancellationToken);
+            var snapshots = await hardwareRepository.QueryRangeAsync(
+                rangeFrom,
+                rangeTo,
+                MaxHistoryPoints,
+                cancellationToken);
             return Results.Ok(snapshots.Select(ToRealtimeDto).ToArray());
         });
 
@@ -46,6 +52,7 @@ public static class HardwareEndpoints
         return new HardwareRealtimeDto
         {
             SampleTime = snapshot.SampleTime,
+            CpuName = snapshot.Cpu.Name,
             CpuUsagePercent = snapshot.Cpu.UsagePercent,
             CpuTemperatureC = snapshot.Cpu.TemperatureC,
             CpuFrequencyMhz = snapshot.Cpu.FrequencyMhz,

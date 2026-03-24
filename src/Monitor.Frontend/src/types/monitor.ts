@@ -1,5 +1,6 @@
 export interface HardwareRealtimeDto {
   sampleTime: string;
+  cpuName?: string | null;
   cpuUsagePercent: number | null;
   cpuTemperatureC: number | null;
   cpuFrequencyMhz: number | null;
@@ -54,6 +55,19 @@ export interface AppTrafficSummaryDto {
   appKey: string;
   processName: string;
   displayName?: string | null;
+  totalUploadBytes: number;
+  totalDownloadBytes: number;
+  wanUploadBytes: number;
+  wanDownloadBytes: number;
+  lanUploadBytes: number;
+  lanDownloadBytes: number;
+  loopbackUploadBytes: number;
+  loopbackDownloadBytes: number;
+  otherUploadBytes: number;
+  otherDownloadBytes: number;
+}
+
+export interface NetworkPeriodSummaryDto {
   totalUploadBytes: number;
   totalDownloadBytes: number;
   wanUploadBytes: number;

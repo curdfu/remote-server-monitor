@@ -1,22 +1,34 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Monitor.Contracts.Options;
 using Monitor.Network.Abstractions;
 using Monitor.Network.Enums;
 
 namespace Monitor.Network.Services;
 
-public sealed class AddressClassifier(
-    IOptionsMonitor<MonitorSettings> settingsMonitor,
-    ILogger<AddressClassifier> logger) : IAddressClassifier
+public sealed class AddressClassifier : IAddressClassifier, IDisposable
 {
     private static readonly TimeSpan LocalSubnetRefreshInterval = TimeSpan.FromSeconds(30);
+
     private readonly object _syncRoot = new();
+    private readonly ILogger<AddressClassifier> _logger;
+    private readonly IDisposable _settingsRegistration;
     private IReadOnlyList<SubnetDefinition> _localSubnets = [];
     private DateTimeOffset _nextRefreshAt = DateTimeOffset.MinValue;
+    private AdditionalSubnetCache _additionalSubnetCache = AdditionalSubnetCache.Empty;
+    private AddressClassificationSettings _settings;
+    private bool _disposed;
+
+    public AddressClassifier(
+        IMonitorSettingsProvider settingsMonitor,
+        ILogger<AddressClassifier> logger)
+    {
+        _logger = logger;
+        _settings = CloneSettings(settingsMonitor.Current.AddressClassification);
+        _settingsRegistration = settingsMonitor.RegisterChangeCallback(OnSettingsChanged);
+    }
 
     public AddressScopeType Classify(string? remoteAddress, string? localAddress = null)
     {
@@ -27,6 +39,8 @@ public sealed class AddressClassifier(
 
     public AddressScopeType Classify(IPAddress? remoteAddress, IPAddress? localAddress = null)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         if (remoteAddress is null)
         {
             return AddressScopeType.Other;
@@ -34,7 +48,8 @@ public sealed class AddressClassifier(
 
         var remote = Normalize(remoteAddress);
         var local = localAddress is null ? null : Normalize(localAddress);
-        var settings = settingsMonitor.CurrentValue.AddressClassification;
+        var settings = Volatile.Read(ref _settings);
+        var additionalSubnets = GetAdditionalSubnets(settings);
 
         if (settings.TreatLoopbackAsLoopback &&
             (IPAddress.IsLoopback(remote) || (local is not null && IPAddress.IsLoopback(local))))
@@ -47,12 +62,12 @@ public sealed class AddressClassifier(
             return AddressScopeType.Other;
         }
 
-        if (MatchesAny(settings.AdditionalWanCidrs, remote))
+        if (MatchesAny(additionalSubnets.WanSubnets, remote))
         {
             return AddressScopeType.Wan;
         }
 
-        if (MatchesAny(settings.AdditionalLanCidrs, remote))
+        if (MatchesAny(additionalSubnets.LanSubnets, remote))
         {
             return AddressScopeType.Lan;
         }
@@ -72,6 +87,48 @@ public sealed class AddressClassifier(
             : AddressScopeType.Other;
     }
 
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _settingsRegistration.Dispose();
+        _disposed = true;
+    }
+
+    private void OnSettingsChanged(MonitorSettings updatedSettings)
+    {
+        Volatile.Write(ref _settings, CloneSettings(updatedSettings.AddressClassification));
+
+        lock (_syncRoot)
+        {
+            _additionalSubnetCache = AdditionalSubnetCache.Empty;
+            _nextRefreshAt = DateTimeOffset.MinValue;
+        }
+    }
+
+    private AdditionalSubnetCache GetAdditionalSubnets(AddressClassificationSettings settings)
+    {
+        var cache = Volatile.Read(ref _additionalSubnetCache);
+        if (cache.Matches(settings))
+        {
+            return cache;
+        }
+
+        lock (_syncRoot)
+        {
+            if (_additionalSubnetCache.Matches(settings))
+            {
+                return _additionalSubnetCache;
+            }
+
+            _additionalSubnetCache = AdditionalSubnetCache.Create(settings, _logger);
+            return _additionalSubnetCache;
+        }
+    }
+
     private bool IsInLocalSubnet(IPAddress address)
     {
         RefreshLocalSubnetsIfNeeded();
@@ -82,15 +139,7 @@ public sealed class AddressClassifier(
             localSubnets = _localSubnets;
         }
 
-        foreach (var subnet in localSubnets)
-        {
-            if (subnet.Contains(address))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return MatchesAny(localSubnets, address);
     }
 
     private void RefreshLocalSubnetsIfNeeded()
@@ -144,25 +193,28 @@ public sealed class AddressClassifier(
         }
         catch (Exception exception)
         {
-            logger.LogWarning(exception, "Failed to enumerate local network subnets for LAN classification.");
+            _logger.LogWarning(exception, "Failed to enumerate local network subnets for LAN classification.");
             return [];
         }
     }
 
-    private static bool MatchesAny(IEnumerable<string>? cidrs, IPAddress address)
+    private static AddressClassificationSettings CloneSettings(AddressClassificationSettings? settings)
     {
-        if (cidrs is null)
+        var source = settings ?? new AddressClassificationSettings();
+        return new AddressClassificationSettings
         {
-            return false;
-        }
+            TreatPrivateAddressesAsLan = source.TreatPrivateAddressesAsLan,
+            TreatLocalSubnetsAsLan = source.TreatLocalSubnetsAsLan,
+            TreatLoopbackAsLoopback = source.TreatLoopbackAsLoopback,
+            AdditionalLanCidrs = source.AdditionalLanCidrs?.ToArray() ?? [],
+            AdditionalWanCidrs = source.AdditionalWanCidrs?.ToArray() ?? []
+        };
+    }
 
-        foreach (var cidr in cidrs)
+    private static bool MatchesAny(IEnumerable<SubnetDefinition> subnets, IPAddress address)
+    {
+        foreach (var subnet in subnets)
         {
-            if (!SubnetDefinition.TryParse(cidr, out var subnet))
-            {
-                continue;
-            }
-
             if (subnet.Contains(address))
             {
                 return true;
@@ -317,6 +369,58 @@ public sealed class AddressClassifier(
 
             subnet = new SubnetDefinition(normalized.AddressFamily, networkBytes, prefixLength);
             return true;
+        }
+    }
+
+    private sealed class AdditionalSubnetCache(
+        string[]? sourceLanCidrs,
+        string[]? sourceWanCidrs,
+        IReadOnlyList<SubnetDefinition> lanSubnets,
+        IReadOnlyList<SubnetDefinition> wanSubnets)
+    {
+        public static readonly AdditionalSubnetCache Empty = new(Array.Empty<string>(), Array.Empty<string>(), [], []);
+
+        public IReadOnlyList<SubnetDefinition> LanSubnets { get; } = lanSubnets;
+        public IReadOnlyList<SubnetDefinition> WanSubnets { get; } = wanSubnets;
+
+        public bool Matches(AddressClassificationSettings settings)
+        {
+            return ReferenceEquals(sourceLanCidrs, settings.AdditionalLanCidrs) &&
+                   ReferenceEquals(sourceWanCidrs, settings.AdditionalWanCidrs);
+        }
+
+        public static AdditionalSubnetCache Create(AddressClassificationSettings settings, ILogger logger)
+        {
+            return new AdditionalSubnetCache(
+                settings.AdditionalLanCidrs,
+                settings.AdditionalWanCidrs,
+                ParseSubnets(settings.AdditionalLanCidrs, logger, "LAN"),
+                ParseSubnets(settings.AdditionalWanCidrs, logger, "WAN"));
+        }
+
+        private static IReadOnlyList<SubnetDefinition> ParseSubnets(
+            IEnumerable<string>? cidrs,
+            ILogger logger,
+            string scopeName)
+        {
+            if (cidrs is null)
+            {
+                return [];
+            }
+
+            var subnets = new List<SubnetDefinition>();
+            foreach (var cidr in cidrs)
+            {
+                if (!SubnetDefinition.TryParse(cidr, out var subnet))
+                {
+                    logger.LogWarning("Skipped invalid additional {ScopeName} CIDR '{Cidr}'.", scopeName, cidr);
+                    continue;
+                }
+
+                subnets.Add(subnet);
+            }
+
+            return subnets;
         }
     }
 }

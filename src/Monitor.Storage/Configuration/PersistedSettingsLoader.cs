@@ -56,8 +56,10 @@ public static class PersistedSettingsLoader
                 [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:TopNDefault"] = reader.GetInt32(5).ToString()
             };
         }
-        catch
+        catch (Exception exception)
         {
+            Console.Error.WriteLine(
+                $"[{DateTimeOffset.UtcNow:O}] Failed to load persisted monitor settings from SQLite. Falling back to appsettings defaults. {exception}");
             return new Dictionary<string, string?>();
         }
     }

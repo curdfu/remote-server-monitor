@@ -3,6 +3,7 @@
 public sealed class HardwareRealtimeDto
 {
     public DateTimeOffset SampleTime { get; init; }
+    public string? CpuName { get; init; }
     public double? CpuUsagePercent { get; init; }
     public double? CpuTemperatureC { get; init; }
     public double? CpuFrequencyMhz { get; init; }

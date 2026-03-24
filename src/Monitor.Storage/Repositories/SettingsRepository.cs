@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Monitor.Contracts.Dtos;
 using Monitor.Storage.Abstractions;
 
@@ -95,6 +95,14 @@ public sealed class SettingsRepository(
         command.Parameters.AddWithValue("$updatedAt", now);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
-        logger.LogInformation("Settings persisted to SQLite.");
+        logger.LogInformation(
+            "Settings persisted to SQLite. HttpPort={HttpPort}, HardwareIntervalMs={HardwareIntervalMs}, NetworkIntervalMs={NetworkIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}",
+            settings.HttpPort,
+            settings.HardwareSampleIntervalMs,
+            settings.NetworkSampleIntervalMs,
+            settings.AggregateIntervalSeconds,
+            settings.HistoryRetentionDays,
+            settings.TopNDefault);
     }
 }
+
