@@ -55,7 +55,7 @@
         <MetricCard
           label="CPU 当前频率"
           :value="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
-          :hint="formatCpuHint(hardware?.cpuFrequencyMhz, hardware?.cpuPowerWatts)"
+          :hint="formatCpuNameHint(hardware?.cpuName)"
           badge="频率"
           tone="info"
           icon-name="cpu"
@@ -306,6 +306,10 @@ function formatCpuHint(frequency?: number | null, power?: number | null) {
   const frequencyText = formatNullable(frequency, 'MHz');
   const powerText = formatNullable(power, 'W');
   return `频率 ${frequencyText} · 功耗 ${powerText}`;
+}
+
+function formatCpuNameHint(name?: string | null) {
+  return name?.trim() || 'CPU 名称不可用';
 }
 
 function formatTemperatureHint(temperature?: number | null) {

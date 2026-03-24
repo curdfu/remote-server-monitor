@@ -1,5 +1,6 @@
 export interface HardwareRealtimeDto {
   sampleTime: string;
+  cpuName?: string | null;
   cpuUsagePercent: number | null;
   cpuTemperatureC: number | null;
   cpuFrequencyMhz: number | null;

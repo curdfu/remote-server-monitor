@@ -40,6 +40,7 @@ public sealed class MonitorRealtimeBroadcaster(
         var hardwareDto = new HardwareRealtimeDto
         {
             SampleTime = hardware.SampleTime,
+            CpuName = hardware.Cpu.Name,
             CpuUsagePercent = hardware.Cpu.UsagePercent,
             CpuTemperatureC = hardware.Cpu.TemperatureC,
             CpuFrequencyMhz = hardware.Cpu.FrequencyMhz,

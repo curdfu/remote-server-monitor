@@ -52,6 +52,7 @@ public static class HardwareEndpoints
         return new HardwareRealtimeDto
         {
             SampleTime = snapshot.SampleTime,
+            CpuName = snapshot.Cpu.Name,
             CpuUsagePercent = snapshot.Cpu.UsagePercent,
             CpuTemperatureC = snapshot.Cpu.TemperatureC,
             CpuFrequencyMhz = snapshot.Cpu.FrequencyMhz,

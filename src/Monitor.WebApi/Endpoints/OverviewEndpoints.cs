@@ -43,6 +43,7 @@ public static class OverviewEndpoints
                 Hardware = new HardwareRealtimeDto
                 {
                     SampleTime = hardware.SampleTime,
+                    CpuName = hardware.Cpu.Name,
                     CpuUsagePercent = hardware.Cpu.UsagePercent,
                     CpuTemperatureC = hardware.Cpu.TemperatureC,
                     CpuFrequencyMhz = hardware.Cpu.FrequencyMhz,

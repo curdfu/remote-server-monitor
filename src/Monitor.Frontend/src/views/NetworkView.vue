@@ -286,6 +286,7 @@ import type { AppTrafficSummaryDto, NetworkPeriodSummaryDto } from '../types/mon
 const presetOptions = [
   { hours: 1, label: '最近 1 小时' },
   { hours: 6, label: '最近 6 小时' },
+  { hours: 12, label: '最近 12 小时' },
   { hours: 24, label: '最近 24 小时' },
   { hours: 72, label: '最近 3 天' },
   { hours: 24 * 7, label: '最近 1 周' },
