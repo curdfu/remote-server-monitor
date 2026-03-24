@@ -14,7 +14,7 @@
       </template>
     </PageHeader>
 
-    <div class="overview-meta card overview-meta-bar">
+    <div class="overview-meta card overview-meta-bar page-tier-toolbar">
       <div class="overview-meta-item">
         <span class="muted">数据时间</span>
         <strong>{{ formatDateTime(hardware?.sampleTime) }}</strong>
@@ -42,7 +42,7 @@
         <span class="section-tag">Core Metrics</span>
       </div>
 
-      <div class="dashboard-hero-grid">
+      <div class="dashboard-hero-grid page-tier-stats">
         <MetricCard
           label="已开机"
           :value="formatUptime(hardware?.uptimeSeconds)"
@@ -109,7 +109,7 @@
     </section>
 
     <section class="panel-grid dashboard-storage-grid">
-      <article class="card dashboard-panel-card">
+      <article class="card dashboard-panel-card page-tier-panel">
         <div class="panel-header">
           <div class="panel-title">
             <span class="panel-icon"><AppIcon name="temperature" :size="16" /></span>
@@ -150,7 +150,7 @@
         </div>
       </article>
 
-      <article class="card dashboard-panel-card">
+      <article class="card dashboard-panel-card page-tier-panel">
         <div class="panel-header">
           <div class="panel-title">
             <span class="panel-icon"><AppIcon name="disk" :size="16" /></span>

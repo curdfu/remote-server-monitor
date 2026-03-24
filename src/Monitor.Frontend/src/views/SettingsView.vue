@@ -7,7 +7,7 @@
       description="调整端口、采样间隔、统计粒度和历史保留时间。"
     >
       <template #actions>
-        <div class="actions-row settings-actions">
+        <div class="actions-row settings-actions page-tier-toolbar-inline">
           <button class="chip-button settings-action-button" :disabled="isLoading || isSaving" @click="loadSettings">
             <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
             刷新
@@ -20,7 +20,7 @@
       </template>
     </PageHeader>
 
-    <div class="grid">
+    <div class="grid page-tier-stats">
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
           <span class="metric-label metric-label-inline"><AppIcon name="settings" :size="14" />当前访问端口</span>
@@ -60,7 +60,7 @@
     </div>
 
     <section class="panel-grid">
-      <form class="card settings-layout settings-layout-elevated" @submit.prevent="save">
+      <form class="card settings-layout settings-layout-elevated page-tier-panel" @submit.prevent="save">
         <div class="settings-group">
           <div class="section-header">
             <div class="panel-title">
@@ -143,7 +143,7 @@
         </div>
       </form>
 
-      <aside class="card settings-side settings-side-elevated">
+      <aside class="card settings-side settings-side-elevated page-tier-panel">
         <div class="section-header">
           <div class="panel-title">
             <span class="panel-icon"><AppIcon name="status" :size="16" /></span>

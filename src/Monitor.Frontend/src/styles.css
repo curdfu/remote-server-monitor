@@ -47,6 +47,10 @@
   --progress-border: rgba(15, 23, 42, 0.08);
   --shadow-strong: 0 12px 30px rgba(15, 23, 42, 0.08);
   --shadow-soft: 0 10px 24px rgba(15, 23, 42, 0.06);
+  --tier-border: rgba(96, 165, 250, 0.14);
+  --tier-border-strong: rgba(96, 165, 250, 0.22);
+  --tier-glow: rgba(59, 130, 246, 0.08);
+  --tier-sheen: rgba(255, 255, 255, 0.05);
   --ambient-orb-1: rgba(37, 99, 235, 0.16);
   --ambient-orb-2: rgba(56, 189, 248, 0.12);
   --ambient-grid: rgba(37, 99, 235, 0.05);
@@ -102,6 +106,10 @@
     --progress-border: rgba(148, 163, 184, 0.1);
     --shadow-strong: 0 18px 48px rgba(2, 6, 23, 0.28);
     --shadow-soft: 0 16px 36px rgba(2, 6, 23, 0.22);
+    --tier-border: rgba(96, 165, 250, 0.2);
+    --tier-border-strong: rgba(125, 211, 252, 0.28);
+    --tier-glow: rgba(59, 130, 246, 0.16);
+    --tier-sheen: rgba(255, 255, 255, 0.04);
     --ambient-orb-1: rgba(59, 130, 246, 0.18);
     --ambient-orb-2: rgba(45, 212, 191, 0.12);
     --ambient-grid: rgba(96, 165, 250, 0.06);
@@ -161,6 +169,10 @@
   --progress-border: rgba(148, 163, 184, 0.1);
   --shadow-strong: 0 18px 48px rgba(2, 6, 23, 0.28);
   --shadow-soft: 0 16px 36px rgba(2, 6, 23, 0.22);
+  --tier-border: rgba(96, 165, 250, 0.2);
+  --tier-border-strong: rgba(125, 211, 252, 0.28);
+  --tier-glow: rgba(59, 130, 246, 0.16);
+  --tier-sheen: rgba(255, 255, 255, 0.04);
   --ambient-orb-1: rgba(59, 130, 246, 0.18);
   --ambient-orb-2: rgba(45, 212, 191, 0.12);
   --ambient-grid: rgba(96, 165, 250, 0.06);
@@ -497,6 +509,25 @@ button:disabled {
 .overview-meta-bar {
   position: relative;
   overflow: hidden;
+}
+
+.page-tier-toolbar {
+  background:
+    linear-gradient(135deg, var(--tier-glow), rgba(34, 211, 238, 0.04) 48%, rgba(255, 255, 255, 0) 78%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0)),
+    var(--panel-strong);
+  border-color: var(--tier-border);
+  box-shadow:
+    var(--shadow-soft),
+    inset 0 1px 0 var(--tier-sheen);
+}
+
+.page-tier-toolbar .overview-meta-item {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0)),
+    var(--meta-bg);
+  border-color: color-mix(in srgb, var(--tier-border) 55%, transparent);
+  box-shadow: inset 0 1px 0 var(--tier-sheen);
 }
 
 .overview-meta-bar::after {
@@ -959,15 +990,36 @@ button:disabled {
   overflow: hidden;
 }
 
+.page-tier-panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
+    var(--panel-strong);
+  border-color: var(--tier-border);
+  box-shadow:
+    var(--shadow-soft),
+    inset 0 1px 0 var(--tier-sheen);
+}
+
+.page-tier-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, rgba(96, 165, 250, 0.84), rgba(45, 212, 191, 0.44));
+  pointer-events: none;
+}
+
 .dashboard-panel-card:hover,
 .filters-card-elevated:hover,
 .settings-layout-elevated:hover,
 .settings-side-elevated:hover {
   transform: translateY(-2px);
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-strong);
+  border-color: var(--tier-border-strong);
+  box-shadow:
+    var(--shadow-strong),
+    0 0 0 1px color-mix(in srgb, var(--tier-border) 55%, transparent);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
     var(--panel-hover);
 }
 
@@ -1163,7 +1215,7 @@ button:disabled {
   color: var(--button-chip-active-text);
   border-color: var(--button-chip-active-border);
   box-shadow:
-    0 8px 18px rgba(37, 99, 235, 0.16),
+    0 8px 18px color-mix(in srgb, var(--tier-glow) 180%, transparent),
     inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   transform: translateY(-1px);
 }
@@ -1180,6 +1232,27 @@ button:disabled {
 
 .settings-action-button {
   padding: 8px 14px;
+}
+
+.page-tier-toolbar-inline {
+  position: relative;
+  isolation: isolate;
+}
+
+.page-tier-toolbar-inline::before {
+  content: "";
+  position: absolute;
+  inset: -6px -8px;
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, var(--tier-glow), rgba(34, 211, 238, 0.04) 48%, rgba(255, 255, 255, 0) 78%),
+    var(--page-header-bg);
+  border: 1px solid var(--tier-border);
+  box-shadow:
+    var(--shadow-soft),
+    inset 0 1px 0 var(--tier-sheen);
+  z-index: -1;
+  pointer-events: none;
 }
 
 .filters-card {
@@ -2048,10 +2121,37 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
+  .network-page .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .network-page .network-stat-card {
+    min-height: 96px;
+  }
+
+  .network-page .filters-card {
+    gap: 10px;
+  }
+
   .filters-toolbar,
   .filter-group-fields-time,
   .settings-form {
     grid-template-columns: 1fr;
+  }
+
+  .network-page .filters-toolbar {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .network-page .filter-group {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .network-page .filter-group-time {
+    grid-column: 1 / -1;
   }
 
   .dashboard-hero-grid {
@@ -2071,6 +2171,55 @@ button:disabled {
     justify-items: end;
   }
 
+  .network-page .preset-toolbar {
+    gap: 8px;
+    padding-top: 10px;
+    align-items: stretch;
+  }
+
+  .network-page .preset-toolbar-title {
+    min-width: 0;
+  }
+
+  .network-page .preset-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .network-page .preset-row .chip-button {
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .network-page .ratio-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .network-page .ratio-summary-card {
+    padding: 8px 10px;
+  }
+
+  .network-page .ratio-group {
+    gap: 8px;
+  }
+
+  .network-page .ratio-track {
+    height: 9px;
+  }
+
+  .network-page .ranking-list {
+    gap: 8px;
+  }
+
+  .network-page .ranking-list li {
+    padding: 10px;
+  }
+
   .preset-toolbar,
   .ranking-list li {
     flex-direction: column;
@@ -2080,6 +2229,7 @@ button:disabled {
   .ranking-side {
     justify-items: stretch;
     min-width: 0;
+    gap: 5px;
   }
 
   .ranking-breakdown {
@@ -2088,5 +2238,15 @@ button:disabled {
 
   .ranking-progress {
     width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .network-page .ratio-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .network-page .preset-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
