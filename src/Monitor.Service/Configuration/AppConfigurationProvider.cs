@@ -88,6 +88,8 @@ public sealed class AppConfigurationProvider : IAppConfigurationProvider, IMonit
             HistoryRetentionDays = settings.HistoryRetentionDays,
             TopNDefault = settings.TopNDefault,
             EtwBufferSizeMb = settings.EtwBufferSizeMb,
+            EnableEtwTargetEventLogging = settings.EnableEtwTargetEventLogging,
+            EtwTargetEventLoggingProtocolFilter = settings.EtwTargetEventLoggingProtocolFilter,
             AddressClassification = new AddressClassificationSettings
             {
                 TreatPrivateAddressesAsLan = addressClassification.TreatPrivateAddressesAsLan,

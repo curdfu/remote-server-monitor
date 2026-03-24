@@ -1,5 +1,7 @@
 ﻿using System.Runtime.InteropServices;
 using System.Threading;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Diagnostics.Tracing.Parsers;
 using Microsoft.Diagnostics.Tracing.Parsers.Kernel;
 using Microsoft.Diagnostics.Tracing.Session;
@@ -18,8 +20,15 @@ public sealed class EtwNetworkCollector(
     private static readonly int[] AdaptiveBufferSizesMb = [4, 8, 16];
     private const int InsufficientResourcesHResult = unchecked((int)0x800705AA);
     private const string SessionNamePrefix = "Monitor.Network.Etw.";
+    private const int TargetProcessEventLogLimit = 500;
+    private static readonly string[] TargetProcessNames = ["chrome", "verge-mihomo", "telegram"];
 
     private readonly object _syncRoot = new();
+    private readonly ConcurrentDictionary<int, string?> _targetProcessNameCache = new();
+    private readonly Dictionary<string, int> _targetProcessLogCounts = TargetProcessNames.ToDictionary(
+        static name => name,
+        static _ => 0,
+        StringComparer.OrdinalIgnoreCase);
     private TraceEventSession? _session;
     private Task? _processingTask;
     private Task? _adaptiveRestartTask;
@@ -34,6 +43,8 @@ public sealed class EtwNetworkCollector(
     private long _totalPublishedEvents;
     private long _totalLostEvents;
     private long _lastLoggedLostEvents;
+    private bool _enableTargetProcessEventLogging;
+    private string _targetProcessEventLoggingProtocolFilter = "all";
     private bool _adaptiveRestartScheduled;
     private bool _disposed;
 
@@ -334,6 +345,22 @@ public sealed class EtwNetworkCollector(
 
     private void PublishTcpRecv(TcpIpTraceData data, bool isIpv6)
     {
+        // NOTE:
+        // For TcpIpRecv/TcpIpRecvIPV6, raw ETW field names (saddr/daddr, sport/dport)
+        // suggest the classic packet-level meaning:
+        //   saddr/sport = source/remote endpoint
+        //   daddr/dport = destination/local endpoint
+        //
+        // However, during runtime verification on this machine, using that direct mapping
+        // produced impossible socket tuples in logs, for example:
+        //   - inbound chrome traffic showing Local=<public-ip>:443, Remote=<local-ip>:ephemeral
+        //   - inbound verge-mihomo traffic showing Local=<client-ephemeral>, Remote=<local-listen-port>
+        //
+        // Swapping the mapping below restored socket tuples that match observed process
+        // behavior (Local=local endpoint, Remote=peer endpoint) and fixed WAN/LAN download
+        // classification. Because of that, this mapping is intentionally based on empirical
+        // verification of TraceEvent's runtime behavior in this pipeline, not just on ETW
+        // field-name intuition.
         Publish(new NetworkTraceEvent
         {
             Timestamp = new DateTimeOffset(data.TimeStamp),
@@ -341,10 +368,10 @@ public sealed class EtwNetworkCollector(
             Direction = TrafficDirection.Inbound,
             ProtocolType = ProtocolType.Tcp,
             Bytes = data.size,
-            LocalAddress = data.daddr?.ToString(),
-            LocalPort = data.dport,
-            RemoteAddress = data.saddr?.ToString(),
-            RemotePort = data.sport,
+            LocalAddress = data.saddr?.ToString(),
+            LocalPort = data.sport,
+            RemoteAddress = data.daddr?.ToString(),
+            RemotePort = data.dport,
             IsIPv6 = isIpv6
         });
     }
@@ -368,6 +395,11 @@ public sealed class EtwNetworkCollector(
 
     private void PublishTcpRecvV6(TcpIpV6TraceData data)
     {
+        // See the note in PublishTcpRecv(...): although the raw ETW field names look like
+        // packet source/destination fields, runtime validation showed that using them
+        // directly produced reversed local/remote socket tuples for inbound TCP events in
+        // this collector pipeline. Keep IPv6 behavior aligned with the empirically verified
+        // IPv4 mapping.
         Publish(new NetworkTraceEvent
         {
             Timestamp = new DateTimeOffset(data.TimeStamp),
@@ -375,10 +407,10 @@ public sealed class EtwNetworkCollector(
             Direction = TrafficDirection.Inbound,
             ProtocolType = ProtocolType.Tcp,
             Bytes = data.size,
-            LocalAddress = data.daddr?.ToString(),
-            LocalPort = data.dport,
-            RemoteAddress = data.saddr?.ToString(),
-            RemotePort = data.sport,
+            LocalAddress = data.saddr?.ToString(),
+            LocalPort = data.sport,
+            RemoteAddress = data.daddr?.ToString(),
+            RemotePort = data.dport,
             IsIPv6 = true
         });
     }
@@ -426,7 +458,102 @@ public sealed class EtwNetworkCollector(
 
         Interlocked.Increment(ref _sessionPublishedEvents);
         Interlocked.Increment(ref _totalPublishedEvents);
+        LogTargetProcessEvent(traceEvent);
         EventReceived?.Invoke(traceEvent);
+    }
+
+    private void LogTargetProcessEvent(NetworkTraceEvent traceEvent)
+    {
+        if (!_enableTargetProcessEventLogging)
+        {
+            return;
+        }
+
+        if (!ShouldLogProtocol(traceEvent.ProtocolType))
+        {
+            return;
+        }
+
+        var processName = GetCachedProcessName(traceEvent.ProcessId);
+        if (string.IsNullOrWhiteSpace(processName) ||
+            !Array.Exists(TargetProcessNames, target => string.Equals(target, processName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        int sequence;
+        int remaining;
+        bool completedAllTargets;
+        lock (_syncRoot)
+        {
+            if (!_targetProcessLogCounts.TryGetValue(processName, out var currentCount) ||
+                currentCount >= TargetProcessEventLogLimit)
+            {
+                return;
+            }
+
+            sequence = currentCount + 1;
+            _targetProcessLogCounts[processName] = sequence;
+            remaining = TargetProcessEventLogLimit - sequence;
+            completedAllTargets = _targetProcessLogCounts.Values.All(count => count >= TargetProcessEventLogLimit);
+        }
+
+        logger.LogInformation(
+            "TEMP ETW target event. Process={ProcessName}, Sequence={Sequence}/{TargetLimit}, Remaining={Remaining}, Timestamp={Timestamp:o}, PID={ProcessId}, Direction={Direction}, Protocol={ProtocolType}, Bytes={Bytes}, Local={LocalAddress}:{LocalPort}, Remote={RemoteAddress}:{RemotePort}, IPv6={IsIPv6}",
+            processName,
+            sequence,
+            TargetProcessEventLogLimit,
+            remaining,
+            traceEvent.Timestamp,
+            traceEvent.ProcessId,
+            traceEvent.Direction,
+            traceEvent.ProtocolType,
+            traceEvent.Bytes,
+            traceEvent.LocalAddress,
+            traceEvent.LocalPort,
+            traceEvent.RemoteAddress,
+            traceEvent.RemotePort,
+            traceEvent.IsIPv6);
+
+        if (completedAllTargets)
+        {
+            logger.LogInformation(
+                "TEMP ETW target logging completed. Captured {TargetLimit} events for each target process: {TargetProcesses}",
+                TargetProcessEventLogLimit,
+                string.Join(", ", TargetProcessNames));
+        }
+    }
+
+    private string? GetCachedProcessName(int processId)
+    {
+        if (_targetProcessNameCache.TryGetValue(processId, out var cachedProcessName))
+        {
+            return cachedProcessName;
+        }
+
+        string? resolvedProcessName;
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            resolvedProcessName = process.ProcessName;
+        }
+        catch
+        {
+            resolvedProcessName = null;
+        }
+
+        _targetProcessNameCache[processId] = resolvedProcessName;
+        return resolvedProcessName;
+    }
+
+    private bool ShouldLogProtocol(ProtocolType protocolType)
+    {
+        return _targetProcessEventLoggingProtocolFilter switch
+        {
+            "tcp" => protocolType == ProtocolType.Tcp,
+            "udp" => protocolType == ProtocolType.Udp,
+            _ => true
+        };
     }
 
     private void RefreshLostEventsCore(bool logIfIncreased)
@@ -654,9 +781,28 @@ public sealed class EtwNetworkCollector(
         _startedAt = DateTimeOffset.UtcNow;
         _bufferSizeMb = bufferSizeMb;
         _sessionMonitorCancellation = sessionMonitorCancellation;
+        var currentSettings = settingsMonitor.Current;
+        _enableTargetProcessEventLogging = currentSettings.EnableEtwTargetEventLogging;
+        _targetProcessEventLoggingProtocolFilter = currentSettings.EtwTargetEventLoggingProtocolFilter?.Trim().ToLowerInvariant() switch
+        {
+            "tcp" => "tcp",
+            "udp" => "udp",
+            _ => "all"
+        };
         Interlocked.Exchange(ref _sessionPublishedEvents, 0);
         Interlocked.Exchange(ref _sessionLostEvents, 0);
         Interlocked.Exchange(ref _lastLoggedLostEvents, 0);
+        if (_enableTargetProcessEventLogging && Interlocked.Read(ref _totalPublishedEvents) == 0)
+        {
+            _targetProcessNameCache.Clear();
+            lock (_syncRoot)
+            {
+                foreach (var processName in TargetProcessNames)
+                {
+                    _targetProcessLogCounts[processName] = 0;
+                }
+            }
+        }
 
         _processingTask = Task.Factory.StartNew(
             () => ProcessSession(session, logger),
@@ -667,10 +813,12 @@ public sealed class EtwNetworkCollector(
 
         IsRunning = true;
         logger.LogInformation(
-            "ETW network collector started. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}, SessionOptions: {SessionOptions}",
+            "ETW network collector started. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}, SessionOptions: {SessionOptions}, EnableEtwTargetEventLogging: {EnableEtwTargetEventLogging}, EtwTargetEventLoggingProtocolFilter: {EtwTargetEventLoggingProtocolFilter}",
             _sessionName,
             bufferSizeMb,
-            sessionOptions);
+            sessionOptions,
+            _enableTargetProcessEventLogging,
+            _targetProcessEventLoggingProtocolFilter);
     }
 
     private int GetInitialAdaptiveBufferSize()

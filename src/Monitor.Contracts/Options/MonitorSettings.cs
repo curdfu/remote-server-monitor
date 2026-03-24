@@ -27,6 +27,10 @@ public sealed class MonitorSettings : IValidatableObject
     [Range(1, 128)]
     public int EtwBufferSizeMb { get; set; } = 4;
 
+    public bool EnableEtwTargetEventLogging { get; set; }
+
+    public string EtwTargetEventLoggingProtocolFilter { get; set; } = "all";
+
     [Required]
     public AddressClassificationSettings AddressClassification { get; set; } = new();
 
@@ -49,6 +53,18 @@ public sealed class MonitorSettings : IValidatableObject
             var memberNames = result.MemberNames.Select(static name => $"{nameof(AddressClassification)}.{name}");
             yield return new ValidationResult(result.ErrorMessage, memberNames);
         }
+
+        if (!IsValidEtwTargetEventLoggingProtocolFilter(EtwTargetEventLoggingProtocolFilter))
+        {
+            yield return new ValidationResult(
+                $"{nameof(EtwTargetEventLoggingProtocolFilter)} must be one of: all, tcp, udp.",
+                [nameof(EtwTargetEventLoggingProtocolFilter)]);
+        }
+    }
+
+    private static bool IsValidEtwTargetEventLoggingProtocolFilter(string? value)
+    {
+        return value?.Trim().ToLowerInvariant() is "all" or "tcp" or "udp";
     }
 }
 

@@ -60,6 +60,8 @@ public static class SettingsEndpoints
             HistoryRetentionDays = request.HistoryRetentionDays,
             TopNDefault = request.TopNDefault,
             EtwBufferSizeMb = currentSettings.EtwBufferSizeMb,
+            EnableEtwTargetEventLogging = currentSettings.EnableEtwTargetEventLogging,
+            EtwTargetEventLoggingProtocolFilter = currentSettings.EtwTargetEventLoggingProtocolFilter,
             AddressClassification = currentSettings.AddressClassification
         };
 
