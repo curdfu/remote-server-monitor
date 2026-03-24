@@ -141,7 +141,7 @@
 
     <section class="panel-grid">
       <!-- 占比面板：展示 WAN / LAN / Loopback 在当前时间范围和方向下的占比 -->
-      <article class="card dashboard-panel-card">
+      <article class="card dashboard-panel-card network-ratio-panel">
         <div class="panel-header">
           <div class="panel-title">
             <span class="panel-icon"><AppIcon name="traffic" :size="16" /></span>
@@ -228,7 +228,7 @@
       </article>
 
       <!-- 排行面板：展示按当前 scope + direction 排序后的应用流量排行 -->
-      <article class="card dashboard-panel-card">
+      <article class="card dashboard-panel-card network-ranking-panel">
         <div class="panel-header">
           <div class="panel-title">
             <span class="panel-icon"><AppIcon name="apps" :size="16" /></span>
