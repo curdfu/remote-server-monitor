@@ -14,21 +14,6 @@
       </template>
     </PageHeader>
 
-    <div class="overview-meta card overview-meta-bar page-tier-toolbar">
-      <div class="overview-meta-item">
-        <span class="muted">数据时间</span>
-        <strong>{{ formatDateTime(hardware?.sampleTime) }}</strong>
-      </div>
-      <div class="overview-meta-item">
-        <span class="muted">采集模式</span>
-        <strong>实时推送 + 历史聚合</strong>
-      </div>
-      <div class="overview-meta-item">
-        <span class="muted">在线状态</span>
-        <strong>{{ errorMessage ? '接口异常' : '稳定运行' }}</strong>
-      </div>
-    </div>
-
     <div v-if="errorMessage" class="card state-card error-state">
       {{ errorMessage }}
     </div>
