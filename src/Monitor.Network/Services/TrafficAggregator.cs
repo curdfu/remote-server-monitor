@@ -123,7 +123,7 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         }
     }
 
-    public IReadOnlyList<TrafficBucket> DequeuePendingBuckets(int maxCount)
+    public IReadOnlyList<TrafficBucket> PeekPendingBuckets(int maxCount)
     {
         if (maxCount <= 0)
         {
@@ -142,12 +142,33 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
             var count = Math.Min(maxCount, _pendingBuckets.Count);
             var result = new List<TrafficBucket>(count);
 
-            for (var index = 0; index < count; index++)
+            foreach (var bucket in _pendingBuckets)
             {
-                result.Add(_pendingBuckets.Dequeue());
+                result.Add(bucket);
+                if (result.Count == count)
+                {
+                    break;
+                }
             }
 
             return result;
+        }
+    }
+
+    public void ConfirmPendingBuckets(int count)
+    {
+        if (count <= 0)
+        {
+            return;
+        }
+
+        lock (_syncRoot)
+        {
+            var confirmedCount = Math.Min(count, _pendingBuckets.Count);
+            for (var index = 0; index < confirmedCount; index++)
+            {
+                _pendingBuckets.Dequeue();
+            }
         }
     }
 

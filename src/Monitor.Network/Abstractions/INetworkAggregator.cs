@@ -9,5 +9,6 @@ public interface INetworkAggregator
     Task FlushAsync(CancellationToken cancellationToken = default);
     NetworkRealtimeSnapshot? GetLatestRealtimeSnapshot();
     IReadOnlyList<AppTrafficUsage> GetLatestTopApps(int topN);
-    IReadOnlyList<TrafficBucket> DequeuePendingBuckets(int maxCount);
+    IReadOnlyList<TrafficBucket> PeekPendingBuckets(int maxCount);
+    void ConfirmPendingBuckets(int count);
 }

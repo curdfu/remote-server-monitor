@@ -59,13 +59,14 @@ public sealed class AggregationHostedService(
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var batch = networkAggregator.DequeuePendingBuckets(PersistenceBatchSize);
+            var batch = networkAggregator.PeekPendingBuckets(PersistenceBatchSize);
             if (batch.Count == 0)
             {
                 return;
             }
 
             await networkTrafficRepository.SaveAsync(batch, cancellationToken);
+            networkAggregator.ConfirmPendingBuckets(batch.Count);
             logger.LogDebug("Persisted {Count} network traffic buckets.", batch.Count);
         }
     }
