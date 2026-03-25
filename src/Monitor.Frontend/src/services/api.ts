@@ -1,6 +1,7 @@
-﻿import type {
+import type {
   AppSettingsDto,
   AppTrafficSummaryDto,
+  HomepageLeaderboardWindowHours,
   HardwareRealtimeDto,
   NetworkPeriodSummaryDto,
   NetworkRealtimeDto,
@@ -47,14 +48,34 @@ export function getNetworkApps(params?: {
   topN?: number;
   scope?: 'all' | 'wan' | 'lan';
   direction?: 'total' | 'upload' | 'download';
-}) {
+}, signal?: AbortSignal) {
   const query = new URLSearchParams();
   if (params?.from) query.set('from', params.from);
   if (params?.to) query.set('to', params.to);
   if (params?.topN) query.set('topN', String(params.topN));
   if (params?.scope) query.set('scope', params.scope);
   if (params?.direction) query.set('direction', params.direction);
-  return request<AppTrafficSummaryDto[]>(`/api/network/apps${query.toString() ? `?${query}` : ''}`);
+  return request<AppTrafficSummaryDto[]>(`/api/network/apps${query.toString() ? `?${query}` : ''}`, { signal });
+}
+
+export function getHomepageUploadLeaderboard(
+  hours: HomepageLeaderboardWindowHours,
+  topN = 8,
+  signal?: AbortSignal
+) {
+  const to = new Date();
+  const from = new Date(to.getTime() - hours * 60 * 60 * 1000);
+
+  return getNetworkApps(
+    {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      topN,
+      scope: 'all',
+      direction: 'upload'
+    },
+    signal
+  );
 }
 
 // 调用后端 /api/network/summary：获取网络页“汇总卡片 / 占比面板”使用的汇总数据
