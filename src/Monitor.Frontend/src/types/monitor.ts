@@ -67,8 +67,6 @@ export interface AppTrafficSummaryDto {
   otherDownloadBytes: number;
 }
 
-export type HomepageLeaderboardWindowHours = 3 | 6 | 12 | 24;
-
 export interface NetworkPeriodSummaryDto {
   totalUploadBytes: number;
   totalDownloadBytes: number;

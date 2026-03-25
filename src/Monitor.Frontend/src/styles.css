@@ -723,234 +723,6 @@ button:disabled {
   gap: 8px;
 }
 
-.dashboard-shell {
-  gap: 14px;
-}
-
-.dashboard-meta-strip {
-  display: grid;
-}
-
-.dashboard-primary-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.95fr);
-  gap: 12px;
-  align-items: start;
-}
-
-.dashboard-resource-zone {
-  min-width: 0;
-}
-
-.dashboard-resource-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.dashboard-leaderboard-zone {
-  min-width: 0;
-}
-
-.dashboard-secondary-grid {
-  align-items: start;
-}
-
-.dashboard-surface-card {
-  position: relative;
-  overflow: hidden;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.07);
-}
-
-.dashboard-surface-card::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0));
-  pointer-events: none;
-}
-
-.homepage-leaderboard-card {
-  display: grid;
-  gap: 14px;
-  min-height: 100%;
-  padding: 16px;
-  border-color: var(--tier-border);
-  background:
-    linear-gradient(135deg, rgba(37, 99, 235, 0.06), rgba(255, 255, 255, 0) 46%),
-    var(--panel-strong);
-}
-
-.homepage-leaderboard-head {
-  display: grid;
-  gap: 12px;
-}
-
-.homepage-leaderboard-title {
-  display: grid;
-  gap: 10px;
-}
-
-.homepage-leaderboard-title h3 {
-  margin: 0;
-  font-size: 18px;
-  color: var(--text-strong);
-}
-
-.homepage-window-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.homepage-window-chips .chip-button {
-  min-width: 0;
-  padding: 7px 12px;
-}
-
-.homepage-window-chips .chip-button-active {
-  border-color: var(--accent-border);
-}
-
-.homepage-leaderboard-meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.homepage-leaderboard-meta {
-  margin: 0;
-  color: var(--text-soft);
-  font-size: 12px;
-}
-
-.homepage-leaderboard-meta-quiet {
-  color: var(--text-muted);
-}
-
-.homepage-leaderboard-state {
-  display: grid;
-  place-items: center;
-  min-height: 180px;
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px dashed var(--border);
-  color: var(--text-soft);
-  background: rgba(255, 255, 255, 0.03);
-  text-align: center;
-}
-
-.homepage-leaderboard-state-error {
-  border-style: solid;
-  border-color: rgba(239, 68, 68, 0.28);
-  color: #dc2626;
-  background: rgba(239, 68, 68, 0.08);
-}
-
-.homepage-leaderboard-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 10px;
-}
-
-.homepage-leaderboard-item {
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  padding: 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.homepage-leaderboard-item-top-1,
-.homepage-leaderboard-item-top-2,
-.homepage-leaderboard-item-top-3 {
-  border-color: color-mix(in srgb, var(--tier-border) 72%, transparent);
-}
-
-.homepage-leaderboard-rank {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
-  background: rgba(37, 99, 235, 0.1);
-  color: var(--accent);
-  font-size: 14px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.homepage-leaderboard-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  min-width: 0;
-}
-
-.homepage-leaderboard-copy {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.homepage-leaderboard-name,
-.homepage-leaderboard-process {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.homepage-leaderboard-name {
-  color: var(--text-strong);
-  font-size: 14px;
-}
-
-.homepage-leaderboard-process {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.homepage-leaderboard-side {
-  display: grid;
-  justify-items: end;
-  gap: 3px;
-}
-
-.homepage-leaderboard-bytes {
-  color: var(--text-strong);
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.homepage-leaderboard-caption {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.homepage-leaderboard-progress-track {
-  grid-column: 2;
-  position: relative;
-  overflow: hidden;
-  width: 100%;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--track-bg);
-  border: 1px solid var(--progress-border);
-}
-
-.homepage-leaderboard-progress-bar {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, rgba(37, 99, 235, 0.92), rgba(14, 165, 233, 0.72));
-}
-
 .section-header {
   display: flex;
   align-items: center;
@@ -2465,14 +2237,6 @@ button:disabled {
 }
 
 @media (max-width: 1100px) {
-  .dashboard-primary-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .dashboard-resource-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .dashboard-hero-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2487,27 +2251,6 @@ button:disabled {
 }
 
 @media (max-width: 960px) {
-  .dashboard-page {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .dashboard-page > .page-header {
-    order: 1;
-  }
-
-  .dashboard-page > .dashboard-meta-strip {
-    order: 2;
-  }
-
-  .dashboard-page > .dashboard-primary-grid {
-    order: 3;
-  }
-
-  .dashboard-page > .dashboard-secondary-grid {
-    order: 4;
-  }
-
   .network-page {
     display: flex;
     flex-direction: column;
@@ -2636,22 +2379,6 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
-  .dashboard-meta-strip .overview-meta {
-    grid-template-columns: 1fr;
-  }
-
-  .dashboard-resource-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .homepage-leaderboard-main {
-    grid-template-columns: 1fr;
-  }
-
-  .homepage-leaderboard-side {
-    justify-items: start;
-  }
-
   .network-page .grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -2785,15 +2512,6 @@ button:disabled {
 }
 
 @media (max-width: 560px) {
-  .homepage-window-chips {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .homepage-window-chips .chip-button {
-    justify-content: center;
-  }
-
   .nav-utility-popover {
     position: fixed;
     top: calc(72px + env(safe-area-inset-top, 0px));

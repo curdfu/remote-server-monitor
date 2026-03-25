@@ -1,10 +1,10 @@
 <template>
-  <section class="page dashboard-page dashboard-shell">
+  <section class="page dashboard-page">
     <PageHeader
       iconName="dashboard"
       kicker="首页"
-      title="系统总览"
-      description="优先查看核心资源状态与上传热点应用。"
+      title="概览"
+      description="查看 CPU、内存、磁盘等关键硬件状态。"
     >
       <template #actions>
         <button class="ghost-button" :disabled="isLoading" @click="loadOverview">
@@ -18,103 +18,82 @@
       {{ errorMessage }}
     </div>
 
-    <section class="dashboard-meta-strip page-tier-toolbar-inline">
-      <div class="overview-meta page-tier-toolbar">
-        <div class="overview-meta-item">
-          <span class="sidebar-meta-label">硬件采样</span>
-          <strong>{{ formatDateTime(hardware?.sampleTime) }}</strong>
+    <section class="dashboard-section">
+      <div class="section-header section-header-rich">
+        <div>
+          <h3>核心运行指标</h3>
+          <p class="section-subtitle">优先展示最关键、最常看的首页指标。</p>
         </div>
-        <div class="overview-meta-item">
-          <span class="sidebar-meta-label">启动时间</span>
-          <strong>{{ formatDateTime(bootTimeText) }}</strong>
-        </div>
-        <div class="overview-meta-item">
-          <span class="sidebar-meta-label">在线状态</span>
-          <strong>{{ errorMessage ? '数据保留中' : '实时更新中' }}</strong>
-        </div>
+        <span class="section-tag">Core Metrics</span>
+      </div>
+
+      <div class="dashboard-hero-grid page-tier-stats">
+        <MetricCard
+          label="已开机"
+          :value="formatUptime(hardware?.uptimeSeconds)"
+          :hint="`启动时间 ${formatDateTime(bootTimeText)}`"
+          badge="运行"
+          tone="info"
+          icon-name="uptime"
+          small-value
+        />
+        <MetricCard
+          label="CPU 当前频率"
+          :value="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
+          :hint="formatCpuNameHint(hardware?.cpuName)"
+          badge="频率"
+          tone="info"
+          icon-name="cpu"
+        />
+        <MetricCard
+          label="CPU 当前温度"
+          :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
+          :hint="formatTemperatureHint(hardware?.cpuTemperatureC)"
+          :badge="temperatureBadge(hardware?.cpuTemperatureC)"
+          :tone="temperatureTone(hardware?.cpuTemperatureC)"
+          icon-name="temperature"
+          :meter-percent="temperaturePercent(hardware?.cpuTemperatureC)"
+        />
+        <MetricCard
+          label="CPU 当前功耗"
+          :value="formatNullable(hardware?.cpuPowerWatts, 'W')"
+          :hint="formatPowerHint(hardware?.cpuPowerWatts)"
+          badge="功耗"
+          tone="info"
+          icon-name="power"
+          :meter-percent="powerPercent(hardware?.cpuPowerWatts)"
+        />
+        <MetricCard
+          label="CPU 占用"
+          :value="formatPercent(hardware?.cpuUsagePercent)"
+          :hint="formatCpuHint(hardware?.cpuFrequencyMhz, hardware?.cpuPowerWatts)"
+          :badge="usageBadge(hardware?.cpuUsagePercent)"
+          :tone="usageTone(hardware?.cpuUsagePercent)"
+          icon-name="dashboard"
+          :meter-percent="hardware?.cpuUsagePercent"
+        />
+        <MetricCard
+          label="内存已使用"
+          :value="formatMemoryUsage(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+          :hint="formatMemoryHint(hardware?.memoryTotalMb)"
+          :badge="memoryUsageBadge(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+          :tone="memoryUsageTone(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+          icon-name="memory"
+          :meter-percent="getMemoryUsagePercent(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+        />
+        <MetricCard
+          label="最热磁盘温度"
+          :value="formatNullable(hardware?.diskTemperatureC, '°C')"
+          :hint="`已识别 ${hardware?.disks?.length ?? 0} 块磁盘`"
+          :badge="temperatureBadge(hardware?.diskTemperatureC)"
+          :tone="temperatureTone(hardware?.diskTemperatureC)"
+          icon-name="disk"
+          :meter-percent="temperaturePercent(hardware?.diskTemperatureC)"
+        />
       </div>
     </section>
 
-    <section class="dashboard-primary-grid">
-      <section class="dashboard-section dashboard-resource-zone">
-        <div class="section-header section-header-rich">
-          <div>
-            <h3>核心资源状态</h3>
-            <p class="section-subtitle">首页第一屏优先呈现 CPU、内存、温度与磁盘健康度。</p>
-          </div>
-          <span class="section-tag">Core Metrics</span>
-        </div>
-
-        <div class="dashboard-hero-grid page-tier-stats dashboard-resource-grid">
-          <MetricCard
-            label="CPU 当前频率"
-            :value="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
-            :hint="formatCpuNameHint(hardware?.cpuName)"
-            badge="频率"
-            tone="info"
-            icon-name="cpu"
-          />
-          <MetricCard
-            label="CPU 当前温度"
-            :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
-            :hint="formatTemperatureHint(hardware?.cpuTemperatureC)"
-            :badge="temperatureBadge(hardware?.cpuTemperatureC)"
-            :tone="temperatureTone(hardware?.cpuTemperatureC)"
-            icon-name="temperature"
-            :meter-percent="temperaturePercent(hardware?.cpuTemperatureC)"
-          />
-          <MetricCard
-            label="CPU 占用"
-            :value="formatPercent(hardware?.cpuUsagePercent)"
-            :hint="formatCpuHint(hardware?.cpuFrequencyMhz, hardware?.cpuPowerWatts)"
-            :badge="usageBadge(hardware?.cpuUsagePercent)"
-            :tone="usageTone(hardware?.cpuUsagePercent)"
-            icon-name="dashboard"
-            :meter-percent="hardware?.cpuUsagePercent"
-          />
-          <MetricCard
-            label="CPU 当前功耗"
-            :value="formatNullable(hardware?.cpuPowerWatts, 'W')"
-            :hint="formatPowerHint(hardware?.cpuPowerWatts)"
-            badge="功耗"
-            tone="info"
-            icon-name="power"
-            :meter-percent="powerPercent(hardware?.cpuPowerWatts)"
-          />
-          <MetricCard
-            label="内存已使用"
-            :value="formatMemoryUsage(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
-            :hint="formatMemoryHint(hardware?.memoryTotalMb)"
-            :badge="memoryUsageBadge(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
-            :tone="memoryUsageTone(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
-            icon-name="memory"
-            :meter-percent="getMemoryUsagePercent(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
-          />
-          <MetricCard
-            label="最热磁盘温度"
-            :value="formatNullable(hardware?.diskTemperatureC, '°C')"
-            :hint="`已识别 ${hardware?.disks?.length ?? 0} 块磁盘`"
-            :badge="temperatureBadge(hardware?.diskTemperatureC)"
-            :tone="temperatureTone(hardware?.diskTemperatureC)"
-            icon-name="disk"
-            :meter-percent="temperaturePercent(hardware?.diskTemperatureC)"
-          />
-          <MetricCard
-            label="已开机"
-            :value="formatUptime(hardware?.uptimeSeconds)"
-            :hint="`启动时间 ${formatDateTime(bootTimeText)}`"
-            badge="运行"
-            tone="info"
-            icon-name="uptime"
-            small-value
-          />
-        </div>
-      </section>
-
-      <UploadLeaderboardCard class="dashboard-leaderboard-zone" />
-    </section>
-
-    <section class="panel-grid dashboard-storage-grid dashboard-secondary-grid">
+    <section class="panel-grid dashboard-storage-grid">
       <article class="card dashboard-panel-card page-tier-panel">
         <div class="panel-header">
           <div class="panel-title">
@@ -217,7 +196,6 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import MetricCard from '../components/MetricCard.vue';
 import PageHeader from '../components/PageHeader.vue';
-import UploadLeaderboardCard from '../components/UploadLeaderboardCard.vue';
 import { getOverview } from '../services/api';
 import { startRealtimeConnection, subscribeHardwareRealtime } from '../services/realtime';
 import type { DiskSpaceDto, DiskTemperatureDto, RealtimeOverviewDto } from '../types/monitor';
