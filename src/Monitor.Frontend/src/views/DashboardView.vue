@@ -306,8 +306,8 @@ function formatTemperatureHint(temperature?: number | null) {
 
 function formatPowerHint(power?: number | null) {
   if (power == null) return '功耗数据不可用';
-  if (power >= 150) return '高负载运行';
-  if (power >= 80) return '中等负载运行';
+  if (power >= 50) return '高负载运行';
+  if (power >= 25) return '中等负载运行';
   return '低负载 / 空闲状态';
 }
 
@@ -367,7 +367,7 @@ function temperaturePercent(value?: number | null) {
 
 function powerPercent(value?: number | null) {
   if (value == null) return null;
-  return Math.max(0, Math.min(100, (value / 200) * 100));
+  return Math.max(0, Math.min(100, (value / 65) * 100));
 }
 
 function temperatureTone(value?: number | null): 'default' | 'success' | 'warning' | 'danger' {
