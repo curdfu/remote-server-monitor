@@ -46,6 +46,15 @@
           icon-name="cpu"
         />
         <MetricCard
+          label="CPU 占用"
+          :value="formatPercent(hardware?.cpuUsagePercent)"
+          :hint="formatCpuNameHint(hardware?.cpuName)"
+          :badge="usageBadge(hardware?.cpuUsagePercent)"
+          :tone="usageTone(hardware?.cpuUsagePercent)"
+          icon-name="dashboard"
+          :meter-percent="hardware?.cpuUsagePercent"
+        />
+        <MetricCard
           label="CPU 当前温度"
           :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
           :hint="formatTemperatureHint(hardware?.cpuTemperatureC)"
@@ -62,15 +71,6 @@
           tone="info"
           icon-name="power"
           :meter-percent="powerPercent(hardware?.cpuPowerWatts)"
-        />
-        <MetricCard
-          label="CPU 占用"
-          :value="formatPercent(hardware?.cpuUsagePercent)"
-          :hint="formatCpuHint(hardware?.cpuFrequencyMhz, hardware?.cpuPowerWatts)"
-          :badge="usageBadge(hardware?.cpuUsagePercent)"
-          :tone="usageTone(hardware?.cpuUsagePercent)"
-          icon-name="dashboard"
-          :meter-percent="hardware?.cpuUsagePercent"
         />
         <MetricCard
           label="内存已使用"
@@ -285,12 +285,6 @@ function formatMemoryHint(total?: number | null) {
   }
 
   return `总容量 ${total < 1024 ? `${total.toFixed(0)} GB` : `${(total / 1024).toFixed(1)} GB`}`;
-}
-
-function formatCpuHint(frequency?: number | null, power?: number | null) {
-  const frequencyText = formatNullable(frequency, 'MHz');
-  const powerText = formatNullable(power, 'W');
-  return `频率 ${frequencyText} · 功耗 ${powerText}`;
 }
 
 function formatCpuNameHint(name?: string | null) {
