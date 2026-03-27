@@ -2303,6 +2303,55 @@ button:disabled {
   .ratio-overview {
     grid-template-columns: 1fr;
   }
+
+  .network-page {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .network-page > .network-section-filters {
+    order: 1;
+  }
+
+  .network-page > .error-state {
+    order: 2;
+  }
+
+  .network-page > .network-section-analytics {
+    order: 3;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .network-page .network-section-column {
+    width: 100%;
+  }
+
+  .network-page .network-section-column-ranking {
+    order: 1;
+  }
+
+  .network-page .network-section-column-analytics {
+    order: 2;
+  }
+
+  .network-page .network-section-upload-download {
+    order: 2;
+  }
+
+  .network-page .network-section-wan-lan {
+    order: 3;
+  }
+
+  .network-page .network-section-ranking,
+  .network-page .network-section-upload-download,
+  .network-page .network-section-wan-lan {
+    width: 100%;
+    max-width: 100%;
+    align-self: stretch;
+  }
 }
 
 @media (max-width: 960px) {
@@ -2404,55 +2453,6 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
-  .network-page {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .network-page > .network-section-filters {
-    order: 1;
-  }
-
-  .network-page > .error-state {
-    order: 2;
-  }
-
-  .network-page > .network-section-analytics {
-    order: 3;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    align-items: stretch;
-  }
-
-  .network-page .network-section-column {
-    width: 100%;
-  }
-
-  .network-page .network-section-column-ranking {
-    order: 1;
-  }
-
-  .network-page .network-section-column-analytics {
-    order: 2;
-  }
-
-  .network-page .network-section-upload-download {
-    order: 2;
-  }
-
-  .network-page .network-section-wan-lan {
-    order: 3;
-  }
-
-  .network-page .network-section-ranking,
-  .network-page .network-section-upload-download,
-  .network-page .network-section-wan-lan {
-    width: 100%;
-    max-width: 100%;
-    align-self: stretch;
-  }
-
   .network-page .grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
