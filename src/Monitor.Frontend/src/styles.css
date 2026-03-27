@@ -720,6 +720,26 @@ button:disabled {
   gap: 8px;
 }
 
+.dashboard-core-metrics-panel {
+  padding: 16px;
+  background:
+    linear-gradient(135deg, rgba(59, 130, 246, 0.04), rgba(255, 255, 255, 0) 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0)),
+    var(--panel-strong);
+  border-color: color-mix(in srgb, var(--tier-border) 48%, var(--border));
+  box-shadow:
+    var(--shadow-soft),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.dashboard-core-metrics-header {
+  margin-bottom: 12px;
+}
+
+.dashboard-core-metrics-panel-body {
+  min-width: 0;
+}
+
 .section-header {
   display: flex;
   align-items: center;
