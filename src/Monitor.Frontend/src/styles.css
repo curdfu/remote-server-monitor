@@ -250,7 +250,7 @@ button:disabled {
 
 .layout {
   display: grid;
-  grid-template-columns: 290px 1fr;
+  grid-template-columns: 264px 1fr;
   min-height: 100vh;
 }
 
@@ -258,7 +258,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 20px 16px;
+  padding: 18px 14px;
   background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
   position: sticky;
@@ -303,6 +303,9 @@ button:disabled {
   color: var(--text-soft);
   font-size: 12px;
   line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-nav {
@@ -535,10 +538,14 @@ button:disabled {
   gap: 6px;
   font-size: 11px;
   color: var(--text-soft);
+  white-space: nowrap;
 }
 
 .sidebar-mini-card small {
   color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .theme-field {
