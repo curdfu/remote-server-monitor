@@ -563,20 +563,13 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
     const to = toIsoString(filters.to);
     // 这里集中调用网络页相关后端接口：
     // 1. /api/network/apps：获取应用流量排行
-    // 2. /api/network/summary（scope=当前 scope + 当前 direction）：保留原页面请求语义
-    // 3. /api/network/summary（scope=all + 当前 direction）：获取占比面板数据，忽略 scope，但保留时间和方向
-    // 4. /api/network/summary（scope=当前 scope + direction=total）：获取累计上传/下载卡片数据，保持当前范围并忽略方向
-    const [apps, scopedSummaryData, overviewData, totalsData] = await Promise.all([
+    // 2. /api/network/summary（scope=all + 当前 direction）：获取占比面板数据，忽略 scope，但保留时间和方向
+    // 3. /api/network/summary（scope=当前 scope + direction=total）：获取累计上传/下载卡片数据，保持当前范围并忽略方向
+    const [apps, overviewData, totalsData] = await Promise.all([
       getNetworkApps({
         from,
         to,
         topN: filters.topN,
-        scope: filters.scope,
-        direction: filters.direction
-      }),
-      getNetworkSummary({
-        from,
-        to,
         scope: filters.scope,
         direction: filters.direction
       }),
@@ -594,7 +587,6 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
       })
     ]);
 
-    void scopedSummaryData;
     items.value = apps;
     overviewSummary.value = overviewData;
     totalsSummary.value = totalsData;

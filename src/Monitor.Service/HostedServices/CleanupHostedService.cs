@@ -8,8 +8,19 @@ public sealed class CleanupHostedService(
     RetentionService retentionService,
     IMonitorSettingsProvider settings) : BackgroundService
 {
+    private static readonly TimeSpan StartupCleanupDelay = TimeSpan.FromMinutes(5);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        try
+        {
+            await Task.Delay(StartupCleanupDelay, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return;
+        }
+
         await RunCleanupAsync(stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -44,7 +55,18 @@ public sealed class CleanupHostedService(
 
     private async Task RunCleanupAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation("Running cleanup cycle.");
-        await retentionService.CleanupAsync(cancellationToken);
+        try
+        {
+            logger.LogInformation("Running cleanup cycle.");
+            await retentionService.CleanupAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Cleanup cycle failed. The service will retry on the next scheduled cleanup cycle.");
+        }
     }
 }

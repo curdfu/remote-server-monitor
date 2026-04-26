@@ -8,8 +8,10 @@ public static class LoggingBootstrapper
     private static readonly HashSet<string> ImportantInformationSources = new(StringComparer.Ordinal)
     {
         "Monitor.Storage.Services.DatabaseInitializer",
+        "Monitor.Storage.Services.NetworkTrafficRollupHostedService",
         "Monitor.Hardware.Implementations.LibreHardwareCollector",
         "Monitor.Network.Collectors.EtwNetworkCollector",
+        "Monitor.Storage.Repositories.NetworkTrafficRepository",
         "Monitor.Storage.Repositories.SettingsRepository"
     };
 
