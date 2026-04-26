@@ -4,7 +4,7 @@
       iconName="settings"
       kicker="设置"
       title="设置"
-      description="调整端口、采样间隔、统计粒度和历史保留时间。"
+      description="调整端口、硬件采样间隔、统计粒度和历史保留时间。"
     >
       <template #actions>
         <div class="actions-row settings-actions page-tier-toolbar-inline">
@@ -87,10 +87,10 @@
               <span class="panel-icon"><AppIcon name="network" :size="16" /></span>
               <div>
                 <h3>采样与统计</h3>
-                <p class="panel-subtitle">配置硬件和网络数据的采集频率及聚合粒度。</p>
+                <p class="panel-subtitle">配置硬件数据的采集频率和网络历史数据的聚合粒度。</p>
               </div>
             </div>
-            <span class="section-tag">实时采样频率</span>
+            <span class="section-tag">采样与聚合</span>
           </div>
 
           <label class="field">
@@ -98,13 +98,6 @@
             <input v-model.number="form.hardwareSampleIntervalMs" type="number" min="500" max="60000" />
             <small class="field-help">建议 1000ms 左右，兼顾刷新速度和资源占用。</small>
             <small v-if="validation.hardwareSampleIntervalMs" class="field-error">{{ validation.hardwareSampleIntervalMs }}</small>
-          </label>
-
-          <label class="field">
-            <span>网络采样间隔 (ms)</span>
-            <input v-model.number="form.networkSampleIntervalMs" type="number" min="500" max="60000" />
-            <small class="field-help">影响网络实时速率和相关列表的刷新节奏。</small>
-            <small v-if="validation.networkSampleIntervalMs" class="field-error">{{ validation.networkSampleIntervalMs }}</small>
           </label>
 
           <label class="field">
@@ -186,7 +179,6 @@ import type { AppSettingsDto } from '../types/monitor';
 const defaultForm: AppSettingsDto = {
   httpPort: 5188,
   hardwareSampleIntervalMs: 1000,
-  networkSampleIntervalMs: 1000,
   aggregateIntervalSeconds: 10,
   historyRetentionDays: 30,
   topNDefault: 10
@@ -208,10 +200,6 @@ const validation = computed<Record<string, string>>(() => {
 
   if (form.hardwareSampleIntervalMs < 500 || form.hardwareSampleIntervalMs > 60000) {
     errors.hardwareSampleIntervalMs = '硬件采样间隔必须在 500 ~ 60000 ms 之间。';
-  }
-
-  if (form.networkSampleIntervalMs < 500 || form.networkSampleIntervalMs > 60000) {
-    errors.networkSampleIntervalMs = '网络采样间隔必须在 500 ~ 60000 ms 之间。';
   }
 
   if (form.aggregateIntervalSeconds < 1 || form.aggregateIntervalSeconds > 3600) {

@@ -14,6 +14,9 @@ public sealed class NetworkTrafficRepository(
     ILogger<NetworkTrafficRepository> logger)
 {
     private const int AppIdLookupBatchSize = 200;
+    private const int SqlParameterBatchSize = 400;
+    public const int RollupWindowDurationSeconds = 12 * 60 * 60;
+    private static readonly TimeSpan RollupWindowDuration = TimeSpan.FromSeconds(RollupWindowDurationSeconds);
 
     public enum TrafficScopeFilter
     {
@@ -44,6 +47,8 @@ public sealed class NetworkTrafficRepository(
         var transaction = (SqliteTransaction)transactionHandle;
 
         var appIds = await UpsertAppRegistryAndGetIdsAsync(connection, transaction, buckets, cancellationToken);
+        var currentRollupWindowStart = AlignDownToRollupWindow(DateTimeOffset.UtcNow);
+        var affectedCompletedRollupWindows = new HashSet<DateTimeOffset>();
 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -78,7 +83,8 @@ public sealed class NetworkTrafficRepository(
 
         foreach (var bucket in buckets)
         {
-            bucketStartTimeParameter.Value = bucket.BucketStartTime.ToString("O");
+            var bucketStartTime = bucket.BucketStartTime.ToUniversalTime();
+            bucketStartTimeParameter.Value = ToDbTime(bucketStartTime);
             bucketGranularityParameter.Value = bucket.BucketGranularitySeconds;
             appIdParameter.Value = appIds[bucket.AppKey];
             directionParameter.Value = MapDirection(bucket.Direction);
@@ -86,7 +92,19 @@ public sealed class NetworkTrafficRepository(
             bytesParameter.Value = bucket.Bytes;
             packetsParameter.Value = bucket.Packets;
             await command.ExecuteNonQueryAsync(cancellationToken);
+
+            var bucketRollupWindowStart = AlignDownToRollupWindow(bucketStartTime);
+            if (bucketRollupWindowStart < currentRollupWindowStart)
+            {
+                affectedCompletedRollupWindows.Add(bucketRollupWindowStart);
+            }
         }
+
+        await InvalidateCompletedRollupWindowsAsync(
+            connection,
+            transaction,
+            affectedCompletedRollupWindows,
+            cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
         logger.LogDebug("Inserted {Count} network traffic buckets into SQLite.", buckets.Count);
@@ -118,8 +136,8 @@ public sealed class NetworkTrafficRepository(
                               ORDER BY n.bucket_start_time ASC, a.app_key ASC;
                               """;
 
-        command.Parameters.AddWithValue("$from", from.ToString("O"));
-        command.Parameters.AddWithValue("$to", to.ToString("O"));
+        command.Parameters.AddWithValue("$from", ToDbTime(from));
+        command.Parameters.AddWithValue("$to", ToDbTime(to));
         command.Parameters.AddWithValue("$appKey", string.IsNullOrWhiteSpace(appKey) ? DBNull.Value : appKey);
 
         var results = new List<TrafficBucket>();
@@ -152,45 +170,17 @@ public sealed class NetworkTrafficRepository(
         await using var connection = dbConnectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
-        var orderByExpression = GetOrderByExpression(scopeFilter, directionFilter);
-
-        var sql = """
-                  SELECT a.app_key,
-                         a.process_name,
-                         a.display_name,
-                         SUM(CASE WHEN n.direction = 'outbound' THEN n.bytes ELSE 0 END) AS total_upload_bytes,
-                         SUM(CASE WHEN n.direction = 'inbound' THEN n.bytes ELSE 0 END) AS total_download_bytes,
-                         SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'wan' THEN n.bytes ELSE 0 END) AS wan_upload_bytes,
-                         SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'wan' THEN n.bytes ELSE 0 END) AS wan_download_bytes,
-                         SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END) AS lan_upload_bytes,
-                         SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END) AS lan_download_bytes,
-                         SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'loopback' THEN n.bytes ELSE 0 END) AS loopback_upload_bytes,
-                         SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'loopback' THEN n.bytes ELSE 0 END) AS loopback_download_bytes,
-                         SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'other' THEN n.bytes ELSE 0 END) AS other_upload_bytes,
-                         SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'other' THEN n.bytes ELSE 0 END) AS other_download_bytes
-                  FROM network_usage_agg n
-                  JOIN app_registry a ON a.id = n.app_id
-                  WHERE n.bucket_start_time >= $from
-                    AND n.bucket_start_time < $to
-                  GROUP BY a.app_key, a.process_name, a.display_name
-                  ORDER BY
-                  """;
-
-        sql += Environment.NewLine + orderByExpression + " DESC, a.process_name ASC";
-
-        if (topN is > 0)
-        {
-            sql += Environment.NewLine + "LIMIT $topN";
-        }
-
         await using var command = connection.CreateCommand();
-        command.CommandText = sql + ";";
-        command.Parameters.AddWithValue("$from", from.ToString("O"));
-        command.Parameters.AddWithValue("$to", to.ToString("O"));
+        var trafficSourceSql = await BuildTrafficSourceSqlAsync(connection, command, from, to, cancellationToken);
 
         if (topN is > 0)
         {
+            command.CommandText = BuildTopAppSummariesSql(trafficSourceSql, command, scopeFilter, directionFilter);
             command.Parameters.AddWithValue("$topN", topN.Value);
+        }
+        else
+        {
+            command.CommandText = BuildAllAppSummariesSql(trafficSourceSql, scopeFilter, directionFilter);
         }
 
         var results = new List<AppTrafficPeriodSummary>();
@@ -229,83 +219,77 @@ public sealed class NetworkTrafficRepository(
         await connection.OpenAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
-        command.CommandText = """
-                              SELECT COALESCE(SUM(CASE
-                                                      WHEN $directionFilter <> 'download' AND n.direction = 'outbound'
-                                                      THEN n.bytes
-                                                      ELSE 0
-                                                  END), 0) AS total_upload_bytes,
-                                     COALESCE(SUM(CASE
-                                                      WHEN $directionFilter <> 'upload' AND n.direction = 'inbound'
-                                                      THEN n.bytes
-                                                      ELSE 0
-                                                  END), 0) AS total_download_bytes,
-                                     COALESCE(SUM(CASE
-                                                      WHEN $directionFilter <> 'download'
-                                                           AND n.direction = 'outbound'
-                                                           AND n.scope_type = 'wan'
-                                                      THEN n.bytes
-                                                      ELSE 0
-                                                  END), 0) AS wan_upload_bytes,
-                                     COALESCE(SUM(CASE
-                                                      WHEN $directionFilter <> 'upload'
-                                                           AND n.direction = 'inbound'
-                                                           AND n.scope_type = 'wan'
-                                                      THEN n.bytes
-                                                      ELSE 0
-                                                  END), 0) AS wan_download_bytes,
-                                     COALESCE(SUM(CASE
-                                                      WHEN $directionFilter <> 'download'
-                                                           AND n.direction = 'outbound'
-                                                           AND n.scope_type = 'lan'
-                                                      THEN n.bytes
-                                                      ELSE 0
-                                                  END), 0) AS lan_upload_bytes,
-                                     COALESCE(SUM(CASE
-                                                      WHEN $directionFilter <> 'upload'
-                                                           AND n.direction = 'inbound'
-                                                           AND n.scope_type = 'lan'
-                                                      THEN n.bytes
-                                                      ELSE 0
-                                                  END), 0) AS lan_download_bytes,
-                                     COALESCE(SUM(CASE
-                                                      WHEN $directionFilter <> 'download'
-                                                           AND n.direction = 'outbound'
-                                                           AND n.scope_type = 'loopback'
-                                                      THEN n.bytes
-                                                      ELSE 0
-                                                  END), 0) AS loopback_upload_bytes,
-                                     COALESCE(SUM(CASE
-                                                      WHEN $directionFilter <> 'upload'
-                                                           AND n.direction = 'inbound'
-                                                           AND n.scope_type = 'loopback'
-                                                      THEN n.bytes
-                                                      ELSE 0
-                                                  END), 0) AS loopback_download_bytes,
-                                     COALESCE(SUM(CASE
-                                                      WHEN $directionFilter <> 'download'
-                                                           AND n.direction = 'outbound'
-                                                           AND n.scope_type = 'other'
-                                                      THEN n.bytes
-                                                      ELSE 0
-                                                  END), 0) AS other_upload_bytes,
-                                     COALESCE(SUM(CASE
-                                                      WHEN $directionFilter <> 'upload'
-                                                           AND n.direction = 'inbound'
-                                                           AND n.scope_type = 'other'
-                                                      THEN n.bytes
-                                                      ELSE 0
-                                                  END), 0) AS other_download_bytes
-                              FROM network_usage_agg n
-                              WHERE n.bucket_start_time >= $from
-                                AND n.bucket_start_time < $to
-                                AND ($scopeType IS NULL OR n.scope_type = $scopeType);
-                              """;
-
-        command.Parameters.AddWithValue("$from", from.ToString("O"));
-        command.Parameters.AddWithValue("$to", to.ToString("O"));
-        command.Parameters.AddWithValue("$scopeType", MapScopeFilterToDbValue(scopeFilter));
-        command.Parameters.AddWithValue("$directionFilter", MapDirectionFilter(directionFilter));
+        var trafficSourceSql = await BuildTrafficSourceSqlAsync(connection, command, from, to, cancellationToken);
+        var sqlBuilder = new StringBuilder("""
+                                           WITH traffic AS (
+                                           """);
+        sqlBuilder.AppendLine(trafficSourceSql);
+        sqlBuilder.AppendLine("""
+                                           )
+                                           SELECT COALESCE(SUM(CASE
+                                                                   WHEN t.direction = 'outbound'
+                                                                   THEN t.bytes
+                                                                   ELSE 0
+                                                               END), 0) AS total_upload_bytes,
+                                                  COALESCE(SUM(CASE
+                                                                   WHEN t.direction = 'inbound'
+                                                                   THEN t.bytes
+                                                                   ELSE 0
+                                                               END), 0) AS total_download_bytes,
+                                                  COALESCE(SUM(CASE
+                                                                   WHEN t.direction = 'outbound'
+                                                                        AND t.scope_type = 'wan'
+                                                                   THEN t.bytes
+                                                                   ELSE 0
+                                                               END), 0) AS wan_upload_bytes,
+                                                  COALESCE(SUM(CASE
+                                                                   WHEN t.direction = 'inbound'
+                                                                        AND t.scope_type = 'wan'
+                                                                   THEN t.bytes
+                                                                   ELSE 0
+                                                               END), 0) AS wan_download_bytes,
+                                                  COALESCE(SUM(CASE
+                                                                   WHEN t.direction = 'outbound'
+                                                                        AND t.scope_type = 'lan'
+                                                                   THEN t.bytes
+                                                                   ELSE 0
+                                                               END), 0) AS lan_upload_bytes,
+                                                  COALESCE(SUM(CASE
+                                                                   WHEN t.direction = 'inbound'
+                                                                        AND t.scope_type = 'lan'
+                                                                   THEN t.bytes
+                                                                   ELSE 0
+                                                               END), 0) AS lan_download_bytes,
+                                                  COALESCE(SUM(CASE
+                                                                   WHEN t.direction = 'outbound'
+                                                                        AND t.scope_type = 'loopback'
+                                                                   THEN t.bytes
+                                                                   ELSE 0
+                                                               END), 0) AS loopback_upload_bytes,
+                                                  COALESCE(SUM(CASE
+                                                                   WHEN t.direction = 'inbound'
+                                                                        AND t.scope_type = 'loopback'
+                                                                   THEN t.bytes
+                                                                   ELSE 0
+                                                               END), 0) AS loopback_download_bytes,
+                                                  COALESCE(SUM(CASE
+                                                                   WHEN t.direction = 'outbound'
+                                                                        AND t.scope_type = 'other'
+                                                                   THEN t.bytes
+                                                                   ELSE 0
+                                                               END), 0) AS other_upload_bytes,
+                                                  COALESCE(SUM(CASE
+                                                                   WHEN t.direction = 'inbound'
+                                                                        AND t.scope_type = 'other'
+                                                                   THEN t.bytes
+                                                                   ELSE 0
+                                                               END), 0) AS other_download_bytes
+                                           FROM traffic t
+                                           WHERE 1 = 1
+                                           """);
+        AppendTrafficFilters(sqlBuilder, command, scopeFilter, directionFilter, "t");
+        sqlBuilder.Append(';');
+        command.CommandText = sqlBuilder.ToString();
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
@@ -326,6 +310,68 @@ public sealed class NetworkTrafficRepository(
             OtherUploadBytes = reader.GetInt64(8),
             OtherDownloadBytes = reader.GetInt64(9)
         };
+    }
+
+    public async Task<int> RollupCompletedWindowsAsync(
+        int maxWindows,
+        CancellationToken cancellationToken = default)
+    {
+        if (maxWindows <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxWindows), maxWindows, "Rollup window count must be positive.");
+        }
+
+        await using var connection = dbConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        var earliestBucketTime = await GetEarliestBucketTimeAsync(connection, cancellationToken);
+        if (earliestBucketTime is null)
+        {
+            return 0;
+        }
+
+        var firstEligibleWindowStart = AlignUpToRollupWindow(earliestBucketTime.Value);
+        var currentWindowStart = AlignDownToRollupWindow(DateTimeOffset.UtcNow);
+        if (firstEligibleWindowStart >= currentWindowStart)
+        {
+            return 0;
+        }
+
+        var existingWindowStarts = await GetRollupWindowMarkerStartsAsync(
+            connection,
+            firstEligibleWindowStart,
+            currentWindowStart,
+            cancellationToken);
+
+        var processed = 0;
+        var firstProcessedWindowStart = (DateTimeOffset?)null;
+        var lastProcessedWindowStart = (DateTimeOffset?)null;
+
+        for (var windowStart = firstEligibleWindowStart;
+             windowStart < currentWindowStart && processed < maxWindows;
+             windowStart = windowStart.Add(RollupWindowDuration))
+        {
+            if (existingWindowStarts.Contains(windowStart))
+            {
+                continue;
+            }
+
+            await RollupWindowAsync(connection, windowStart, cancellationToken);
+            firstProcessedWindowStart ??= windowStart;
+            lastProcessedWindowStart = windowStart;
+            processed++;
+        }
+
+        if (processed > 0)
+        {
+            logger.LogInformation(
+                "Rolled up {WindowCount} completed 12-hour network traffic window(s). FirstWindowStart={FirstWindowStart}, LastWindowStart={LastWindowStart}.",
+                processed,
+                firstProcessedWindowStart,
+                lastProcessedWindowStart);
+        }
+
+        return processed;
     }
 
     public async Task UpsertAppRegistryAsync(
@@ -501,51 +547,571 @@ public sealed class NetworkTrafficRepository(
         return appIds;
     }
 
-    private static string GetOrderByExpression(TrafficScopeFilter scopeFilter, TrafficDirectionFilter directionFilter)
+    private static async Task<string> BuildTrafficSourceSqlAsync(
+        SqliteConnection connection,
+        SqliteCommand command,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        CancellationToken cancellationToken)
+    {
+        var plan = await BuildTrafficSourcePlanAsync(
+            connection,
+            from.ToUniversalTime(),
+            to.ToUniversalTime(),
+            cancellationToken);
+
+        var sourceQueries = new List<string>();
+        if (plan.RollupWindowStarts.Count > 0)
+        {
+            var rollupParameterNames = AddRollupWindowParameters(command, plan.RollupWindowStarts);
+            sourceQueries.Add($"""
+                               SELECT r.app_id,
+                                      r.direction,
+                                      r.scope_type,
+                                      r.bytes
+                               FROM network_usage_rollup_12h r
+                               WHERE r.window_start_time IN ({string.Join(", ", rollupParameterNames)})
+                               """);
+        }
+
+        for (var index = 0; index < plan.RawRanges.Count; index++)
+        {
+            var range = plan.RawRanges[index];
+            var fromParameterName = $"$rawFrom{index}";
+            var toParameterName = $"$rawTo{index}";
+            command.Parameters.AddWithValue(fromParameterName, ToDbTime(range.From));
+            command.Parameters.AddWithValue(toParameterName, ToDbTime(range.To));
+
+            sourceQueries.Add($"""
+                               SELECT n.app_id,
+                                      n.direction,
+                                      n.scope_type,
+                                      n.bytes
+                               FROM network_usage_agg n
+                               WHERE n.bucket_start_time >= {fromParameterName}
+                                 AND n.bucket_start_time < {toParameterName}
+                               """);
+        }
+
+        if (sourceQueries.Count == 0)
+        {
+            return """
+                   SELECT n.app_id,
+                          n.direction,
+                          n.scope_type,
+                          n.bytes
+                   FROM network_usage_agg n
+                   WHERE 0 = 1
+                   """;
+        }
+
+        return string.Join($"{Environment.NewLine}UNION ALL{Environment.NewLine}", sourceQueries);
+    }
+
+    private static async Task<TrafficSourcePlan> BuildTrafficSourcePlanAsync(
+        SqliteConnection connection,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        CancellationToken cancellationToken)
+    {
+        if (from >= to)
+        {
+            return new TrafficSourcePlan([], []);
+        }
+
+        var rawRanges = new List<TimeRange>();
+        var rollupWindowStarts = new List<DateTimeOffset>();
+        var firstFullWindowStart = AlignUpToRollupWindow(from);
+        var firstPartialWindowEnd = firstFullWindowStart < to ? firstFullWindowStart : to;
+        var fullWindowEnd = AlignDownToRollupWindow(to);
+
+        if (from < firstPartialWindowEnd)
+        {
+            rawRanges.Add(new TimeRange(from, firstPartialWindowEnd));
+        }
+
+        if (firstFullWindowStart < fullWindowEnd)
+        {
+            var candidateWindowStarts = EnumerateRollupWindowStarts(firstFullWindowStart, fullWindowEnd).ToArray();
+            var completedWindowStarts = await QueryCompletedRollupWindowStartsAsync(
+                connection,
+                candidateWindowStarts,
+                cancellationToken);
+
+            foreach (var windowStart in candidateWindowStarts)
+            {
+                if (completedWindowStarts.Contains(windowStart))
+                {
+                    rollupWindowStarts.Add(windowStart);
+                    continue;
+                }
+
+                rawRanges.Add(new TimeRange(windowStart, windowStart.Add(RollupWindowDuration)));
+            }
+        }
+
+        if (fullWindowEnd < to)
+        {
+            var lastPartialWindowStart = fullWindowEnd > from ? fullWindowEnd : from;
+            if (lastPartialWindowStart < to)
+            {
+                rawRanges.Add(new TimeRange(lastPartialWindowStart, to));
+            }
+        }
+
+        return new TrafficSourcePlan(rollupWindowStarts, MergeTimeRanges(rawRanges));
+    }
+
+    private static async Task<HashSet<DateTimeOffset>> QueryCompletedRollupWindowStartsAsync(
+        SqliteConnection connection,
+        IReadOnlyList<DateTimeOffset> windowStarts,
+        CancellationToken cancellationToken)
+    {
+        var completedWindowStarts = new HashSet<DateTimeOffset>();
+        if (windowStarts.Count == 0)
+        {
+            return completedWindowStarts;
+        }
+
+        for (var offset = 0; offset < windowStarts.Count; offset += SqlParameterBatchSize)
+        {
+            var count = Math.Min(SqlParameterBatchSize, windowStarts.Count - offset);
+            await using var command = connection.CreateCommand();
+            var sqlBuilder = new StringBuilder();
+            sqlBuilder.Append("SELECT window_start_time FROM network_usage_rollup_12h_windows WHERE window_start_time IN (");
+
+            for (var index = 0; index < count; index++)
+            {
+                if (index > 0)
+                {
+                    sqlBuilder.Append(", ");
+                }
+
+                var parameterName = $"$windowStart{index}";
+                sqlBuilder.Append(parameterName);
+                command.Parameters.AddWithValue(parameterName, ToDbTime(windowStarts[offset + index]));
+            }
+
+            sqlBuilder.Append(");");
+            command.CommandText = sqlBuilder.ToString();
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                completedWindowStarts.Add(reader.GetDateTimeOffset(0).ToUniversalTime());
+            }
+        }
+
+        return completedWindowStarts;
+    }
+
+    private static IReadOnlyList<string> AddRollupWindowParameters(
+        SqliteCommand command,
+        IReadOnlyList<DateTimeOffset> windowStarts)
+    {
+        var parameterNames = new List<string>(windowStarts.Count);
+        for (var index = 0; index < windowStarts.Count; index++)
+        {
+            var parameterName = $"$rollupWindow{index}";
+            command.Parameters.AddWithValue(parameterName, ToDbTime(windowStarts[index]));
+            parameterNames.Add(parameterName);
+        }
+
+        return parameterNames;
+    }
+
+    private static IReadOnlyList<TimeRange> MergeTimeRanges(IReadOnlyList<TimeRange> ranges)
+    {
+        if (ranges.Count <= 1)
+        {
+            return ranges;
+        }
+
+        var orderedRanges = ranges
+            .Where(static range => range.From < range.To)
+            .OrderBy(static range => range.From)
+            .ToArray();
+
+        if (orderedRanges.Length == 0)
+        {
+            return [];
+        }
+
+        var mergedRanges = new List<TimeRange>();
+        var current = orderedRanges[0];
+        for (var index = 1; index < orderedRanges.Length; index++)
+        {
+            var next = orderedRanges[index];
+            if (next.From <= current.To)
+            {
+                current = new TimeRange(current.From, next.To > current.To ? next.To : current.To);
+                continue;
+            }
+
+            mergedRanges.Add(current);
+            current = next;
+        }
+
+        mergedRanges.Add(current);
+        return mergedRanges;
+    }
+
+    private static async Task<DateTimeOffset?> GetEarliestBucketTimeAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+                              SELECT bucket_start_time
+                              FROM network_usage_agg
+                              ORDER BY bucket_start_time ASC
+                              LIMIT 1;
+                              """;
+
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result is null or DBNull ? null : DateTimeOffset.Parse((string)result).ToUniversalTime();
+    }
+
+    private static async Task<HashSet<DateTimeOffset>> GetRollupWindowMarkerStartsAsync(
+        SqliteConnection connection,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        CancellationToken cancellationToken)
+    {
+        var windowStarts = new HashSet<DateTimeOffset>();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+                              SELECT window_start_time
+                              FROM network_usage_rollup_12h_windows
+                              WHERE window_start_time >= $from
+                                AND window_start_time < $to;
+                              """;
+        command.Parameters.AddWithValue("$from", ToDbTime(from));
+        command.Parameters.AddWithValue("$to", ToDbTime(to));
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            windowStarts.Add(reader.GetDateTimeOffset(0).ToUniversalTime());
+        }
+
+        return windowStarts;
+    }
+
+    private static async Task RollupWindowAsync(
+        SqliteConnection connection,
+        DateTimeOffset windowStart,
+        CancellationToken cancellationToken)
+    {
+        var windowEnd = windowStart.Add(RollupWindowDuration);
+        var updatedAt = DateTimeOffset.UtcNow;
+
+        await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);
+        var transaction = (SqliteTransaction)transactionHandle;
+
+        await DeleteRollupWindowAsync(connection, transaction, windowStart, cancellationToken);
+
+        await using (var insertCommand = connection.CreateCommand())
+        {
+            insertCommand.Transaction = transaction;
+            insertCommand.CommandText = """
+                                        INSERT INTO network_usage_rollup_12h (
+                                            window_start_time,
+                                            window_duration_seconds,
+                                            app_id,
+                                            direction,
+                                            scope_type,
+                                            bytes,
+                                            packets,
+                                            source_bucket_count,
+                                            updated_at
+                                        )
+                                        SELECT $windowStart,
+                                               $windowDurationSeconds,
+                                               app_id,
+                                               direction,
+                                               scope_type,
+                                               SUM(bytes),
+                                               COALESCE(SUM(packets), 0),
+                                               COUNT(*),
+                                               $updatedAt
+                                        FROM network_usage_agg
+                                        WHERE bucket_start_time >= $windowStart
+                                          AND bucket_start_time < $windowEnd
+                                        GROUP BY app_id, direction, scope_type;
+                                        """;
+            insertCommand.Parameters.AddWithValue("$windowStart", ToDbTime(windowStart));
+            insertCommand.Parameters.AddWithValue("$windowEnd", ToDbTime(windowEnd));
+            insertCommand.Parameters.AddWithValue("$windowDurationSeconds", RollupWindowDurationSeconds);
+            insertCommand.Parameters.AddWithValue("$updatedAt", ToDbTime(updatedAt));
+            await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var sourceBucketCount = await GetRollupSourceBucketCountAsync(
+            connection,
+            transaction,
+            windowStart,
+            cancellationToken);
+
+        await using (var markerCommand = connection.CreateCommand())
+        {
+            markerCommand.Transaction = transaction;
+            markerCommand.CommandText = """
+                                        INSERT INTO network_usage_rollup_12h_windows (
+                                            window_start_time,
+                                            window_end_time,
+                                            source_bucket_count,
+                                            updated_at
+                                        )
+                                        VALUES (
+                                            $windowStart,
+                                            $windowEnd,
+                                            $sourceBucketCount,
+                                            $updatedAt
+                                        )
+                                        ON CONFLICT(window_start_time) DO UPDATE SET
+                                            window_end_time = excluded.window_end_time,
+                                            source_bucket_count = excluded.source_bucket_count,
+                                            updated_at = excluded.updated_at;
+                                        """;
+            markerCommand.Parameters.AddWithValue("$windowStart", ToDbTime(windowStart));
+            markerCommand.Parameters.AddWithValue("$windowEnd", ToDbTime(windowEnd));
+            markerCommand.Parameters.AddWithValue("$sourceBucketCount", sourceBucketCount);
+            markerCommand.Parameters.AddWithValue("$updatedAt", ToDbTime(updatedAt));
+            await markerCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task<long> GetRollupSourceBucketCountAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        DateTimeOffset windowStart,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+                              SELECT COALESCE(SUM(source_bucket_count), 0)
+                              FROM network_usage_rollup_12h
+                              WHERE window_start_time = $windowStart;
+                              """;
+        command.Parameters.AddWithValue("$windowStart", ToDbTime(windowStart));
+
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result is null or DBNull ? 0 : Convert.ToInt64(result);
+    }
+
+    private static async Task InvalidateCompletedRollupWindowsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyCollection<DateTimeOffset> windowStarts,
+        CancellationToken cancellationToken)
+    {
+        foreach (var windowStart in windowStarts)
+        {
+            await DeleteRollupWindowAsync(connection, transaction, windowStart, cancellationToken);
+        }
+    }
+
+    private static async Task DeleteRollupWindowAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        DateTimeOffset windowStart,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+                              DELETE FROM network_usage_rollup_12h
+                              WHERE window_start_time = $windowStart;
+
+                              DELETE FROM network_usage_rollup_12h_windows
+                              WHERE window_start_time = $windowStart;
+                              """;
+        command.Parameters.AddWithValue("$windowStart", ToDbTime(windowStart));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static string BuildTopAppSummariesSql(
+        string trafficSourceSql,
+        SqliteCommand command,
+        TrafficScopeFilter scopeFilter,
+        TrafficDirectionFilter directionFilter)
+    {
+        var sqlBuilder = new StringBuilder("""
+                                           WITH traffic AS (
+                                           """);
+        sqlBuilder.AppendLine(trafficSourceSql);
+        sqlBuilder.AppendLine("""
+                                           ),
+                                           ranked_apps AS (
+                                               SELECT t.app_id,
+                                                      SUM(t.bytes) AS rank_bytes
+                                               FROM traffic t
+                                               WHERE 1 = 1
+                                           """);
+
+        AppendTrafficFilters(sqlBuilder, command, scopeFilter, directionFilter, "t");
+
+        sqlBuilder.AppendLine("""
+                                               GROUP BY t.app_id
+                                               HAVING rank_bytes > 0
+                                               ORDER BY rank_bytes DESC
+                                               LIMIT $topN
+                                           )
+                                           SELECT a.app_key,
+                                                  a.process_name,
+                                                  a.display_name,
+                                                  SUM(CASE WHEN t.direction = 'outbound' THEN t.bytes ELSE 0 END) AS total_upload_bytes,
+                                                  SUM(CASE WHEN t.direction = 'inbound' THEN t.bytes ELSE 0 END) AS total_download_bytes,
+                                                  SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wan_upload_bytes,
+                                                  SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wan_download_bytes,
+                                                  SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'lan' THEN t.bytes ELSE 0 END) AS lan_upload_bytes,
+                                                  SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'lan' THEN t.bytes ELSE 0 END) AS lan_download_bytes,
+                                                  SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'loopback' THEN t.bytes ELSE 0 END) AS loopback_upload_bytes,
+                                                  SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'loopback' THEN t.bytes ELSE 0 END) AS loopback_download_bytes,
+                                                  SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS other_upload_bytes,
+                                                  SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS other_download_bytes
+                                           FROM ranked_apps r
+                                           JOIN app_registry a ON a.id = r.app_id
+                                           JOIN traffic t ON t.app_id = r.app_id
+                                           GROUP BY a.app_key, a.process_name, a.display_name, r.rank_bytes
+                                           ORDER BY r.rank_bytes DESC, a.process_name ASC;
+                                           """);
+
+        return sqlBuilder.ToString();
+    }
+
+    private static string BuildAllAppSummariesSql(
+        string trafficSourceSql,
+        TrafficScopeFilter scopeFilter,
+        TrafficDirectionFilter directionFilter)
+    {
+        var orderByExpression = GetOrderByExpression(scopeFilter, directionFilter, "t");
+        var sql = """
+                  WITH traffic AS (
+                  """;
+        sql += Environment.NewLine + trafficSourceSql + Environment.NewLine;
+        sql += """
+                  )
+                  SELECT a.app_key,
+                         a.process_name,
+                         a.display_name,
+                         SUM(CASE WHEN t.direction = 'outbound' THEN t.bytes ELSE 0 END) AS total_upload_bytes,
+                         SUM(CASE WHEN t.direction = 'inbound' THEN t.bytes ELSE 0 END) AS total_download_bytes,
+                         SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wan_upload_bytes,
+                         SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wan_download_bytes,
+                         SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'lan' THEN t.bytes ELSE 0 END) AS lan_upload_bytes,
+                         SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'lan' THEN t.bytes ELSE 0 END) AS lan_download_bytes,
+                         SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'loopback' THEN t.bytes ELSE 0 END) AS loopback_upload_bytes,
+                         SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'loopback' THEN t.bytes ELSE 0 END) AS loopback_download_bytes,
+                         SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS other_upload_bytes,
+                         SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS other_download_bytes
+                  FROM traffic t
+                  JOIN app_registry a ON a.id = t.app_id
+                  GROUP BY a.app_key, a.process_name, a.display_name
+                  ORDER BY
+                  """;
+
+        return sql + Environment.NewLine + orderByExpression + " DESC, a.process_name ASC;";
+    }
+
+    private static void AppendTrafficFilters(
+        StringBuilder sqlBuilder,
+        SqliteCommand command,
+        TrafficScopeFilter scopeFilter,
+        TrafficDirectionFilter directionFilter,
+        string tableAlias)
+    {
+        if (scopeFilter is not TrafficScopeFilter.All)
+        {
+            sqlBuilder.AppendLine($"  AND {tableAlias}.scope_type = $scopeType");
+            command.Parameters.AddWithValue("$scopeType", MapScopeFilterToDbScope(scopeFilter));
+        }
+
+        if (directionFilter is not TrafficDirectionFilter.Total)
+        {
+            sqlBuilder.AppendLine($"  AND {tableAlias}.direction = $direction");
+            command.Parameters.AddWithValue("$direction", MapDirectionFilterToDbDirection(directionFilter));
+        }
+    }
+
+    private static string GetOrderByExpression(
+        TrafficScopeFilter scopeFilter,
+        TrafficDirectionFilter directionFilter,
+        string tableAlias)
     {
         return (scopeFilter, directionFilter) switch
         {
             (TrafficScopeFilter.Wan, TrafficDirectionFilter.Upload) =>
-                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.direction = 'outbound' AND {tableAlias}.scope_type = 'wan' THEN {tableAlias}.bytes ELSE 0 END)",
             (TrafficScopeFilter.Wan, TrafficDirectionFilter.Download) =>
-                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.direction = 'inbound' AND {tableAlias}.scope_type = 'wan' THEN {tableAlias}.bytes ELSE 0 END)",
             (TrafficScopeFilter.Wan, TrafficDirectionFilter.Total) =>
-                "SUM(CASE WHEN n.scope_type = 'wan' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.scope_type = 'wan' THEN {tableAlias}.bytes ELSE 0 END)",
             (TrafficScopeFilter.Lan, TrafficDirectionFilter.Upload) =>
-                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.direction = 'outbound' AND {tableAlias}.scope_type = 'lan' THEN {tableAlias}.bytes ELSE 0 END)",
             (TrafficScopeFilter.Lan, TrafficDirectionFilter.Download) =>
-                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.direction = 'inbound' AND {tableAlias}.scope_type = 'lan' THEN {tableAlias}.bytes ELSE 0 END)",
             (TrafficScopeFilter.Lan, TrafficDirectionFilter.Total) =>
-                "SUM(CASE WHEN n.scope_type = 'lan' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.scope_type = 'lan' THEN {tableAlias}.bytes ELSE 0 END)",
             (TrafficScopeFilter.Loopback, TrafficDirectionFilter.Upload) =>
-                "SUM(CASE WHEN n.direction = 'outbound' AND n.scope_type = 'loopback' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.direction = 'outbound' AND {tableAlias}.scope_type = 'loopback' THEN {tableAlias}.bytes ELSE 0 END)",
             (TrafficScopeFilter.Loopback, TrafficDirectionFilter.Download) =>
-                "SUM(CASE WHEN n.direction = 'inbound' AND n.scope_type = 'loopback' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.direction = 'inbound' AND {tableAlias}.scope_type = 'loopback' THEN {tableAlias}.bytes ELSE 0 END)",
             (TrafficScopeFilter.Loopback, TrafficDirectionFilter.Total) =>
-                "SUM(CASE WHEN n.scope_type = 'loopback' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.scope_type = 'loopback' THEN {tableAlias}.bytes ELSE 0 END)",
             (TrafficScopeFilter.All, TrafficDirectionFilter.Upload) =>
-                "SUM(CASE WHEN n.direction = 'outbound' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.direction = 'outbound' THEN {tableAlias}.bytes ELSE 0 END)",
             (TrafficScopeFilter.All, TrafficDirectionFilter.Download) =>
-                "SUM(CASE WHEN n.direction = 'inbound' THEN n.bytes ELSE 0 END)",
+                $"SUM(CASE WHEN {tableAlias}.direction = 'inbound' THEN {tableAlias}.bytes ELSE 0 END)",
             _ =>
-                "SUM(n.bytes)"
+                $"SUM({tableAlias}.bytes)"
         };
     }
 
-    private static object MapScopeFilterToDbValue(TrafficScopeFilter scopeFilter) => scopeFilter switch
+    private static string MapScopeFilterToDbScope(TrafficScopeFilter scopeFilter) => scopeFilter switch
     {
         TrafficScopeFilter.Wan => "wan",
         TrafficScopeFilter.Lan => "lan",
         TrafficScopeFilter.Loopback => "loopback",
-        _ => DBNull.Value
+        _ => throw new ArgumentOutOfRangeException(nameof(scopeFilter), scopeFilter, null)
     };
 
-    private static string MapDirectionFilter(TrafficDirectionFilter directionFilter) => directionFilter switch
+    private static string MapDirectionFilterToDbDirection(TrafficDirectionFilter directionFilter) => directionFilter switch
     {
-        TrafficDirectionFilter.Upload => "upload",
-        TrafficDirectionFilter.Download => "download",
-        _ => "total"
+        TrafficDirectionFilter.Upload => "outbound",
+        TrafficDirectionFilter.Download => "inbound",
+        _ => throw new ArgumentOutOfRangeException(nameof(directionFilter), directionFilter, null)
     };
+
+    private static DateTimeOffset AlignDownToRollupWindow(DateTimeOffset value)
+    {
+        var utcValue = value.ToUniversalTime();
+        var alignedTicks = utcValue.Ticks - utcValue.Ticks % RollupWindowDuration.Ticks;
+        return new DateTimeOffset(alignedTicks, TimeSpan.Zero);
+    }
+
+    private static DateTimeOffset AlignUpToRollupWindow(DateTimeOffset value)
+    {
+        var utcValue = value.ToUniversalTime();
+        var alignedValue = AlignDownToRollupWindow(utcValue);
+        return alignedValue == utcValue ? alignedValue : alignedValue.Add(RollupWindowDuration);
+    }
+
+    private static IEnumerable<DateTimeOffset> EnumerateRollupWindowStarts(
+        DateTimeOffset from,
+        DateTimeOffset to)
+    {
+        for (var windowStart = from; windowStart < to; windowStart = windowStart.Add(RollupWindowDuration))
+        {
+            yield return windowStart;
+        }
+    }
+
+    private static string ToDbTime(DateTimeOffset value) => value.ToUniversalTime().ToString("O");
 
     private static object ToDbValue(string? value) => string.IsNullOrWhiteSpace(value) ? DBNull.Value : value;
 
@@ -578,4 +1144,10 @@ public sealed class NetworkTrafficRepository(
         "loopback" => AddressScopeType.Loopback,
         _ => AddressScopeType.Other
     };
+
+    private readonly record struct TimeRange(DateTimeOffset From, DateTimeOffset To);
+
+    private sealed record TrafficSourcePlan(
+        IReadOnlyList<DateTimeOffset> RollupWindowStarts,
+        IReadOnlyList<TimeRange> RawRanges);
 }

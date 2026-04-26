@@ -45,6 +45,26 @@ public sealed class RetentionService(
             cutoff,
             cancellationToken);
 
+        var deletedNetworkRollupRows = await ExecuteDeleteAsync(
+            connection,
+            transaction,
+            """
+            DELETE FROM network_usage_rollup_12h
+            WHERE window_start_time < $cutoff;
+            """,
+            cutoff,
+            cancellationToken);
+
+        var deletedNetworkRollupWindows = await ExecuteDeleteAsync(
+            connection,
+            transaction,
+            """
+            DELETE FROM network_usage_rollup_12h_windows
+            WHERE window_start_time < $cutoff;
+            """,
+            cutoff,
+            cancellationToken);
+
         var deletedAppRegistryEntries = await ExecuteDeleteAsync(
             connection,
             transaction,
@@ -55,6 +75,11 @@ public sealed class RetentionService(
                   SELECT 1
                   FROM network_usage_agg n
                   WHERE n.app_id = app_registry.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM network_usage_rollup_12h r
+                  WHERE r.app_id = app_registry.id
               );
             """,
             cutoff,
@@ -62,17 +87,23 @@ public sealed class RetentionService(
 
         await transaction.CommitAsync(cancellationToken);
 
-        var totalDeleted = deletedHardwareSamples + deletedNetworkBuckets + deletedAppRegistryEntries;
+        var totalDeleted = deletedHardwareSamples
+                           + deletedNetworkBuckets
+                           + deletedNetworkRollupRows
+                           + deletedNetworkRollupWindows
+                           + deletedAppRegistryEntries;
         if (totalDeleted > 0)
         {
             await ReclaimSpaceAsync(connection, cancellationToken);
         }
 
         logger.LogInformation(
-            "Retention cleanup finished. Cutoff={Cutoff}, hardwareDeleted={HardwareDeleted}, networkDeleted={NetworkDeleted}, appRegistryDeleted={AppRegistryDeleted}.",
+            "Retention cleanup finished. Cutoff={Cutoff}, hardwareDeleted={HardwareDeleted}, networkDeleted={NetworkDeleted}, networkRollupRowsDeleted={NetworkRollupRowsDeleted}, networkRollupWindowsDeleted={NetworkRollupWindowsDeleted}, appRegistryDeleted={AppRegistryDeleted}.",
             cutoff,
             deletedHardwareSamples,
             deletedNetworkBuckets,
+            deletedNetworkRollupRows,
+            deletedNetworkRollupWindows,
             deletedAppRegistryEntries);
     }
 
@@ -86,7 +117,7 @@ public sealed class RetentionService(
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = sql;
-        command.Parameters.AddWithValue("$cutoff", cutoff.ToString("O"));
+        command.Parameters.AddWithValue("$cutoff", cutoff.ToUniversalTime().ToString("O"));
         return await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

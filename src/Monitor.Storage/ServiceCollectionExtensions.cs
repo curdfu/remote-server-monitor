@@ -12,8 +12,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IDbConnectionFactory, SqliteDbConnectionFactory>();
         services.AddSingleton<DatabaseInitializer>();
         services.AddHostedService<DatabaseInitializationHostedService>();
+        services.AddHostedService<DatabaseOptimizationHostedService>();
         services.AddSingleton<HardwareRepository>();
         services.AddSingleton<NetworkTrafficRepository>();
+        services.AddHostedService<NetworkTrafficRollupHostedService>();
         services.AddSingleton<SettingsRepository>();
         services.AddSingleton<RetentionService>();
         return services;

@@ -1,6 +1,5 @@
 import * as signalR from '@microsoft/signalr';
 import type {
-  AppTrafficItemDto,
   HardwareRealtimeDto,
   NetworkRealtimeDto
 } from '../types/monitor';
@@ -17,9 +16,6 @@ const hardwareListeners = new Set<Listener<HardwareRealtimeDto>>();
 // Reserved: network realtime is intentionally unused for now.
 // Keep the listener set and subscribe API so the connection layer stays stable if restored later.
 const networkListeners = new Set<Listener<NetworkRealtimeDto>>();
-// Reserved: top apps realtime is intentionally unused for now.
-// Keep the listener set and subscribe API so the connection layer stays stable if restored later.
-const topAppsListeners = new Set<Listener<AppTrafficItemDto[]>>();
 const connectionStateListeners = new Set<Listener<RealtimeConnectionState>>();
 
 let connection: signalR.HubConnection | null = null;
@@ -83,11 +79,6 @@ function ensureConnection() {
   // Reserved: the current backend does not actively push networkRealtime.
   connection.on('networkRealtime', (payload: NetworkRealtimeDto) => {
     emitPayload(networkListeners, payload);
-  });
-
-  // Reserved: the current backend does not actively push topAppsRealtime.
-  connection.on('topAppsRealtime', (payload: AppTrafficItemDto[]) => {
-    emitPayload(topAppsListeners, payload);
   });
 
   connection.onreconnecting(() => {
@@ -160,11 +151,6 @@ export function subscribeHardwareRealtime(listener: Listener<HardwareRealtimeDto
 // Reserved: current UI does not consume network realtime, but keep the API for compatibility.
 export function subscribeNetworkRealtime(listener: Listener<NetworkRealtimeDto>) {
   return subscribe(networkListeners, listener);
-}
-
-// Reserved: current UI does not consume top apps realtime, but keep the API for compatibility.
-export function subscribeTopAppsRealtime(listener: Listener<AppTrafficItemDto[]>) {
-  return subscribe(topAppsListeners, listener);
 }
 
 // 页面可通过这个订阅连接状态变化，用于提示当前实时通道是否正常

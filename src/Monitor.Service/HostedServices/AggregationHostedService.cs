@@ -8,8 +8,7 @@ public sealed class AggregationHostedService(
     ILogger<AggregationHostedService> logger,
     INetworkAggregator networkAggregator,
     INetworkCollector networkCollector,
-    NetworkTrafficRepository networkTrafficRepository,
-    IMonitorSettingsProvider settings) : BackgroundService
+    NetworkTrafficRepository networkTrafficRepository) : BackgroundService
 {
     private const int PersistenceBatchSize = 500;
 
@@ -19,14 +18,7 @@ public sealed class AggregationHostedService(
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var interval = TimeSpan.FromMilliseconds(settings.Current.NetworkSampleIntervalMs);
-            var settingsChanged = await WaitForIntervalOrSettingsChangeAsync(interval, stoppingToken);
-            if (settingsChanged)
-            {
-                await RefreshRealtimeCacheAsync(stoppingToken);
-                continue;
-            }
-
+            await Task.Delay(TimeSpan.FromMilliseconds(MonitorSettings.NetworkRealtimeIntervalMs), stoppingToken);
             await RefreshRealtimeCacheAsync(stoppingToken);
         }
     }
@@ -39,33 +31,18 @@ public sealed class AggregationHostedService(
         await base.StopAsync(cancellationToken);
     }
 
-    private async Task<bool> WaitForIntervalOrSettingsChangeAsync(TimeSpan interval, CancellationToken cancellationToken)
-    {
-        var settingsChangedSource = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = settings.RegisterChangeCallback(_ => settingsChangedSource.TrySetResult());
-        var delayTask = Task.Delay(interval, cancellationToken);
-        var completedTask = await Task.WhenAny(delayTask, settingsChangedSource.Task);
-
-        if (completedTask == delayTask)
-        {
-            await delayTask;
-            return false;
-        }
-
-        return true;
-    }
-
     private async Task PersistPendingBucketsAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var batch = networkAggregator.DequeuePendingBuckets(PersistenceBatchSize);
+            var batch = networkAggregator.PeekPendingBuckets(PersistenceBatchSize);
             if (batch.Count == 0)
             {
                 return;
             }
 
             await networkTrafficRepository.SaveAsync(batch, cancellationToken);
+            networkAggregator.ConfirmPendingBuckets(batch.Count);
             logger.LogDebug("Persisted {Count} network traffic buckets.", batch.Count);
         }
     }
@@ -76,10 +53,9 @@ public sealed class AggregationHostedService(
         await PersistPendingBucketsAsync(cancellationToken);
 
         logger.LogDebug(
-            "Aggregated network snapshot at {SampleTime}, up={Upload}, down={Download}, apps={AppCount}.",
+            "Aggregated network snapshot at {SampleTime}, up={Upload}, down={Download}.",
             snapshot.SampleTime,
             snapshot.TotalUploadBytesPerSecond,
-            snapshot.TotalDownloadBytesPerSecond,
-            snapshot.AppUsages.Count);
+            snapshot.TotalDownloadBytesPerSecond);
     }
 }

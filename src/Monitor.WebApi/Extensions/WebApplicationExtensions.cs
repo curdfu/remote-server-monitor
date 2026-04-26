@@ -43,7 +43,7 @@ public static class WebApplicationExtensions
                 : (utcNow - network.SampleTime).TotalSeconds;
 
             var hardwareThresholdSeconds = Math.Max(currentSettings.HardwareSampleIntervalMs / 1000d * 3d, 5d);
-            var networkThresholdSeconds = Math.Max(currentSettings.NetworkSampleIntervalMs / 1000d * 3d, 5d);
+            var networkThresholdSeconds = Math.Max(MonitorSettings.NetworkRealtimeIntervalMs / 1000d * 3d, 5d);
             var sessionObservedEvents = collectorDiagnostics.PublishedEvents + collectorDiagnostics.LostEvents;
             var sessionLossRate = sessionObservedEvents > 0
                 ? collectorDiagnostics.LostEvents * 100d / sessionObservedEvents

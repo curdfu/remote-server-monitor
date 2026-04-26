@@ -25,7 +25,6 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
 
     private RealtimeSlot[] _realtimeSlots = Array.Empty<RealtimeSlot>();
     private NetworkRealtimeSnapshot? _latestRealtimeSnapshot;
-    private IReadOnlyList<AppTrafficUsage> _latestTopApps = Array.Empty<AppTrafficUsage>();
     private AggregationSettingsSnapshot _settingsSnapshot;
     private long _enqueuedSequence;
     private long _processedSequence;
@@ -73,29 +72,6 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         return snapshot;
     }
 
-    public async Task<IReadOnlyList<AppTrafficUsage>> GetTopAppsAsync(int topN, CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (topN <= 0)
-        {
-            return Array.Empty<AppTrafficUsage>();
-        }
-
-        await WaitForEventProcessingAsync(cancellationToken);
-
-        RealtimeView view;
-        var now = DateTimeOffset.UtcNow;
-        lock (_syncRoot)
-        {
-            RotateBucketsCore(now);
-            EnsureRealtimeSlotsCapacityCore();
-            view = BuildRealtimeViewCore(now);
-        }
-
-        return SortAndTakeTopApps(view.AppUsages, topN);
-    }
-
     public async Task FlushAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -110,20 +86,7 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         }
     }
 
-    public IReadOnlyList<AppTrafficUsage> GetLatestTopApps(int topN)
-    {
-        if (topN <= 0)
-        {
-            return Array.Empty<AppTrafficUsage>();
-        }
-
-        lock (_syncRoot)
-        {
-            return _latestTopApps.Take(topN).ToArray();
-        }
-    }
-
-    public IReadOnlyList<TrafficBucket> DequeuePendingBuckets(int maxCount)
+    public IReadOnlyList<TrafficBucket> PeekPendingBuckets(int maxCount)
     {
         if (maxCount <= 0)
         {
@@ -142,12 +105,33 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
             var count = Math.Min(maxCount, _pendingBuckets.Count);
             var result = new List<TrafficBucket>(count);
 
-            for (var index = 0; index < count; index++)
+            foreach (var bucket in _pendingBuckets)
             {
-                result.Add(_pendingBuckets.Dequeue());
+                result.Add(bucket);
+                if (result.Count == count)
+                {
+                    break;
+                }
             }
 
             return result;
+        }
+    }
+
+    public void ConfirmPendingBuckets(int count)
+    {
+        if (count <= 0)
+        {
+            return;
+        }
+
+        lock (_syncRoot)
+        {
+            var confirmedCount = Math.Min(count, _pendingBuckets.Count);
+            for (var index = 0; index < confirmedCount; index++)
+            {
+                _pendingBuckets.Dequeue();
+            }
         }
     }
 
@@ -229,7 +213,7 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         {
             RotateBucketsCore(timestamp);
             EnsureRealtimeSlotsCapacityCore();
-            AddToRealtimeSlotsCore(timestamp, appEntry, traceEvent.Direction, scopeType, traceEvent.Bytes);
+            AddToRealtimeSlotsCore(timestamp, traceEvent.Direction, scopeType, traceEvent.Bytes);
             AddToBucketCore(timestamp, appEntry.AppKey, traceEvent.Direction, scopeType, traceEvent.Bytes);
         }
     }
@@ -264,7 +248,6 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
 
     private void AddToRealtimeSlotsCore(
         DateTimeOffset timestamp,
-        AppRegistryEntry appEntry,
         TrafficDirection direction,
         AddressScopeType scopeType,
         long bytes)
@@ -281,7 +264,7 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
             slot.Reset(slotIndex);
         }
 
-        slot.Add(appEntry.AppKey, appEntry.ProcessName, appEntry.DisplayName, direction, scopeType, bytes);
+        slot.Add(direction, scopeType, bytes);
     }
 
     private void AddToBucketCore(
@@ -337,17 +320,15 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
 
     private RealtimeView BuildRealtimeViewCore(DateTimeOffset referenceTime)
     {
-        var settings = Volatile.Read(ref _settingsSnapshot);
-        var intervalSeconds = Math.Max(settings.NetworkSampleIntervalMs / 1000d, 0.1d);
+        var intervalSeconds = Math.Max(MonitorSettings.NetworkRealtimeIntervalMs / 1000d, 0.1d);
         if (_realtimeSlots.Length == 0)
         {
-            return new RealtimeView(0, 0, 0, 0, 0, 0, Array.Empty<AppTrafficUsage>());
+            return new RealtimeView(0, 0, 0, 0, 0, 0);
         }
 
         var currentSlotIndex = GetRealtimeSlotIndex(referenceTime);
         var windowSlotCount = Math.Max(1, (int)Math.Ceiling(intervalSeconds / RealtimeSlotDuration.TotalSeconds));
         var minimumSlotIndex = currentSlotIndex - windowSlotCount + 1;
-        var appUsageMap = new Dictionary<string, AppUsageAccumulator>(StringComparer.OrdinalIgnoreCase);
 
         long totalUploadBytes = 0;
         long totalDownloadBytes = 0;
@@ -369,33 +350,6 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
             wanDownloadBytes += slot.WanDownloadBytes;
             lanUploadBytes += slot.LanUploadBytes;
             lanDownloadBytes += slot.LanDownloadBytes;
-
-            foreach (var pair in slot.AppUsages)
-            {
-                if (!appUsageMap.TryGetValue(pair.Key, out var accumulator))
-                {
-                    accumulator = new AppUsageAccumulator(pair.Key, pair.Value.ProcessName, pair.Value.DisplayName);
-                    appUsageMap[pair.Key] = accumulator;
-                }
-
-                accumulator.UploadBytes += pair.Value.UploadBytes;
-                accumulator.DownloadBytes += pair.Value.DownloadBytes;
-                accumulator.WanUploadBytes += pair.Value.WanUploadBytes;
-                accumulator.WanDownloadBytes += pair.Value.WanDownloadBytes;
-                accumulator.LanUploadBytes += pair.Value.LanUploadBytes;
-                accumulator.LanDownloadBytes += pair.Value.LanDownloadBytes;
-            }
-        }
-
-        var appUsages = new List<AppTrafficUsage>(appUsageMap.Count);
-        foreach (var pair in appUsageMap)
-        {
-            if (pair.Value.UploadBytes <= 0 && pair.Value.DownloadBytes <= 0)
-            {
-                continue;
-            }
-
-            appUsages.Add(pair.Value.ToModel(intervalSeconds));
         }
 
         return new RealtimeView(
@@ -404,8 +358,7 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
             wanUploadBytes / intervalSeconds,
             wanDownloadBytes / intervalSeconds,
             lanUploadBytes / intervalSeconds,
-            lanDownloadBytes / intervalSeconds,
-            appUsages.ToArray());
+            lanDownloadBytes / intervalSeconds);
     }
 
     private NetworkRealtimeSnapshot UpdateLatestRealtimeCacheCore(DateTimeOffset sampleTime, RealtimeView view)
@@ -418,12 +371,10 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
             WanUploadBytesPerSecond = view.WanUploadBytesPerSecond,
             WanDownloadBytesPerSecond = view.WanDownloadBytesPerSecond,
             LanUploadBytesPerSecond = view.LanUploadBytesPerSecond,
-            LanDownloadBytesPerSecond = view.LanDownloadBytesPerSecond,
-            AppUsages = view.AppUsages
+            LanDownloadBytesPerSecond = view.LanDownloadBytesPerSecond
         };
 
         _latestRealtimeSnapshot = snapshot;
-        _latestTopApps = SortAndTakeTopApps(view.AppUsages, null);
 
         return snapshot;
     }
@@ -465,7 +416,7 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
     private TimeSpan GetRealtimeRetentionWindow()
     {
         var settings = Volatile.Read(ref _settingsSnapshot);
-        var realtimeWindow = TimeSpan.FromMilliseconds(settings.NetworkSampleIntervalMs);
+        var realtimeWindow = TimeSpan.FromMilliseconds(MonitorSettings.NetworkRealtimeIntervalMs);
         var aggregateWindow = TimeSpan.FromSeconds(settings.AggregateIntervalSeconds * 2d);
         return new[]
         {
@@ -480,41 +431,6 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         return timestamp.UtcTicks / RealtimeSlotDuration.Ticks;
     }
 
-    private static IReadOnlyList<AppTrafficUsage> SortAndTakeTopApps(IReadOnlyList<AppTrafficUsage> appUsages, int? topN)
-    {
-        if (appUsages.Count == 0)
-        {
-            return Array.Empty<AppTrafficUsage>();
-        }
-
-        var items = appUsages.ToArray();
-        Array.Sort(items, static (left, right) =>
-        {
-            var leftTotal = left.UploadBytesPerSecond + left.DownloadBytesPerSecond;
-            var rightTotal = right.UploadBytesPerSecond + right.DownloadBytesPerSecond;
-            var totalComparison = rightTotal.CompareTo(leftTotal);
-            if (totalComparison != 0)
-            {
-                return totalComparison;
-            }
-
-            var downloadComparison = right.DownloadBytesPerSecond.CompareTo(left.DownloadBytesPerSecond);
-            if (downloadComparison != 0)
-            {
-                return downloadComparison;
-            }
-
-            return StringComparer.OrdinalIgnoreCase.Compare(left.ProcessName, right.ProcessName);
-        });
-
-        if (topN.HasValue && topN.Value < items.Length)
-        {
-            Array.Resize(ref items, topN.Value);
-        }
-
-        return items;
-    }
-
     private static DateTimeOffset AlignToBucketStart(DateTimeOffset timestamp, int granularitySeconds)
     {
         var ticksPerBucket = TimeSpan.FromSeconds(granularitySeconds).Ticks;
@@ -522,11 +438,11 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         return new DateTimeOffset(alignedTicks, TimeSpan.Zero);
     }
 
-    private sealed record AggregationSettingsSnapshot(int AggregateIntervalSeconds, int NetworkSampleIntervalMs)
+    private sealed record AggregationSettingsSnapshot(int AggregateIntervalSeconds)
     {
         public static AggregationSettingsSnapshot From(MonitorSettings settings)
         {
-            return new AggregationSettingsSnapshot(settings.AggregateIntervalSeconds, settings.NetworkSampleIntervalMs);
+            return new AggregationSettingsSnapshot(settings.AggregateIntervalSeconds);
         }
     }
 
@@ -553,39 +469,8 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         }
     }
 
-    private sealed class AppUsageAccumulator(string appKey, string processName, string? displayName)
-    {
-        public string AppKey { get; } = appKey;
-        public string ProcessName { get; } = processName;
-        public string? DisplayName { get; } = displayName;
-        public long UploadBytes { get; set; }
-        public long DownloadBytes { get; set; }
-        public long WanUploadBytes { get; set; }
-        public long WanDownloadBytes { get; set; }
-        public long LanUploadBytes { get; set; }
-        public long LanDownloadBytes { get; set; }
-
-        public AppTrafficUsage ToModel(double intervalSeconds)
-        {
-            return new AppTrafficUsage
-            {
-                AppKey = AppKey,
-                ProcessName = ProcessName,
-                DisplayName = DisplayName,
-                UploadBytesPerSecond = UploadBytes / intervalSeconds,
-                DownloadBytesPerSecond = DownloadBytes / intervalSeconds,
-                WanUploadBytesPerSecond = WanUploadBytes / intervalSeconds,
-                WanDownloadBytesPerSecond = WanDownloadBytes / intervalSeconds,
-                LanUploadBytesPerSecond = LanUploadBytes / intervalSeconds,
-                LanDownloadBytesPerSecond = LanDownloadBytes / intervalSeconds
-            };
-        }
-    }
-
     private sealed class RealtimeSlot
     {
-        private readonly Dictionary<string, SlotAppUsageAccumulator> _appUsages = new(StringComparer.OrdinalIgnoreCase);
-
         public long SlotIndex { get; private set; } = -1;
         public bool IsValid => SlotIndex >= 0;
         public long TotalUploadBytes { get; private set; }
@@ -594,7 +479,6 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         public long WanDownloadBytes { get; private set; }
         public long LanUploadBytes { get; private set; }
         public long LanDownloadBytes { get; private set; }
-        public IReadOnlyDictionary<string, SlotAppUsageAccumulator> AppUsages => _appUsages;
 
         public void Reset(long slotIndex)
         {
@@ -605,7 +489,6 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
             WanDownloadBytes = 0;
             LanUploadBytes = 0;
             LanDownloadBytes = 0;
-            _appUsages.Clear();
         }
 
         public void CopyFrom(RealtimeSlot other)
@@ -617,84 +500,39 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
             WanDownloadBytes = other.WanDownloadBytes;
             LanUploadBytes = other.LanUploadBytes;
             LanDownloadBytes = other.LanDownloadBytes;
-
-            foreach (var pair in other._appUsages)
-            {
-                _appUsages[pair.Key] = pair.Value.Clone();
-            }
         }
 
         public void Add(
-            string appKey,
-            string processName,
-            string? displayName,
             TrafficDirection direction,
             AddressScopeType scopeType,
             long bytes)
         {
-            if (!_appUsages.TryGetValue(appKey, out var appUsage))
-            {
-                appUsage = new SlotAppUsageAccumulator(processName, displayName);
-                _appUsages[appKey] = appUsage;
-            }
-
             if (direction == TrafficDirection.Outbound)
             {
                 TotalUploadBytes += bytes;
-                appUsage.UploadBytes += bytes;
 
                 if (scopeType == AddressScopeType.Wan)
                 {
                     WanUploadBytes += bytes;
-                    appUsage.WanUploadBytes += bytes;
                 }
                 else if (scopeType == AddressScopeType.Lan)
                 {
                     LanUploadBytes += bytes;
-                    appUsage.LanUploadBytes += bytes;
                 }
             }
             else
             {
                 TotalDownloadBytes += bytes;
-                appUsage.DownloadBytes += bytes;
 
                 if (scopeType == AddressScopeType.Wan)
                 {
                     WanDownloadBytes += bytes;
-                    appUsage.WanDownloadBytes += bytes;
                 }
                 else if (scopeType == AddressScopeType.Lan)
                 {
                     LanDownloadBytes += bytes;
-                    appUsage.LanDownloadBytes += bytes;
                 }
             }
-        }
-    }
-
-    private sealed class SlotAppUsageAccumulator(string processName, string? displayName)
-    {
-        public string ProcessName { get; } = processName;
-        public string? DisplayName { get; } = displayName;
-        public long UploadBytes { get; set; }
-        public long DownloadBytes { get; set; }
-        public long WanUploadBytes { get; set; }
-        public long WanDownloadBytes { get; set; }
-        public long LanUploadBytes { get; set; }
-        public long LanDownloadBytes { get; set; }
-
-        public SlotAppUsageAccumulator Clone()
-        {
-            return new SlotAppUsageAccumulator(ProcessName, DisplayName)
-            {
-                UploadBytes = UploadBytes,
-                DownloadBytes = DownloadBytes,
-                WanUploadBytes = WanUploadBytes,
-                WanDownloadBytes = WanDownloadBytes,
-                LanUploadBytes = LanUploadBytes,
-                LanDownloadBytes = LanDownloadBytes
-            };
         }
     }
 
@@ -711,6 +549,5 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         double WanUploadBytesPerSecond,
         double WanDownloadBytesPerSecond,
         double LanUploadBytesPerSecond,
-        double LanDownloadBytesPerSecond,
-        IReadOnlyList<AppTrafficUsage> AppUsages);
+        double LanDownloadBytesPerSecond);
 }

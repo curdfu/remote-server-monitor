@@ -178,23 +178,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         for (var index = 0; index < sensorCache.StorageTemperatureGroups.Count; index++)
         {
             var group = sensorCache.StorageTemperatureGroups[index];
-            double? driveTemperature = null;
-            string? driveTemperatureSource = null;
-
-            foreach (var sensor in group.Sensors)
-            {
-                var value = Normalize(sensor.Value);
-                if (!value.HasValue)
-                {
-                    continue;
-                }
-
-                if (!driveTemperature.HasValue || value.Value > driveTemperature.Value)
-                {
-                    driveTemperature = value.Value;
-                    driveTemperatureSource = $"{group.HardwareName}/{sensor.Name}";
-                }
-            }
+            var (driveTemperature, driveTemperatureSource) = ReadPreferredDiskTemperature(group);
 
             if (driveTemperature.HasValue && (!diskTemperature.HasValue || driveTemperature.Value > diskTemperature.Value))
             {
@@ -213,6 +197,45 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         }
 
         return (diskDrives, diskTemperature, diskTemperatureSource);
+    }
+
+    private static (double? Value, string? Source) ReadPreferredDiskTemperature(StorageTemperatureGroup group)
+    {
+        var preferredNames = new[]
+        {
+            "Temperature",
+            "Composite Temperature",
+            "Drive Temperature",
+            "Temperature 1"
+        };
+
+        foreach (var preferredName in preferredNames)
+        {
+            var match = ReadFirstSensor(
+                group.Sensors,
+                sensor => sensor.Name.Equals(preferredName, StringComparison.OrdinalIgnoreCase),
+                sensor => $"{group.HardwareName}/{sensor.Name}");
+
+            if (match.Value.HasValue)
+            {
+                return match;
+            }
+        }
+
+        var composite = ReadFirstSensor(
+            group.Sensors,
+            sensor => sensor.Name.Contains("Composite", StringComparison.OrdinalIgnoreCase),
+            sensor => $"{group.HardwareName}/{sensor.Name}");
+
+        if (composite.Value.HasValue)
+        {
+            return composite;
+        }
+
+        return ReadFirstSensor(
+            group.Sensors,
+            static _ => true,
+            sensor => $"{group.HardwareName}/{sensor.Name}");
     }
 
     public IReadOnlyDictionary<uint, long?> GetCurrentUsedBytesByDiskNumber(IEnumerable<uint> diskNumbers)
@@ -1271,7 +1294,6 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         }
     }
 }
-
 
 
 

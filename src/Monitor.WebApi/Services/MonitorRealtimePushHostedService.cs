@@ -60,7 +60,9 @@ public sealed class MonitorRealtimePushHostedService(
 
     private static TimeSpan GetInterval(MonitorSettings settings)
     {
-        var intervalMs = Math.Max(500, Math.Min(settings.HardwareSampleIntervalMs, settings.NetworkSampleIntervalMs));
+        var intervalMs = Math.Max(
+            500,
+            Math.Min(settings.HardwareSampleIntervalMs, MonitorSettings.NetworkRealtimeIntervalMs));
         return TimeSpan.FromMilliseconds(intervalMs);
     }
 }

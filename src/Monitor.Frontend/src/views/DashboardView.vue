@@ -14,98 +14,87 @@
       </template>
     </PageHeader>
 
-    <div class="overview-meta card overview-meta-bar page-tier-toolbar">
-      <div class="overview-meta-item">
-        <span class="muted">数据时间</span>
-        <strong>{{ formatDateTime(hardware?.sampleTime) }}</strong>
-      </div>
-      <div class="overview-meta-item">
-        <span class="muted">采集模式</span>
-        <strong>实时推送 + 历史聚合</strong>
-      </div>
-      <div class="overview-meta-item">
-        <span class="muted">在线状态</span>
-        <strong>{{ errorMessage ? '接口异常' : '稳定运行' }}</strong>
-      </div>
-    </div>
-
     <div v-if="errorMessage" class="card state-card error-state">
       {{ errorMessage }}
     </div>
 
-    <section class="dashboard-section">
-      <div class="section-header section-header-rich">
-        <div>
-          <h3>核心运行指标</h3>
-          <p class="section-subtitle">优先展示最关键、最常看的首页指标。</p>
+    <section class="dashboard-section dashboard-core-metrics-section">
+      <article class="card dashboard-core-metrics-panel">
+        <div class="section-header section-header-rich dashboard-core-metrics-header">
+          <div>
+            <h3>核心运行指标</h3>
+            <p class="section-subtitle">优先展示最关键、最常看的首页指标。</p>
+          </div>
+          <span class="section-tag">Core Metrics</span>
         </div>
-        <span class="section-tag">Core Metrics</span>
-      </div>
 
-      <div class="dashboard-hero-grid page-tier-stats">
-        <MetricCard
-          label="已开机"
-          :value="formatUptime(hardware?.uptimeSeconds)"
-          :hint="`启动时间 ${formatDateTime(bootTimeText)}`"
-          badge="运行"
-          tone="info"
-          icon-name="uptime"
-          small-value
-        />
-        <MetricCard
-          label="CPU 当前频率"
-          :value="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
-          :hint="formatCpuNameHint(hardware?.cpuName)"
-          badge="频率"
-          tone="info"
-          icon-name="cpu"
-        />
-        <MetricCard
-          label="CPU 当前温度"
-          :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
-          :hint="formatTemperatureHint(hardware?.cpuTemperatureC)"
-          :badge="temperatureBadge(hardware?.cpuTemperatureC)"
-          :tone="temperatureTone(hardware?.cpuTemperatureC)"
-          icon-name="temperature"
-          :meter-percent="temperaturePercent(hardware?.cpuTemperatureC)"
-        />
-        <MetricCard
-          label="CPU 当前功耗"
-          :value="formatNullable(hardware?.cpuPowerWatts, 'W')"
-          :hint="formatPowerHint(hardware?.cpuPowerWatts)"
-          badge="功耗"
-          tone="info"
-          icon-name="power"
-          :meter-percent="powerPercent(hardware?.cpuPowerWatts)"
-        />
-        <MetricCard
-          label="CPU 占用"
-          :value="formatPercent(hardware?.cpuUsagePercent)"
-          :hint="formatCpuHint(hardware?.cpuFrequencyMhz, hardware?.cpuPowerWatts)"
-          :badge="usageBadge(hardware?.cpuUsagePercent)"
-          :tone="usageTone(hardware?.cpuUsagePercent)"
-          icon-name="dashboard"
-          :meter-percent="hardware?.cpuUsagePercent"
-        />
-        <MetricCard
-          label="内存已使用"
-          :value="formatMemoryUsage(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
-          :hint="formatMemoryHint(hardware?.memoryTotalMb)"
-          :badge="memoryUsageBadge(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
-          :tone="memoryUsageTone(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
-          icon-name="memory"
-          :meter-percent="getMemoryUsagePercent(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
-        />
-        <MetricCard
-          label="最热磁盘温度"
-          :value="formatNullable(hardware?.diskTemperatureC, '°C')"
-          :hint="`已识别 ${hardware?.disks?.length ?? 0} 块磁盘`"
-          :badge="temperatureBadge(hardware?.diskTemperatureC)"
-          :tone="temperatureTone(hardware?.diskTemperatureC)"
-          icon-name="disk"
-          :meter-percent="temperaturePercent(hardware?.diskTemperatureC)"
-        />
-      </div>
+        <div class="dashboard-core-metrics-panel-body">
+          <div class="dashboard-hero-grid page-tier-stats">
+            <MetricCard
+              label="已开机"
+              :value="formatUptime(hardware?.uptimeSeconds)"
+              :hint="`启动时间 ${formatDateTime(bootTimeText)}`"
+              badge="运行"
+              tone="info"
+              icon-name="uptime"
+              small-value
+            />
+            <MetricCard
+              label="CPU 当前频率"
+              :value="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
+              :hint="formatCpuNameHint(hardware?.cpuName)"
+              badge="频率"
+              tone="info"
+              icon-name="cpu"
+            />
+            <MetricCard
+              label="CPU 占用"
+              :value="formatPercent(hardware?.cpuUsagePercent)"
+              :hint="formatCpuNameHint(hardware?.cpuName)"
+              :badge="usageBadge(hardware?.cpuUsagePercent)"
+              :tone="usageTone(hardware?.cpuUsagePercent)"
+              icon-name="dashboard"
+              :meter-percent="hardware?.cpuUsagePercent"
+            />
+            <MetricCard
+              label="CPU 当前温度"
+              :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
+              :hint="formatTemperatureHint(hardware?.cpuTemperatureC)"
+              :badge="temperatureBadge(hardware?.cpuTemperatureC)"
+              :tone="temperatureTone(hardware?.cpuTemperatureC)"
+              icon-name="temperature"
+              :meter-percent="temperaturePercent(hardware?.cpuTemperatureC)"
+            />
+            <MetricCard
+              label="CPU 当前功耗"
+              :value="formatNullable(hardware?.cpuPowerWatts, 'W')"
+              :hint="formatPowerHint(hardware?.cpuPowerWatts)"
+              badge="功耗"
+              tone="info"
+              icon-name="power"
+              :meter-percent="powerPercent(hardware?.cpuPowerWatts)"
+            />
+            <MetricCard
+              label="内存已使用"
+              :value="formatMemoryUsage(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+              :hint="formatMemoryHint(hardware?.memoryTotalMb)"
+              :badge="memoryUsageBadge(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+              :tone="memoryUsageTone(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+              icon-name="memory"
+              :meter-percent="getMemoryUsagePercent(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+            />
+            <MetricCard
+              label="最热磁盘温度"
+              :value="formatNullable(hardware?.diskTemperatureC, '°C')"
+              :hint="`已识别 ${hardware?.disks?.length ?? 0} 块磁盘`"
+              :badge="temperatureBadge(hardware?.diskTemperatureC)"
+              :tone="temperatureTone(hardware?.diskTemperatureC)"
+              icon-name="disk"
+              :meter-percent="temperaturePercent(hardware?.diskTemperatureC)"
+            />
+          </div>
+        </div>
+      </article>
     </section>
 
     <section class="panel-grid dashboard-storage-grid">
@@ -302,12 +291,6 @@ function formatMemoryHint(total?: number | null) {
   return `总容量 ${total < 1024 ? `${total.toFixed(0)} GB` : `${(total / 1024).toFixed(1)} GB`}`;
 }
 
-function formatCpuHint(frequency?: number | null, power?: number | null) {
-  const frequencyText = formatNullable(frequency, 'MHz');
-  const powerText = formatNullable(power, 'W');
-  return `频率 ${frequencyText} · 功耗 ${powerText}`;
-}
-
 function formatCpuNameHint(name?: string | null) {
   return name?.trim() || 'CPU 名称不可用';
 }
@@ -321,8 +304,8 @@ function formatTemperatureHint(temperature?: number | null) {
 
 function formatPowerHint(power?: number | null) {
   if (power == null) return '功耗数据不可用';
-  if (power >= 150) return '高负载运行';
-  if (power >= 80) return '中等负载运行';
+  if (power >= 50) return '高负载运行';
+  if (power >= 25) return '中等负载运行';
   return '低负载 / 空闲状态';
 }
 
@@ -382,7 +365,7 @@ function temperaturePercent(value?: number | null) {
 
 function powerPercent(value?: number | null) {
   if (value == null) return null;
-  return Math.max(0, Math.min(100, (value / 200) * 100));
+  return Math.max(0, Math.min(100, (value / 65) * 100));
 }
 
 function temperatureTone(value?: number | null): 'default' | 'success' | 'warning' | 'danger' {

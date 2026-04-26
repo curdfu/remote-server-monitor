@@ -23,6 +23,17 @@ public sealed class DatabaseInitializer(
         logger.LogInformation("SQLite database initialized. Path: {DatabasePath}", dbConnectionFactory.DatabasePath);
     }
 
+    public async Task OptimizeAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = dbConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await EnablePragmasAsync(connection, cancellationToken);
+        await CreateDeferredIndexesAsync(connection, cancellationToken);
+
+        logger.LogInformation("SQLite database optimization indexes ensured. Path: {DatabasePath}", dbConnectionFactory.DatabasePath);
+    }
+
     private static async Task EnablePragmasAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
         var pragmaSql = """
@@ -97,10 +108,52 @@ public sealed class DatabaseInitializer(
 
                         CREATE INDEX IF NOT EXISTS idx_network_usage_agg_scope_direction
                         ON network_usage_agg(scope_type, direction, bucket_start_time);
+
+                        CREATE TABLE IF NOT EXISTS network_usage_rollup_12h (
+                            window_start_time TEXT NOT NULL,
+                            window_duration_seconds INTEGER NOT NULL,
+                            app_id INTEGER NOT NULL,
+                            direction TEXT NOT NULL CHECK(direction IN ('inbound', 'outbound')),
+                            scope_type TEXT NOT NULL CHECK(scope_type IN ('wan', 'lan', 'loopback', 'other')),
+                            bytes INTEGER NOT NULL,
+                            packets INTEGER NOT NULL,
+                            source_bucket_count INTEGER NOT NULL,
+                            updated_at TEXT NOT NULL,
+                            PRIMARY KEY(window_start_time, app_id, direction, scope_type),
+                            FOREIGN KEY(app_id) REFERENCES app_registry(id)
+                        );
+
+                        CREATE TABLE IF NOT EXISTS network_usage_rollup_12h_windows (
+                            window_start_time TEXT PRIMARY KEY,
+                            window_end_time TEXT NOT NULL,
+                            source_bucket_count INTEGER NOT NULL,
+                            updated_at TEXT NOT NULL
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_network_usage_rollup_12h_scope_direction_window
+                        ON network_usage_rollup_12h(scope_type, direction, window_start_time, app_id, bytes);
+
+                        CREATE INDEX IF NOT EXISTS idx_network_usage_rollup_12h_app_window
+                        ON network_usage_rollup_12h(app_id, window_start_time);
                         """;
 
         await using var command = connection.CreateCommand();
         command.CommandText = schemaSql;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task CreateDeferredIndexesAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        var indexSql = """
+                       CREATE INDEX IF NOT EXISTS idx_network_usage_agg_time_app_scope_direction_bytes
+                       ON network_usage_agg(bucket_start_time, app_id, scope_type, direction, bytes);
+
+                       CREATE INDEX IF NOT EXISTS idx_network_usage_agg_scope_direction_time_app_bytes
+                       ON network_usage_agg(scope_type, direction, bucket_start_time, app_id, bytes);
+                       """;
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = indexSql;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -128,7 +181,7 @@ public sealed class DatabaseInitializer(
                                   1,
                                   $httpPort,
                                   $hardwareSampleIntervalMs,
-                                  $networkSampleIntervalMs,
+                                  $networkRealtimeIntervalMs,
                                   $aggregateIntervalSeconds,
                                   $historyRetentionDays,
                                   $topNDefault,
@@ -140,7 +193,7 @@ public sealed class DatabaseInitializer(
 
         command.Parameters.AddWithValue("$httpPort", settings.HttpPort);
         command.Parameters.AddWithValue("$hardwareSampleIntervalMs", settings.HardwareSampleIntervalMs);
-        command.Parameters.AddWithValue("$networkSampleIntervalMs", settings.NetworkSampleIntervalMs);
+        command.Parameters.AddWithValue("$networkRealtimeIntervalMs", MonitorSettings.NetworkRealtimeIntervalMs);
         command.Parameters.AddWithValue("$aggregateIntervalSeconds", settings.AggregateIntervalSeconds);
         command.Parameters.AddWithValue("$historyRetentionDays", settings.HistoryRetentionDays);
         command.Parameters.AddWithValue("$topNDefault", settings.TopNDefault);

@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Monitor.Contracts.Dtos;
+using Monitor.Contracts.Options;
 using Monitor.Storage.Abstractions;
 
 namespace Monitor.Storage.Repositories;
@@ -17,7 +18,6 @@ public sealed class SettingsRepository(
         command.CommandText = """
                               SELECT http_port,
                                      hardware_sample_interval_ms,
-                                     network_sample_interval_ms,
                                      aggregate_interval_seconds,
                                      history_retention_days,
                                      top_n_default
@@ -36,10 +36,9 @@ public sealed class SettingsRepository(
         {
             HttpPort = reader.GetInt32(0),
             HardwareSampleIntervalMs = reader.GetInt32(1),
-            NetworkSampleIntervalMs = reader.GetInt32(2),
-            AggregateIntervalSeconds = reader.GetInt32(3),
-            HistoryRetentionDays = reader.GetInt32(4),
-            TopNDefault = reader.GetInt32(5)
+            AggregateIntervalSeconds = reader.GetInt32(2),
+            HistoryRetentionDays = reader.GetInt32(3),
+            TopNDefault = reader.GetInt32(4)
         };
     }
 
@@ -67,7 +66,7 @@ public sealed class SettingsRepository(
                                   1,
                                   $httpPort,
                                   $hardwareSampleIntervalMs,
-                                  $networkSampleIntervalMs,
+                                  $networkRealtimeIntervalMs,
                                   $aggregateIntervalSeconds,
                                   $historyRetentionDays,
                                   $topNDefault,
@@ -77,7 +76,6 @@ public sealed class SettingsRepository(
                               ON CONFLICT(id) DO UPDATE SET
                                   http_port = excluded.http_port,
                                   hardware_sample_interval_ms = excluded.hardware_sample_interval_ms,
-                                  network_sample_interval_ms = excluded.network_sample_interval_ms,
                                   aggregate_interval_seconds = excluded.aggregate_interval_seconds,
                                   history_retention_days = excluded.history_retention_days,
                                   top_n_default = excluded.top_n_default,
@@ -87,7 +85,7 @@ public sealed class SettingsRepository(
         var now = DateTimeOffset.UtcNow.ToString("O");
         command.Parameters.AddWithValue("$httpPort", settings.HttpPort);
         command.Parameters.AddWithValue("$hardwareSampleIntervalMs", settings.HardwareSampleIntervalMs);
-        command.Parameters.AddWithValue("$networkSampleIntervalMs", settings.NetworkSampleIntervalMs);
+        command.Parameters.AddWithValue("$networkRealtimeIntervalMs", MonitorSettings.NetworkRealtimeIntervalMs);
         command.Parameters.AddWithValue("$aggregateIntervalSeconds", settings.AggregateIntervalSeconds);
         command.Parameters.AddWithValue("$historyRetentionDays", settings.HistoryRetentionDays);
         command.Parameters.AddWithValue("$topNDefault", settings.TopNDefault);
@@ -96,13 +94,11 @@ public sealed class SettingsRepository(
 
         await command.ExecuteNonQueryAsync(cancellationToken);
         logger.LogInformation(
-            "Settings persisted to SQLite. HttpPort={HttpPort}, HardwareIntervalMs={HardwareIntervalMs}, NetworkIntervalMs={NetworkIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}",
+            "Settings persisted to SQLite. HttpPort={HttpPort}, HardwareIntervalMs={HardwareIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}",
             settings.HttpPort,
             settings.HardwareSampleIntervalMs,
-            settings.NetworkSampleIntervalMs,
             settings.AggregateIntervalSeconds,
             settings.HistoryRetentionDays,
             settings.TopNDefault);
     }
 }
-

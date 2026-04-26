@@ -9,5 +9,4 @@ public sealed class NetworkRealtimeSnapshot
     public double WanDownloadBytesPerSecond { get; init; }
     public double LanUploadBytesPerSecond { get; init; }
     public double LanDownloadBytesPerSecond { get; init; }
-    public IReadOnlyList<AppTrafficUsage> AppUsages { get; init; } = Array.Empty<AppTrafficUsage>();
 }
