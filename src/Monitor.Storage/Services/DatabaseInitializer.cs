@@ -181,7 +181,7 @@ public sealed class DatabaseInitializer(
                                   1,
                                   $httpPort,
                                   $hardwareSampleIntervalMs,
-                                  $networkSampleIntervalMs,
+                                  $networkRealtimeIntervalMs,
                                   $aggregateIntervalSeconds,
                                   $historyRetentionDays,
                                   $topNDefault,
@@ -193,7 +193,7 @@ public sealed class DatabaseInitializer(
 
         command.Parameters.AddWithValue("$httpPort", settings.HttpPort);
         command.Parameters.AddWithValue("$hardwareSampleIntervalMs", settings.HardwareSampleIntervalMs);
-        command.Parameters.AddWithValue("$networkSampleIntervalMs", settings.NetworkSampleIntervalMs);
+        command.Parameters.AddWithValue("$networkRealtimeIntervalMs", MonitorSettings.NetworkRealtimeIntervalMs);
         command.Parameters.AddWithValue("$aggregateIntervalSeconds", settings.AggregateIntervalSeconds);
         command.Parameters.AddWithValue("$historyRetentionDays", settings.HistoryRetentionDays);
         command.Parameters.AddWithValue("$topNDefault", settings.TopNDefault);

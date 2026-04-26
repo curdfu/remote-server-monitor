@@ -1,5 +1,4 @@
 ﻿using Monitor.Contracts.Dtos;
-using Monitor.Contracts.Options;
 using Monitor.Hardware.Abstractions;
 using Monitor.Network.Abstractions;
 
@@ -12,8 +11,7 @@ public static class OverviewEndpoints
         app.MapGet("/api/overview", (
             IHardwareSnapshotBuffer hardwareSnapshotBuffer,
             IDiskUsageProvider diskUsageProvider,
-            INetworkAggregator networkAggregator,
-            IMonitorSettingsProvider settings) =>
+            INetworkAggregator networkAggregator) =>
         {
             var hardware = hardwareSnapshotBuffer.GetLatest();
             if (hardware is null)
@@ -31,7 +29,6 @@ public static class OverviewEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            var topApps = networkAggregator.GetLatestTopApps(settings.Current.TopNDefault);
             var diskUsedBytes = diskUsageProvider.GetCurrentUsedBytesByDiskNumber(
                 hardware.Disk.Drives
                     .Where(drive => drive.DiskNumber.HasValue)
@@ -81,19 +78,7 @@ public static class OverviewEndpoints
                     WanDownloadBytesPerSecond = network.WanDownloadBytesPerSecond,
                     LanUploadBytesPerSecond = network.LanUploadBytesPerSecond,
                     LanDownloadBytesPerSecond = network.LanDownloadBytesPerSecond
-                },
-                TopApps = topApps.Select(x => new AppTrafficItemDto
-                {
-                    AppKey = x.AppKey,
-                    ProcessName = x.ProcessName,
-                    DisplayName = x.DisplayName,
-                    UploadBytesPerSecond = x.UploadBytesPerSecond,
-                    DownloadBytesPerSecond = x.DownloadBytesPerSecond,
-                    WanUploadBytesPerSecond = x.WanUploadBytesPerSecond,
-                    WanDownloadBytesPerSecond = x.WanDownloadBytesPerSecond,
-                    LanUploadBytesPerSecond = x.LanUploadBytesPerSecond,
-                    LanDownloadBytesPerSecond = x.LanDownloadBytesPerSecond
-                }).ToArray()
+                }
             });
         });
 

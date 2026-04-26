@@ -39,18 +39,6 @@ export interface NetworkRealtimeDto {
   lanDownloadBytesPerSecond: number;
 }
 
-export interface AppTrafficItemDto {
-  appKey: string;
-  processName: string;
-  displayName?: string | null;
-  uploadBytesPerSecond: number;
-  downloadBytesPerSecond: number;
-  wanUploadBytesPerSecond: number;
-  wanDownloadBytesPerSecond: number;
-  lanUploadBytesPerSecond: number;
-  lanDownloadBytesPerSecond: number;
-}
-
 export interface AppTrafficSummaryDto {
   appKey: string;
   processName: string;
@@ -83,7 +71,6 @@ export interface NetworkPeriodSummaryDto {
 export interface AppSettingsDto {
   httpPort: number;
   hardwareSampleIntervalMs: number;
-  networkSampleIntervalMs: number;
   aggregateIntervalSeconds: number;
   historyRetentionDays: number;
   topNDefault: number;
@@ -92,5 +79,4 @@ export interface AppSettingsDto {
 export interface RealtimeOverviewDto {
   hardware: HardwareRealtimeDto;
   network: NetworkRealtimeDto;
-  topApps: AppTrafficItemDto[];
 }
