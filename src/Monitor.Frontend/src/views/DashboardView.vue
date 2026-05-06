@@ -86,7 +86,7 @@
             <MetricCard
               label="最热磁盘温度"
               :value="formatNullable(hardware?.diskTemperatureC, '°C')"
-              :hint="`已识别 ${hardware?.disks?.length ?? 0} 块磁盘`"
+              :hint="hottestDiskName"
               :badge="temperatureBadge(hardware?.diskTemperatureC)"
               :tone="temperatureTone(hardware?.diskTemperatureC)"
               icon-name="disk"
@@ -219,6 +219,11 @@ const sortedDisks = computed(() => {
 const sortedDiskSpaces = computed(() => {
   const diskSpaces = [...(hardware.value?.diskSpaces ?? [])];
   return diskSpaces.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
+});
+
+const hottestDiskName = computed(() => {
+  const hottestDisk = sortedDisks.value.find((disk) => disk.temperatureC != null);
+  return hottestDisk?.name.trim() || '磁盘名称不可用';
 });
 
 const bootTimeText = computed(() => {
