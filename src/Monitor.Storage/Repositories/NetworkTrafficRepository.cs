@@ -48,7 +48,6 @@ public sealed class NetworkTrafficRepository(
 
         var appIds = await UpsertAppRegistryAndGetIdsAsync(connection, transaction, buckets, cancellationToken);
         var currentRollupWindowStart = AlignDownToRollupWindow(DateTimeOffset.UtcNow);
-        var affectedCompletedRollupWindows = new HashSet<DateTimeOffset>();
 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -96,15 +95,18 @@ public sealed class NetworkTrafficRepository(
             var bucketRollupWindowStart = AlignDownToRollupWindow(bucketStartTime);
             if (bucketRollupWindowStart < currentRollupWindowStart)
             {
-                affectedCompletedRollupWindows.Add(bucketRollupWindowStart);
+                await ApplyCompletedRollupBucketDeltaAsync(
+                    connection,
+                    transaction,
+                    bucketRollupWindowStart,
+                    appIds[bucket.AppKey],
+                    MapDirection(bucket.Direction),
+                    MapScopeType(bucket.ScopeType),
+                    bucket.Bytes,
+                    bucket.Packets,
+                    cancellationToken);
             }
         }
-
-        await InvalidateCompletedRollupWindowsAsync(
-            connection,
-            transaction,
-            affectedCompletedRollupWindows,
-            cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
         logger.LogDebug("Inserted {Count} network traffic buckets into SQLite.", buckets.Count);
@@ -175,7 +177,7 @@ public sealed class NetworkTrafficRepository(
 
         if (topN is > 0)
         {
-            command.CommandText = BuildTopAppSummariesSql(trafficSourceSql, command, scopeFilter, directionFilter);
+            command.CommandText = BuildTopAppSummariesSql(trafficSourceSql, scopeFilter, directionFilter);
             command.Parameters.AddWithValue("$topN", topN.Value);
         }
         else
@@ -219,7 +221,13 @@ public sealed class NetworkTrafficRepository(
         await connection.OpenAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
-        var trafficSourceSql = await BuildTrafficSourceSqlAsync(connection, command, from, to, cancellationToken);
+        var trafficSourceSql = await BuildTrafficSourceSqlAsync(
+            connection,
+            command,
+            from,
+            to,
+            cancellationToken,
+            BuildTrafficSourceFilters(scopeFilter, directionFilter));
         var sqlBuilder = new StringBuilder("""
                                            WITH traffic AS (
                                            """);
@@ -285,10 +293,8 @@ public sealed class NetworkTrafficRepository(
                                                                    ELSE 0
                                                                END), 0) AS other_download_bytes
                                            FROM traffic t
-                                           WHERE 1 = 1
+                                           ;
                                            """);
-        AppendTrafficFilters(sqlBuilder, command, scopeFilter, directionFilter, "t");
-        sqlBuilder.Append(';');
         command.CommandText = sqlBuilder.ToString();
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -552,7 +558,8 @@ public sealed class NetworkTrafficRepository(
         SqliteCommand command,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<TrafficSourceFilter>? sourceFilters = null)
     {
         var plan = await BuildTrafficSourcePlanAsync(
             connection,
@@ -560,18 +567,25 @@ public sealed class NetworkTrafficRepository(
             to.ToUniversalTime(),
             cancellationToken);
 
+        var filters = sourceFilters is { Count: > 0 }
+            ? sourceFilters
+            : [TrafficSourceFilter.Empty];
         var sourceQueries = new List<string>();
         if (plan.RollupWindowStarts.Count > 0)
         {
             var rollupParameterNames = AddRollupWindowParameters(command, plan.RollupWindowStarts);
-            sourceQueries.Add($"""
-                               SELECT r.app_id,
-                                      r.direction,
-                                      r.scope_type,
-                                      r.bytes
-                               FROM network_usage_rollup_12h r
-                               WHERE r.window_start_time IN ({string.Join(", ", rollupParameterNames)})
-                               """);
+            foreach (var filter in filters)
+            {
+                sourceQueries.Add($"""
+                                   SELECT r.app_id,
+                                          r.direction,
+                                          r.scope_type,
+                                          r.bytes
+                                   FROM network_usage_rollup_12h r
+                                   WHERE r.window_start_time IN ({string.Join(", ", rollupParameterNames)})
+                                   {BuildTrafficSourceFilterSql(filter, "r")}
+                                   """);
+            }
         }
 
         for (var index = 0; index < plan.RawRanges.Count; index++)
@@ -582,15 +596,19 @@ public sealed class NetworkTrafficRepository(
             command.Parameters.AddWithValue(fromParameterName, ToDbTime(range.From));
             command.Parameters.AddWithValue(toParameterName, ToDbTime(range.To));
 
-            sourceQueries.Add($"""
-                               SELECT n.app_id,
-                                      n.direction,
-                                      n.scope_type,
-                                      n.bytes
-                               FROM network_usage_agg n
-                               WHERE n.bucket_start_time >= {fromParameterName}
-                                 AND n.bucket_start_time < {toParameterName}
-                               """);
+            foreach (var filter in filters)
+            {
+                sourceQueries.Add($"""
+                                   SELECT n.app_id,
+                                          n.direction,
+                                          n.scope_type,
+                                          n.bytes
+                                   FROM network_usage_agg n
+                                   WHERE n.bucket_start_time >= {fromParameterName}
+                                     AND n.bucket_start_time < {toParameterName}
+                                   {BuildTrafficSourceFilterSql(filter, "n")}
+                                   """);
+            }
         }
 
         if (sourceQueries.Count == 0)
@@ -606,6 +624,49 @@ public sealed class NetworkTrafficRepository(
         }
 
         return string.Join($"{Environment.NewLine}UNION ALL{Environment.NewLine}", sourceQueries);
+    }
+
+    private static IReadOnlyList<TrafficSourceFilter> BuildTrafficSourceFilters(
+        TrafficScopeFilter scopeFilter,
+        TrafficDirectionFilter directionFilter)
+    {
+        if (scopeFilter is TrafficScopeFilter.All && directionFilter is TrafficDirectionFilter.Total)
+        {
+            return [TrafficSourceFilter.Empty];
+        }
+
+        var scope = scopeFilter is TrafficScopeFilter.All ? null : MapScopeFilterToDbScope(scopeFilter);
+        if (directionFilter is not TrafficDirectionFilter.Total)
+        {
+            return [new TrafficSourceFilter(scope, MapDirectionFilterToDbDirection(directionFilter))];
+        }
+
+        if (scope is null)
+        {
+            return [TrafficSourceFilter.Empty];
+        }
+
+        return
+        [
+            new TrafficSourceFilter(scope, "outbound"),
+            new TrafficSourceFilter(scope, "inbound")
+        ];
+    }
+
+    private static string BuildTrafficSourceFilterSql(TrafficSourceFilter filter, string tableAlias)
+    {
+        var sql = new StringBuilder();
+        if (filter.ScopeType is not null)
+        {
+            sql.AppendLine($"  AND {tableAlias}.scope_type = '{filter.ScopeType}'");
+        }
+
+        if (filter.Direction is not null)
+        {
+            sql.AppendLine($"  AND {tableAlias}.direction = '{filter.Direction}'");
+        }
+
+        return sql.ToString().TrimEnd();
     }
 
     private static async Task<TrafficSourcePlan> BuildTrafficSourcePlanAsync(
@@ -903,16 +964,67 @@ public sealed class NetworkTrafficRepository(
         return result is null or DBNull ? 0 : Convert.ToInt64(result);
     }
 
-    private static async Task InvalidateCompletedRollupWindowsAsync(
+    private static async Task ApplyCompletedRollupBucketDeltaAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        IReadOnlyCollection<DateTimeOffset> windowStarts,
+        DateTimeOffset windowStart,
+        long appId,
+        string direction,
+        string scopeType,
+        long bytes,
+        long packets,
         CancellationToken cancellationToken)
     {
-        foreach (var windowStart in windowStarts)
-        {
-            await DeleteRollupWindowAsync(connection, transaction, windowStart, cancellationToken);
-        }
+        var updatedAt = DateTimeOffset.UtcNow;
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+                              INSERT INTO network_usage_rollup_12h (
+                                  window_start_time,
+                                  window_duration_seconds,
+                                  app_id,
+                                  direction,
+                                  scope_type,
+                                  bytes,
+                                  packets,
+                                  source_bucket_count,
+                                  updated_at
+                              )
+                              SELECT $windowStart,
+                                     $windowDurationSeconds,
+                                     $appId,
+                                     $direction,
+                                     $scopeType,
+                                     $bytes,
+                                     $packets,
+                                     1,
+                                     $updatedAt
+                              WHERE EXISTS (
+                                  SELECT 1
+                                  FROM network_usage_rollup_12h_windows
+                                  WHERE window_start_time = $windowStart
+                              )
+                              ON CONFLICT(window_start_time, app_id, direction, scope_type) DO UPDATE SET
+                                  bytes = bytes + excluded.bytes,
+                                  packets = packets + excluded.packets,
+                                  source_bucket_count = source_bucket_count + excluded.source_bucket_count,
+                                  updated_at = excluded.updated_at;
+
+                              UPDATE network_usage_rollup_12h_windows
+                              SET source_bucket_count = source_bucket_count + 1,
+                                  updated_at = $updatedAt
+                              WHERE window_start_time = $windowStart;
+                              """;
+        command.Parameters.AddWithValue("$windowStart", ToDbTime(windowStart));
+        command.Parameters.AddWithValue("$windowDurationSeconds", RollupWindowDurationSeconds);
+        command.Parameters.AddWithValue("$appId", appId);
+        command.Parameters.AddWithValue("$direction", direction);
+        command.Parameters.AddWithValue("$scopeType", scopeType);
+        command.Parameters.AddWithValue("$bytes", bytes);
+        command.Parameters.AddWithValue("$packets", packets);
+        command.Parameters.AddWithValue("$updatedAt", ToDbTime(updatedAt));
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task DeleteRollupWindowAsync(
@@ -936,50 +1048,37 @@ public sealed class NetworkTrafficRepository(
 
     private static string BuildTopAppSummariesSql(
         string trafficSourceSql,
-        SqliteCommand command,
         TrafficScopeFilter scopeFilter,
         TrafficDirectionFilter directionFilter)
     {
+        var rankExpression = GetOrderByExpression(scopeFilter, directionFilter, "t");
         var sqlBuilder = new StringBuilder("""
                                            WITH traffic AS (
                                            """);
         sqlBuilder.AppendLine(trafficSourceSql);
-        sqlBuilder.AppendLine("""
-                                           ),
-                                           ranked_apps AS (
-                                               SELECT t.app_id,
-                                                      SUM(t.bytes) AS rank_bytes
-                                               FROM traffic t
-                                               WHERE 1 = 1
-                                           """);
-
-        AppendTrafficFilters(sqlBuilder, command, scopeFilter, directionFilter, "t");
-
-        sqlBuilder.AppendLine("""
-                                               GROUP BY t.app_id
-                                               HAVING rank_bytes > 0
-                                               ORDER BY rank_bytes DESC
-                                               LIMIT $topN
-                                           )
-                                           SELECT a.app_key,
-                                                  a.process_name,
-                                                  a.display_name,
-                                                  SUM(CASE WHEN t.direction = 'outbound' THEN t.bytes ELSE 0 END) AS total_upload_bytes,
-                                                  SUM(CASE WHEN t.direction = 'inbound' THEN t.bytes ELSE 0 END) AS total_download_bytes,
-                                                  SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wan_upload_bytes,
-                                                  SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wan_download_bytes,
-                                                  SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'lan' THEN t.bytes ELSE 0 END) AS lan_upload_bytes,
-                                                  SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'lan' THEN t.bytes ELSE 0 END) AS lan_download_bytes,
-                                                  SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'loopback' THEN t.bytes ELSE 0 END) AS loopback_upload_bytes,
-                                                  SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'loopback' THEN t.bytes ELSE 0 END) AS loopback_download_bytes,
-                                                  SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS other_upload_bytes,
-                                                  SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS other_download_bytes
-                                           FROM ranked_apps r
-                                           JOIN app_registry a ON a.id = r.app_id
-                                           JOIN traffic t ON t.app_id = r.app_id
-                                           GROUP BY a.app_key, a.process_name, a.display_name, r.rank_bytes
-                                           ORDER BY r.rank_bytes DESC, a.process_name ASC;
-                                           """);
+        sqlBuilder.AppendLine($"""
+                                            )
+                                            SELECT a.app_key,
+                                                   a.process_name,
+                                                   a.display_name,
+                                                   SUM(CASE WHEN t.direction = 'outbound' THEN t.bytes ELSE 0 END) AS total_upload_bytes,
+                                                   SUM(CASE WHEN t.direction = 'inbound' THEN t.bytes ELSE 0 END) AS total_download_bytes,
+                                                   SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wan_upload_bytes,
+                                                   SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wan_download_bytes,
+                                                   SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'lan' THEN t.bytes ELSE 0 END) AS lan_upload_bytes,
+                                                   SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'lan' THEN t.bytes ELSE 0 END) AS lan_download_bytes,
+                                                   SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'loopback' THEN t.bytes ELSE 0 END) AS loopback_upload_bytes,
+                                                   SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'loopback' THEN t.bytes ELSE 0 END) AS loopback_download_bytes,
+                                                   SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS other_upload_bytes,
+                                                   SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS other_download_bytes,
+                                                   {rankExpression} AS rank_bytes
+                                            FROM traffic t
+                                            JOIN app_registry a ON a.id = t.app_id
+                                            GROUP BY a.app_key, a.process_name, a.display_name
+                                            HAVING rank_bytes > 0
+                                            ORDER BY rank_bytes DESC, a.process_name ASC
+                                            LIMIT $topN;
+                                            """);
 
         return sqlBuilder.ToString();
     }
@@ -1150,4 +1249,9 @@ public sealed class NetworkTrafficRepository(
     private sealed record TrafficSourcePlan(
         IReadOnlyList<DateTimeOffset> RollupWindowStarts,
         IReadOnlyList<TimeRange> RawRanges);
+
+    private sealed record TrafficSourceFilter(string? ScopeType, string? Direction)
+    {
+        public static TrafficSourceFilter Empty { get; } = new(null, null);
+    }
 }

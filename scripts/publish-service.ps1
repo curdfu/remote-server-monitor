@@ -15,6 +15,7 @@ $installScriptSource = Join-Path $PSScriptRoot 'install-service.ps1'
 $uninstallScriptSource = Join-Path $PSScriptRoot 'uninstall-service.ps1'
 
 $env:DOTNET_CLI_HOME = Join-Path $repoRoot '.dotnet-cli-home'
+$env:NUGET_PACKAGES = Join-Path $env:DOTNET_CLI_HOME '.nuget\packages'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
@@ -22,6 +23,7 @@ $env:DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE = '1'
 $env:MSBuildEnableWorkloadResolver = 'false'
 
 New-Item -ItemType Directory -Force -Path $env:DOTNET_CLI_HOME | Out-Null
+New-Item -ItemType Directory -Force -Path $env:NUGET_PACKAGES | Out-Null
 
 Write-Host "[1/3] 构建前端..."
 Push-Location $frontendDir
