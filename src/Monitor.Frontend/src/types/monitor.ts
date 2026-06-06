@@ -43,6 +43,7 @@ export interface AppTrafficSummaryDto {
   appKey: string;
   processName: string;
   displayName?: string | null;
+  executablePath?: string | null;
   totalUploadBytes: number;
   totalDownloadBytes: number;
   wanUploadBytes: number;

@@ -269,6 +269,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         return GetDiskUsageSnapshot().DiskSpaces;
     }
 
+    [SupportedOSPlatform("windows")]
     private DiskUsageSnapshot GetDiskUsageSnapshot()
     {
         var now = DateTimeOffset.UtcNow;
@@ -284,6 +285,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         }
     }
 
+    [SupportedOSPlatform("windows")]
     private DiskUsageSnapshot LoadDiskUsageSnapshot(DateTimeOffset createdAt)
     {
         var volumeNames = _diskTopologyEntries
@@ -1294,7 +1296,6 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         }
     }
 }
-
 
 
 

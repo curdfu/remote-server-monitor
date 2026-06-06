@@ -194,16 +194,17 @@ public sealed class NetworkTrafficRepository(
                 AppKey = reader.GetString(0),
                 ProcessName = reader.GetString(1),
                 DisplayName = reader.IsDBNull(2) ? null : reader.GetString(2),
-                TotalUploadBytes = reader.GetInt64(3),
-                TotalDownloadBytes = reader.GetInt64(4),
-                WanUploadBytes = reader.GetInt64(5),
-                WanDownloadBytes = reader.GetInt64(6),
-                LanUploadBytes = reader.GetInt64(7),
-                LanDownloadBytes = reader.GetInt64(8),
-                LoopbackUploadBytes = reader.GetInt64(9),
-                LoopbackDownloadBytes = reader.GetInt64(10),
-                OtherUploadBytes = reader.GetInt64(11),
-                OtherDownloadBytes = reader.GetInt64(12)
+                ExecutablePath = reader.IsDBNull(3) ? null : reader.GetString(3),
+                TotalUploadBytes = reader.GetInt64(4),
+                TotalDownloadBytes = reader.GetInt64(5),
+                WanUploadBytes = reader.GetInt64(6),
+                WanDownloadBytes = reader.GetInt64(7),
+                LanUploadBytes = reader.GetInt64(8),
+                LanDownloadBytes = reader.GetInt64(9),
+                LoopbackUploadBytes = reader.GetInt64(10),
+                LoopbackDownloadBytes = reader.GetInt64(11),
+                OtherUploadBytes = reader.GetInt64(12),
+                OtherDownloadBytes = reader.GetInt64(13)
             });
         }
 
@@ -1249,6 +1250,7 @@ public sealed class NetworkTrafficRepository(
                                             SELECT a.app_key,
                                                    a.process_name,
                                                    a.display_name,
+                                                   a.executable_path,
                                                    SUM(CASE WHEN t.direction = 'outbound' THEN t.bytes ELSE 0 END) AS total_upload_bytes,
                                                    SUM(CASE WHEN t.direction = 'inbound' THEN t.bytes ELSE 0 END) AS total_download_bytes,
                                                    SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wan_upload_bytes,
@@ -1262,7 +1264,7 @@ public sealed class NetworkTrafficRepository(
                                                    {rankExpression} AS rank_bytes
                                             FROM traffic t
                                             JOIN app_registry a ON a.id = t.app_id
-                                            GROUP BY a.app_key, a.process_name, a.display_name
+                                            GROUP BY a.app_key, a.process_name, a.display_name, a.executable_path
                                             HAVING rank_bytes > 0
                                             ORDER BY rank_bytes DESC, a.process_name ASC
                                             LIMIT $topN;
@@ -1286,6 +1288,7 @@ public sealed class NetworkTrafficRepository(
                   SELECT a.app_key,
                          a.process_name,
                          a.display_name,
+                         a.executable_path,
                          SUM(CASE WHEN t.direction = 'outbound' THEN t.bytes ELSE 0 END) AS total_upload_bytes,
                          SUM(CASE WHEN t.direction = 'inbound' THEN t.bytes ELSE 0 END) AS total_download_bytes,
                          SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wan_upload_bytes,
@@ -1298,7 +1301,7 @@ public sealed class NetworkTrafficRepository(
                          SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS other_download_bytes
                   FROM traffic t
                   JOIN app_registry a ON a.id = t.app_id
-                  GROUP BY a.app_key, a.process_name, a.display_name
+                  GROUP BY a.app_key, a.process_name, a.display_name, a.executable_path
                   ORDER BY
                   """;
 

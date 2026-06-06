@@ -357,7 +357,7 @@
               <div class="ranking-main">
                 <span class="ranking-index">{{ index + 1 }}</span>
                 <strong>{{ item.displayName || item.processName }}</strong>
-                <small class="muted">{{ item.processName }}</small>
+                <small class="muted">{{ item.executablePath || item.processName }}</small>
               </div>
               <div class="ranking-side">
                 <span class="ranking-value">{{ formatBytes(getRankingValue(item)) }}</span>
@@ -395,7 +395,7 @@
               <span class="panel-icon"><AppIcon name="network" :size="16" /></span>
               <div>
                 <h4>{{ selectedApp.displayName || selectedApp.processName }}</h4>
-                <p class="panel-subtitle">{{ selectedApp.processName }}</p>
+                <p class="panel-subtitle">{{ selectedApp.executablePath || selectedApp.processName }}</p>
               </div>
             </div>
             <div class="app-segments-actions">

@@ -145,6 +145,7 @@ public static class NetworkEndpoints
             AppKey = summary.AppKey,
             ProcessName = summary.ProcessName,
             DisplayName = summary.DisplayName,
+            ExecutablePath = summary.ExecutablePath,
             TotalUploadBytes = summary.TotalUploadBytes,
             TotalDownloadBytes = summary.TotalDownloadBytes,
             WanUploadBytes = summary.WanUploadBytes,
