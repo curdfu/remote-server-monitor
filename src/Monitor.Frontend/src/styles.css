@@ -2103,10 +2103,13 @@ button:disabled {
 .ranking-main strong {
   min-width: 0;
   color: var(--text-strong);
+  overflow-wrap: anywhere;
 }
 
 .ranking-main small {
   min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .ranking-index {
@@ -2255,12 +2258,21 @@ button:disabled {
   min-width: 0;
 }
 
+.app-segments-title > div {
+  min-width: 0;
+}
+
 .app-segments-title h4 {
   margin: 0;
   color: var(--text-strong);
   font-size: 14px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.app-segments-title .panel-subtitle {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .app-segments-tags {
