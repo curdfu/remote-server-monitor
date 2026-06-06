@@ -1,5 +1,6 @@
 ﻿import type {
   AppSettingsDto,
+  AppTrafficSegmentDto,
   AppTrafficSummaryDto,
   HardwareRealtimeDto,
   NetworkPeriodSummaryDto,
@@ -45,7 +46,7 @@ export function getNetworkApps(params?: {
   from?: string;
   to?: string;
   topN?: number;
-  scope?: 'all' | 'wan' | 'lan';
+  scope?: 'all' | 'wan' | 'lan' | 'loopback';
   direction?: 'total' | 'upload' | 'download';
 }) {
   const query = new URLSearchParams();
@@ -57,11 +58,26 @@ export function getNetworkApps(params?: {
   return request<AppTrafficSummaryDto[]>(`/api/network/apps${query.toString() ? `?${query}` : ''}`);
 }
 
+// 调用后端 /api/network/apps/{appKey}/segments：获取单个应用的历史分段流量
+export function getNetworkAppSegments(appKey: string, params?: {
+  from?: string;
+  to?: string;
+  scope?: 'all' | 'wan' | 'lan' | 'loopback';
+  direction?: 'total' | 'upload' | 'download';
+}) {
+  const query = new URLSearchParams();
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  if (params?.scope) query.set('scope', params.scope);
+  if (params?.direction) query.set('direction', params.direction);
+  return request<AppTrafficSegmentDto[]>(`/api/network/apps/${encodeURIComponent(appKey)}/segments${query.toString() ? `?${query}` : ''}`);
+}
+
 // 调用后端 /api/network/summary：获取网络页“汇总卡片 / 占比面板”使用的汇总数据
 export function getNetworkSummary(params?: {
   from?: string;
   to?: string;
-  scope?: 'all' | 'wan' | 'lan';
+  scope?: 'all' | 'wan' | 'lan' | 'loopback';
   direction?: 'total' | 'upload' | 'download';
 }) {
   const query = new URLSearchParams();

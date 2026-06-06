@@ -343,7 +343,16 @@
               v-for="(item, index) in topRanking"
               :key="item.appKey"
               class="ranking-item"
-              :class="index < 3 ? [`ranking-item-top`, `ranking-item-top-${index + 1}`] : []"
+              :class="[
+                index < 3 ? [`ranking-item-top`, `ranking-item-top-${index + 1}`] : [],
+                { 'ranking-item-active': selectedApp?.appKey === item.appKey }
+              ]"
+              role="button"
+              tabindex="0"
+              :aria-pressed="selectedApp?.appKey === item.appKey"
+              @click="selectApp(item)"
+              @keydown.enter.prevent="selectApp(item)"
+              @keydown.space.prevent="selectApp(item)"
             >
               <div class="ranking-main">
                 <span class="ranking-index">{{ index + 1 }}</span>
@@ -369,9 +378,71 @@
             </li>
             <li v-if="!topRanking.length" class="muted">当前还没有可展示的排行数据。</li>
           </ol>
+
         </article>
       </div>
     </section>
+
+    <Teleport to="body">
+      <div v-if="selectedApp" class="app-segments-overlay" @click.self="closeAppSegmentsPanel">
+        <section class="app-segments-panel" role="dialog" aria-modal="true" aria-live="polite">
+          <button type="button" class="app-segments-close" aria-label="关闭应用流量明细" @click="closeAppSegmentsPanel">
+            <AppIcon name="close" :size="16" />
+          </button>
+
+          <div class="app-segments-header">
+            <div class="app-segments-title">
+              <span class="panel-icon"><AppIcon name="network" :size="16" /></span>
+              <div>
+                <h4>{{ selectedApp.displayName || selectedApp.processName }}</h4>
+                <p class="panel-subtitle">{{ selectedApp.processName }}</p>
+              </div>
+            </div>
+            <div class="app-segments-actions">
+              <div class="app-segments-tags">
+                <span class="section-tag">{{ segmentDurationLabel }}</span>
+                <span class="section-tag">{{ appSegments.length }} 段</span>
+              </div>
+            </div>
+          </div>
+
+          <p v-if="selectedAppOutsideRanking" class="app-segments-note">
+            该应用不在当前排行范围内，详情仍按当前筛选条件查询。
+          </p>
+
+          <div v-if="segmentsErrorMessage" class="app-segments-state app-segments-error">
+            {{ segmentsErrorMessage }}
+          </div>
+          <div v-else-if="isSegmentsLoading" class="app-segments-state">
+            正在加载应用分段流量...
+          </div>
+          <div v-else-if="!appSegments.length" class="app-segments-state">
+            当前筛选范围内没有该应用的分段流量。
+          </div>
+          <div v-else class="app-segments-chart" aria-label="应用分段流量柱状图">
+            <div class="app-segments-chart-grid" aria-hidden="true"></div>
+            <ol class="app-segments-bars">
+              <li
+                v-for="(segment, segmentIndex) in appSegments"
+                :key="`${segment.from}-${segment.to}`"
+                class="app-segment-bar-item"
+                :class="getSegmentTooltipPlacementClass(segmentIndex)"
+              >
+                <div
+                  class="app-segment-bar"
+                  :style="{ height: `${getSegmentPercent(segment)}%` }"
+                  tabindex="0"
+                  :aria-label="getSegmentTooltip(segment)"
+                >
+                  <span class="app-segment-tooltip">{{ getSegmentTooltip(segment) }}</span>
+                </div>
+                <span class="app-segment-axis-label">{{ formatSegmentAxisLabel(segment) }}</span>
+              </li>
+            </ol>
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </section>
 </template>
 
@@ -379,8 +450,8 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
 import PageHeader from '../components/PageHeader.vue';
-import { getNetworkApps, getNetworkSummary } from '../services/api';
-import type { AppTrafficSummaryDto, NetworkPeriodSummaryDto } from '../types/monitor';
+import { getNetworkAppSegments, getNetworkApps, getNetworkSummary } from '../services/api';
+import type { AppTrafficSegmentDto, AppTrafficSummaryDto, NetworkPeriodSummaryDto } from '../types/monitor';
 
 // 常用时间预设，对应页面顶部的快捷时间按钮
 const presetOptions = [
@@ -395,16 +466,21 @@ const presetOptions = [
 
 // 页面主数据：应用排行、汇总卡片、占比面板、加载状态
 const items = ref<AppTrafficSummaryDto[]>([]);
+const selectedApp = ref<AppTrafficSummaryDto | null>(null);
+const appSegments = ref<AppTrafficSegmentDto[]>([]);
 const overviewSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const totalsSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const isLoading = ref(false);
+const isSegmentsLoading = ref(false);
 const loadingSource = ref<'filter' | 'manual'>('filter');
 const errorMessage = ref('');
+const segmentsErrorMessage = ref('');
 const isMobileViewport = ref(false);
 const isMobileFiltersExpanded = ref(false);
 let autoRefreshTimer: number | null = null;
 let mobileViewportQuery: MediaQueryList | null = null;
 let pendingReloadSource: 'filter' | 'manual' = 'filter';
+let segmentsRequestVersion = 0;
 
 // 查询条件：分别驱动筛选区、占比面板和应用排行
 const filters = reactive({
@@ -487,6 +563,9 @@ const showRankingSkeleton = computed(() => isLoading.value && (!topRanking.value
 const rankingMaxValue = computed(() =>
   topRanking.value.reduce((max, item) => Math.max(max, getRankingValue(item)), 0)
 );
+const segmentMaxValue = computed(() =>
+  appSegments.value.reduce((max, segment) => Math.max(max, getSegmentValue(segment)), 0)
+);
 
 const rankingDescription = computed(() => {
   const scopeLabel = filters.scope === 'wan' ? 'WAN' : filters.scope === 'lan' ? 'LAN' : filters.scope === 'loopback' ? 'Loopback' : '全部';
@@ -494,6 +573,20 @@ const rankingDescription = computed(() => {
     filters.direction === 'upload' ? '上传' : filters.direction === 'download' ? '下载' : '总流量';
   return `${scopeLabel} / ${directionLabel}`;
 });
+
+const segmentDurationLabel = computed(() => {
+  const from = filters.from ? new Date(filters.from) : null;
+  const to = filters.to ? new Date(filters.to) : null;
+  if (!from || !to || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return '--';
+  }
+
+  return to.getTime() - from.getTime() <= 24 * 60 * 60 * 1000 ? '1 小时' : '12 小时';
+});
+
+const selectedAppOutsideRanking = computed(() =>
+  selectedApp.value !== null && !topRanking.value.some((item) => item.appKey === selectedApp.value?.appKey)
+);
 
 const activePresetHours = computed(() => getMatchedPresetHours(filters.from, filters.to));
 const showAdvancedFilters = computed(() => !isMobileViewport.value || isMobileFiltersExpanded.value);
@@ -526,6 +619,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  segmentsRequestVersion++;
+
   if (autoRefreshTimer !== null) {
     window.clearTimeout(autoRefreshTimer);
     autoRefreshTimer = null;
@@ -590,6 +685,10 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
     items.value = apps;
     overviewSummary.value = overviewData;
     totalsSummary.value = totalsData;
+    syncSelectedAppAfterRankingLoad(apps);
+    if (selectedApp.value) {
+      void loadSelectedAppSegments();
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载网络汇总失败。';
   } finally {
@@ -606,6 +705,69 @@ function refreshApps() {
   }
 
   void loadApps('manual');
+}
+
+function selectApp(item: AppTrafficSummaryDto) {
+  selectedApp.value = item;
+  void loadSelectedAppSegments();
+}
+
+function closeAppSegmentsPanel() {
+  selectedApp.value = null;
+  appSegments.value = [];
+  segmentsErrorMessage.value = '';
+  isSegmentsLoading.value = false;
+  segmentsRequestVersion++;
+}
+
+async function loadSelectedAppSegments() {
+  const app = selectedApp.value;
+  if (!app) {
+    appSegments.value = [];
+    segmentsErrorMessage.value = '';
+    return;
+  }
+
+  const requestVersion = ++segmentsRequestVersion;
+  isSegmentsLoading.value = true;
+  segmentsErrorMessage.value = '';
+
+  try {
+    const segments = await getNetworkAppSegments(app.appKey, {
+      from: toIsoString(filters.from),
+      to: toIsoString(filters.to),
+      scope: filters.scope,
+      direction: filters.direction
+    });
+
+    if (requestVersion !== segmentsRequestVersion) {
+      return;
+    }
+
+    appSegments.value = segments;
+  } catch (error) {
+    if (requestVersion !== segmentsRequestVersion) {
+      return;
+    }
+
+    segmentsErrorMessage.value = error instanceof Error ? error.message : '加载应用分段流量失败。';
+    appSegments.value = [];
+  } finally {
+    if (requestVersion === segmentsRequestVersion) {
+      isSegmentsLoading.value = false;
+    }
+  }
+}
+
+function syncSelectedAppAfterRankingLoad(apps: AppTrafficSummaryDto[]) {
+  if (!selectedApp.value) {
+    return;
+  }
+
+  const refreshedApp = apps.find((item) => item.appKey === selectedApp.value?.appKey);
+  if (refreshedApp) {
+    selectedApp.value = refreshedApp;
+  }
 }
 
 function toggleMobileFilters() {
@@ -722,5 +884,95 @@ function getRankingPercent(item: AppTrafficSummaryDto) {
   }
 
   return Math.max(6, (value / rankingMaxValue.value) * 100);
+}
+
+function getSegmentValue(segment: AppTrafficSegmentDto) {
+  if (filters.scope === 'wan') {
+    if (filters.direction === 'upload') return segment.wanUploadBytes;
+    if (filters.direction === 'download') return segment.wanDownloadBytes;
+    return segment.wanUploadBytes + segment.wanDownloadBytes;
+  }
+
+  if (filters.scope === 'lan') {
+    if (filters.direction === 'upload') return segment.lanUploadBytes;
+    if (filters.direction === 'download') return segment.lanDownloadBytes;
+    return segment.lanUploadBytes + segment.lanDownloadBytes;
+  }
+
+  if (filters.scope === 'loopback') {
+    if (filters.direction === 'upload') return segment.loopbackUploadBytes;
+    if (filters.direction === 'download') return segment.loopbackDownloadBytes;
+    return segment.loopbackUploadBytes + segment.loopbackDownloadBytes;
+  }
+
+  if (filters.direction === 'upload') return segment.totalUploadBytes;
+  if (filters.direction === 'download') return segment.totalDownloadBytes;
+  return segment.totalUploadBytes + segment.totalDownloadBytes;
+}
+
+function getSegmentUploadBytes(segment: AppTrafficSegmentDto) {
+  if (filters.scope === 'wan') return segment.wanUploadBytes;
+  if (filters.scope === 'lan') return segment.lanUploadBytes;
+  if (filters.scope === 'loopback') return segment.loopbackUploadBytes;
+  return segment.totalUploadBytes;
+}
+
+function getSegmentDownloadBytes(segment: AppTrafficSegmentDto) {
+  if (filters.scope === 'wan') return segment.wanDownloadBytes;
+  if (filters.scope === 'lan') return segment.lanDownloadBytes;
+  if (filters.scope === 'loopback') return segment.loopbackDownloadBytes;
+  return segment.totalDownloadBytes;
+}
+
+function getSegmentPercent(segment: AppTrafficSegmentDto) {
+  const value = getSegmentValue(segment);
+  if (segmentMaxValue.value <= 0 || value <= 0) {
+    return 0;
+  }
+
+  return Math.max(6, (value / segmentMaxValue.value) * 100);
+}
+
+function formatSegmentRange(segment: AppTrafficSegmentDto) {
+  const from = new Date(segment.from);
+  const to = new Date(segment.to);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return '--';
+  }
+
+  return `${from.toLocaleString()} ~ ${to.toLocaleString()}`;
+}
+
+function formatSegmentAxisLabel(segment: AppTrafficSegmentDto) {
+  const from = new Date(segment.from);
+  if (Number.isNaN(from.getTime())) {
+    return '--';
+  }
+
+  const month = String(from.getMonth() + 1).padStart(2, '0');
+  const day = String(from.getDate()).padStart(2, '0');
+  const hour = String(from.getHours()).padStart(2, '0');
+  return segmentDurationLabel.value === '1 小时' ? `${hour}:00` : `${month}-${day}`;
+}
+
+function getSegmentTooltip(segment: AppTrafficSegmentDto) {
+  return [
+    formatSegmentRange(segment),
+    `流量 ${formatBytes(getSegmentValue(segment))}`,
+    `上传 ${formatBytes(getSegmentUploadBytes(segment))}`,
+    `下载 ${formatBytes(getSegmentDownloadBytes(segment))}`
+  ].join('\n');
+}
+
+function getSegmentTooltipPlacementClass(index: number) {
+  if (index < 2) {
+    return 'app-segment-bar-item-left-edge';
+  }
+
+  if (index >= appSegments.value.length - 2) {
+    return 'app-segment-bar-item-right-edge';
+  }
+
+  return '';
 }
 </script>

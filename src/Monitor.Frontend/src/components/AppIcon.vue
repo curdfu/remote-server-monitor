@@ -118,6 +118,11 @@
       <path d="M4 13a8 8 0 0 0 13.7 5.4L20 16" />
       <path d="M16 16h4v4" />
     </template>
+
+    <template v-else-if="name === 'close'">
+      <path d="M6.5 6.5 17.5 17.5" />
+      <path d="M17.5 6.5 6.5 17.5" />
+    </template>
   </svg>
 </template>
 
@@ -142,7 +147,8 @@ const props = defineProps<{
     | 'apps'
     | 'palette'
     | 'status'
-    | 'refresh';
+    | 'refresh'
+    | 'close';
   size?: number | string;
 }>();
 

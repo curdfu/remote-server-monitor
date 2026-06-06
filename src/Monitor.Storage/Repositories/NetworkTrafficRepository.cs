@@ -318,6 +318,71 @@ public sealed class NetworkTrafficRepository(
         };
     }
 
+    public async Task<IReadOnlyList<AppTrafficSegment>> QueryAppSegmentsAsync(
+        string appKey,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        TimeSpan segmentDuration,
+        TrafficScopeFilter scopeFilter = TrafficScopeFilter.All,
+        TrafficDirectionFilter directionFilter = TrafficDirectionFilter.Total,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(appKey);
+        if (from >= to)
+        {
+            return Array.Empty<AppTrafficSegment>();
+        }
+
+        if (segmentDuration <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(segmentDuration), segmentDuration, "Segment duration must be positive.");
+        }
+
+        var rangeFrom = from.ToUniversalTime();
+        var rangeTo = to.ToUniversalTime();
+
+        await using var connection = dbConnectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        var appId = await QueryAppIdAsync(connection, appKey, cancellationToken);
+        if (appId is null)
+        {
+            return Array.Empty<AppTrafficSegment>();
+        }
+
+        var ranges = BuildSegmentRanges(rangeFrom, rangeTo, segmentDuration);
+        var results = new List<AppTrafficSegment>(ranges.Count);
+        foreach (var range in ranges)
+        {
+            var summary = await QueryAppSegmentSummaryAsync(
+                connection,
+                appId.Value,
+                range.From,
+                range.To,
+                scopeFilter,
+                directionFilter,
+                cancellationToken);
+
+            results.Add(new AppTrafficSegment
+            {
+                From = range.From,
+                To = range.To,
+                TotalUploadBytes = summary.TotalUploadBytes,
+                TotalDownloadBytes = summary.TotalDownloadBytes,
+                WanUploadBytes = summary.WanUploadBytes,
+                WanDownloadBytes = summary.WanDownloadBytes,
+                LanUploadBytes = summary.LanUploadBytes,
+                LanDownloadBytes = summary.LanDownloadBytes,
+                LoopbackUploadBytes = summary.LoopbackUploadBytes,
+                LoopbackDownloadBytes = summary.LoopbackDownloadBytes,
+                OtherUploadBytes = summary.OtherUploadBytes,
+                OtherDownloadBytes = summary.OtherDownloadBytes
+            });
+        }
+
+        return results;
+    }
+
     public async Task<int> RollupCompletedWindowsAsync(
         int maxWindows,
         CancellationToken cancellationToken = default)
@@ -403,6 +468,129 @@ public sealed class NetworkTrafficRepository(
 
         await transaction.CommitAsync(cancellationToken);
         logger.LogDebug("Upserted {Count} app registry entries into SQLite.", entries.Count);
+    }
+
+    private static async Task<long?> QueryAppIdAsync(
+        SqliteConnection connection,
+        string appKey,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+                              SELECT id
+                              FROM app_registry
+                              WHERE app_key = $appKey
+                              LIMIT 1;
+                              """;
+        command.Parameters.AddWithValue("$appKey", appKey);
+
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result is null or DBNull ? null : Convert.ToInt64(result);
+    }
+
+    private static async Task<AppTrafficPeriodSummary> QueryAppSegmentSummaryAsync(
+        SqliteConnection connection,
+        long appId,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        TrafficScopeFilter scopeFilter,
+        TrafficDirectionFilter directionFilter,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        var trafficSourceSql = await BuildTrafficSourceSqlAsync(
+            connection,
+            command,
+            from,
+            to,
+            cancellationToken,
+            BuildTrafficSourceFilters(scopeFilter, directionFilter));
+        command.CommandText = $"""
+                               WITH traffic AS (
+                               {trafficSourceSql}
+                               )
+                               SELECT COALESCE(SUM(CASE
+                                                       WHEN t.direction = 'outbound'
+                                                       THEN t.bytes
+                                                       ELSE 0
+                                                   END), 0) AS total_upload_bytes,
+                                      COALESCE(SUM(CASE
+                                                       WHEN t.direction = 'inbound'
+                                                       THEN t.bytes
+                                                       ELSE 0
+                                                   END), 0) AS total_download_bytes,
+                                      COALESCE(SUM(CASE
+                                                       WHEN t.direction = 'outbound'
+                                                            AND t.scope_type = 'wan'
+                                                       THEN t.bytes
+                                                       ELSE 0
+                                                   END), 0) AS wan_upload_bytes,
+                                      COALESCE(SUM(CASE
+                                                       WHEN t.direction = 'inbound'
+                                                            AND t.scope_type = 'wan'
+                                                       THEN t.bytes
+                                                       ELSE 0
+                                                   END), 0) AS wan_download_bytes,
+                                      COALESCE(SUM(CASE
+                                                       WHEN t.direction = 'outbound'
+                                                            AND t.scope_type = 'lan'
+                                                       THEN t.bytes
+                                                       ELSE 0
+                                                   END), 0) AS lan_upload_bytes,
+                                      COALESCE(SUM(CASE
+                                                       WHEN t.direction = 'inbound'
+                                                            AND t.scope_type = 'lan'
+                                                       THEN t.bytes
+                                                       ELSE 0
+                                                   END), 0) AS lan_download_bytes,
+                                      COALESCE(SUM(CASE
+                                                       WHEN t.direction = 'outbound'
+                                                            AND t.scope_type = 'loopback'
+                                                       THEN t.bytes
+                                                       ELSE 0
+                                                   END), 0) AS loopback_upload_bytes,
+                                      COALESCE(SUM(CASE
+                                                       WHEN t.direction = 'inbound'
+                                                            AND t.scope_type = 'loopback'
+                                                       THEN t.bytes
+                                                       ELSE 0
+                                                   END), 0) AS loopback_download_bytes,
+                                      COALESCE(SUM(CASE
+                                                       WHEN t.direction = 'outbound'
+                                                            AND t.scope_type = 'other'
+                                                       THEN t.bytes
+                                                       ELSE 0
+                                                   END), 0) AS other_upload_bytes,
+                                      COALESCE(SUM(CASE
+                                                       WHEN t.direction = 'inbound'
+                                                            AND t.scope_type = 'other'
+                                                       THEN t.bytes
+                                                       ELSE 0
+                                                   END), 0) AS other_download_bytes
+                               FROM traffic t
+                               WHERE t.app_id = $appId;
+                               """;
+        command.Parameters.AddWithValue("$appId", appId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return new AppTrafficPeriodSummary();
+        }
+
+        return new AppTrafficPeriodSummary
+        {
+            TotalUploadBytes = reader.GetInt64(0),
+            TotalDownloadBytes = reader.GetInt64(1),
+            WanUploadBytes = reader.GetInt64(2),
+            WanDownloadBytes = reader.GetInt64(3),
+            LanUploadBytes = reader.GetInt64(4),
+            LanDownloadBytes = reader.GetInt64(5),
+            LoopbackUploadBytes = reader.GetInt64(6),
+            LoopbackDownloadBytes = reader.GetInt64(7),
+            OtherUploadBytes = reader.GetInt64(8),
+            OtherDownloadBytes = reader.GetInt64(9)
+        };
     }
 
     private async Task<Dictionary<string, long>> UpsertAppRegistryAndGetIdsAsync(
@@ -1208,6 +1396,57 @@ public sealed class NetworkTrafficRepository(
         {
             yield return windowStart;
         }
+    }
+
+    private static IReadOnlyList<TimeRange> BuildSegmentRanges(
+        DateTimeOffset from,
+        DateTimeOffset to,
+        TimeSpan segmentDuration)
+    {
+        var rangeFrom = from.ToUniversalTime();
+        var rangeTo = to.ToUniversalTime();
+        if (rangeFrom >= rangeTo)
+        {
+            return Array.Empty<TimeRange>();
+        }
+
+        if (segmentDuration == RollupWindowDuration)
+        {
+            return BuildRollupAlignedSegmentRanges(rangeFrom, rangeTo);
+        }
+
+        var ranges = new List<TimeRange>();
+        for (var segmentFrom = rangeFrom; segmentFrom < rangeTo; segmentFrom = segmentFrom.Add(segmentDuration))
+        {
+            var segmentTo = segmentFrom.Add(segmentDuration);
+            ranges.Add(new TimeRange(segmentFrom, segmentTo < rangeTo ? segmentTo : rangeTo));
+        }
+
+        return ranges;
+    }
+
+    private static IReadOnlyList<TimeRange> BuildRollupAlignedSegmentRanges(
+        DateTimeOffset from,
+        DateTimeOffset to)
+    {
+        var ranges = new List<TimeRange>();
+        var segmentFrom = from;
+        var nextAlignedWindowStart = AlignUpToRollupWindow(segmentFrom);
+        if (segmentFrom < nextAlignedWindowStart)
+        {
+            var segmentTo = nextAlignedWindowStart < to ? nextAlignedWindowStart : to;
+            ranges.Add(new TimeRange(segmentFrom, segmentTo));
+            segmentFrom = segmentTo;
+        }
+
+        while (segmentFrom < to)
+        {
+            var segmentTo = segmentFrom.Add(RollupWindowDuration);
+            ranges.Add(new TimeRange(segmentFrom, segmentTo < to ? segmentTo : to));
+            segmentFrom = segmentTo;
+        }
+
+        return ranges;
     }
 
     private static string ToDbTime(DateTimeOffset value) => value.ToUniversalTime().ToString("O");
