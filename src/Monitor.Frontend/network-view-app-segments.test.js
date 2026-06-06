@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const apiPath = new URL('./src/services/api.ts', import.meta.url);
 const viewPath = new URL('./src/views/NetworkView.vue', import.meta.url);
+const stylesPath = new URL('./src/styles.css', import.meta.url);
 
 test('network app segments API encodes app keys in the route', async () => {
   const source = await readFile(apiPath, 'utf8');
@@ -142,5 +143,15 @@ test('network view renders clickable app traffic segment details', async () => {
     source,
     /当前筛选范围内没有该应用的分段流量。/,
     'expected segment empty state',
+  );
+});
+
+test('network app segment tooltip rises above sibling bars while active', async () => {
+  const source = await readFile(stylesPath, 'utf8');
+
+  assert.match(
+    source,
+    /\.app-segment-bar-item:hover,\s*\.app-segment-bar-item:focus-within\s*\{\s*z-index:\s*4;/,
+    'expected hovered or focused segment items to rise above later sibling bars',
   );
 });

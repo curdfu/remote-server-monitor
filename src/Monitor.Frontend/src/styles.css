@@ -2387,6 +2387,11 @@ button:disabled {
   height: 100%;
 }
 
+.app-segment-bar-item:hover,
+.app-segment-bar-item:focus-within {
+  z-index: 4;
+}
+
 .app-segment-bar {
   position: relative;
   width: 22px;
