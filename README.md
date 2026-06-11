@@ -39,7 +39,7 @@
 
 ## 部署
 发布、安装与卸载见：
-- `deploy/README.md`
+- `scripts/README.md`
 - `scripts/publish-service.ps1`
 - `scripts/install-service.ps1`
 - `scripts/uninstall-service.ps1`

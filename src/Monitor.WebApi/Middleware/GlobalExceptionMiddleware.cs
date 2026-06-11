@@ -12,6 +12,12 @@ public sealed class GlobalExceptionMiddleware(
         {
             await next(context);
         }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            // Client disconnected or cancelled the request — not a server error.
+            logger.LogDebug("Request canceled by client. Path: {Path}, TraceId: {TraceId}",
+                context.Request.Path, context.TraceIdentifier);
+        }
         catch (Exception exception)
         {
             var traceId = context.TraceIdentifier;

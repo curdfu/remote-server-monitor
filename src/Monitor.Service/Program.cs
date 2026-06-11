@@ -23,6 +23,16 @@ if (persistedSettings.Count > 0)
     builder.Configuration.AddInMemoryCollection(persistedSettings);
 }
 
+// Configure listen URL before Build() to avoid Kestrel default address being appended.
+// IConfiguration already contains merged values from appsettings.json + SQLite persisted settings.
+var listenAddress = builder.Configuration["Monitor:ListenAddress"];
+if (string.IsNullOrWhiteSpace(listenAddress))
+{
+    listenAddress = IPAddress.Loopback.ToString();
+}
+var httpPort = builder.Configuration.GetValue<int>("Monitor:HttpPort");
+builder.WebHost.UseUrls($"http://{listenAddress}:{httpPort}");
+
 builder.Host.UseWindowsService(options =>
 {
     options.ServiceName = ServiceConstants.ServiceName;
@@ -40,14 +50,8 @@ builder.Services
 var app = builder.Build();
 var appConfiguration = app.Services.GetRequiredService<IAppConfigurationProvider>();
 var currentSettings = appConfiguration.Current;
-var listenAddress = builder.Configuration["Monitor:ListenAddress"];
-if (string.IsNullOrWhiteSpace(listenAddress))
-{
-    listenAddress = IPAddress.Loopback.ToString();
-}
 
 app.UseSerilogRequestLogging();
-app.Urls.Add($"http://{listenAddress}:{currentSettings.HttpPort}");
 
 Log.ForContext("ImportantInfo", true).Information(
     "Monitor service listen configuration applied. ListenAddress={ListenAddress}, Port={Port}, PersistedSettingsLoaded={PersistedSettingsLoaded}",

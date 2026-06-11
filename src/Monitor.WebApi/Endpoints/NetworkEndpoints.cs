@@ -214,8 +214,46 @@ public static class NetworkEndpoints
 
     private static int CountSegments(DateTimeOffset from, DateTimeOffset to, TimeSpan segmentDuration)
     {
-        var segmentCount = (int)Math.Ceiling((to - from).TotalSeconds / segmentDuration.TotalSeconds);
-        return segmentDuration >= TimeSpan.FromHours(12) ? segmentCount + 1 : segmentCount;
+        var rollupWindowDuration = TimeSpan.FromSeconds(NetworkTrafficRepository.RollupWindowDurationSeconds);
+        if (segmentDuration == rollupWindowDuration)
+        {
+            return CountRollupAlignedSegments(from, to, rollupWindowDuration);
+        }
+
+        return (int)Math.Ceiling((to - from).TotalSeconds / segmentDuration.TotalSeconds);
+    }
+
+    private static int CountRollupAlignedSegments(
+        DateTimeOffset from,
+        DateTimeOffset to,
+        TimeSpan rollupWindowDuration)
+    {
+        var rangeFrom = from.ToUniversalTime();
+        var rangeTo = to.ToUniversalTime();
+        var count = 0;
+        var segmentFrom = rangeFrom;
+        var nextAlignedWindowStart = AlignUpToWindow(segmentFrom, rollupWindowDuration);
+        if (segmentFrom < nextAlignedWindowStart)
+        {
+            segmentFrom = nextAlignedWindowStart < rangeTo ? nextAlignedWindowStart : rangeTo;
+            count++;
+        }
+
+        while (segmentFrom < rangeTo)
+        {
+            segmentFrom = segmentFrom.Add(rollupWindowDuration);
+            count++;
+        }
+
+        return count;
+    }
+
+    private static DateTimeOffset AlignUpToWindow(DateTimeOffset value, TimeSpan windowDuration)
+    {
+        var utcValue = value.ToUniversalTime();
+        var alignedTicks = utcValue.Ticks - utcValue.Ticks % windowDuration.Ticks;
+        var alignedValue = new DateTimeOffset(alignedTicks, TimeSpan.Zero);
+        return alignedValue == utcValue ? alignedValue : alignedValue.Add(windowDuration);
     }
 
     private static NetworkTrafficRepository.TrafficScopeFilter ParseScope(string? value)
