@@ -8,12 +8,15 @@ using Monitor.Network.Models;
 
 namespace Monitor.Network.Services;
 
+// ProcessResolver 把 ETW 里的 PID 转成稳定的应用身份。
+// 进程可能快速退出或权限不足导致路径不可读，所以所有进程访问都必须可失败，并提供 pid-* 兜底名称。
 public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessResolver
 {
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DisplayNameCacheLifetime = TimeSpan.FromHours(6);
     private const int PruneFrequency = 256;
 
+    // PID 会被系统复用，所以 PID 缓存只保留很短时间；显示名来自文件版本信息，变化少，可以缓存更久。
     private readonly ConcurrentDictionary<int, CacheItem> _cache = new();
     private readonly ConcurrentDictionary<string, DisplayNameCacheItem> _displayNameCache = new(StringComparer.OrdinalIgnoreCase);
     private int _resolveCount;
@@ -68,6 +71,7 @@ public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessR
 
     private static string? TryGetExecutablePath(Process process)
     {
+        // 访问 MainModule 可能因权限、架构或进程退出失败；路径缺失时 appKey 会退回到进程名。
         try
         {
             return process.MainModule?.FileName;
@@ -108,6 +112,7 @@ public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessR
 
     private void PruneIfNeeded(DateTimeOffset now)
     {
+        // 高频 ETW 事件不能每次都扫描缓存，按访问次数分摊清理成本。
         if (Interlocked.Increment(ref _resolveCount) % PruneFrequency != 0)
         {
             return;
@@ -132,6 +137,7 @@ public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessR
 
     private static string BuildAppKey(string processName, string? executablePath)
     {
+        // 优先用可执行文件绝对路径构建 appKey，同名不同路径的程序会被区分；路径不可用时才退回进程名。
         var normalizedPath = string.IsNullOrWhiteSpace(executablePath)
             ? string.Empty
             : Path.GetFullPath(executablePath).Trim().ToLowerInvariant();

@@ -6,6 +6,8 @@ using Monitor.Storage.Abstractions;
 
 namespace Monitor.Storage.Services;
 
+// 数据库初始化只负责确保本地 SQLite 结构可用，不做历史迁移和数据修复。
+// 表结构围绕两类数据设计：硬件采样保存原始时间序列，网络流量保存细粒度 bucket 并额外维护 12 小时 rollup 以支撑长时间查询。
 public sealed class DatabaseInitializer(
     IDbConnectionFactory dbConnectionFactory,
     IOptionsMonitor<MonitorSettings> settingsMonitor,
@@ -36,6 +38,8 @@ public sealed class DatabaseInitializer(
 
     private static async Task EnablePragmasAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
+        // WAL 降低读写互斥，NORMAL synchronous 在监控场景下平衡写入性能和崩溃恢复成本。
+        // foreign_keys 必须显式开启，SQLite 默认不会强制外键约束。
         var pragmaSql = """
                         PRAGMA journal_mode = WAL;
                         PRAGMA synchronous = NORMAL;
@@ -49,6 +53,8 @@ public sealed class DatabaseInitializer(
 
     private static async Task CreateSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
+        // network_usage_agg 保存查询可回放的细粒度事实数据；rollup_12h 保存完整 12 小时窗口的预聚合结果。
+        // app_registry 把高频流量记录中的进程元数据抽离出来，避免每个 bucket 重复保存路径和显示名。
         var schemaSql = """
                         CREATE TABLE IF NOT EXISTS settings (
                             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -144,6 +150,7 @@ public sealed class DatabaseInitializer(
 
     private static async Task CreateDeferredIndexesAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
+        // 延迟索引用于优化历史查询的组合筛选；放在 OptimizeAsync 中创建，避免首次初始化路径过重。
         var indexSql = """
                        CREATE INDEX IF NOT EXISTS idx_network_usage_agg_time_app_scope_direction_bytes
                        ON network_usage_agg(bucket_start_time, app_id, scope_type, direction, bytes);
@@ -164,6 +171,7 @@ public sealed class DatabaseInitializer(
     {
         var now = DateTimeOffset.UtcNow.ToString("O");
 
+        // 设置表只有 id=1 一行。首次启动写入默认值，后续用户保存的 SQLite 配置不能被 appsettings 覆盖。
         await using var command = connection.CreateCommand();
         command.CommandText = """
                               INSERT INTO settings (

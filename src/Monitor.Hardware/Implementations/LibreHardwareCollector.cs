@@ -8,6 +8,8 @@ using System.Text;
 
 namespace Monitor.Hardware.Implementations;
 
+// LibreHardwareCollector 是硬件采集边界：传感器数值来自 LibreHardwareMonitor，磁盘空间和物理盘拓扑来自 Windows API。
+// 两类数据源的刷新成本和可用性不同，所以传感器树、磁盘拓扑、磁盘空间快照分别缓存，采样入口只组合当前可读到的数据。
 public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvider, IDisposable
 {
     private const uint IoctlVolumeGetVolumeDiskExtents = 0x00560000;
@@ -21,10 +23,12 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private readonly ILogger<LibreHardwareCollector> _logger;
     private readonly Computer _computer;
+    // Windows 卷到物理磁盘的映射在启动时构建；用于把温度传感器和磁盘空间展示关联起来。
     private readonly IReadOnlyList<DiskTopologyEntry> _diskTopologyEntries;
     private readonly object _syncRoot = new();
     private readonly object _diskUsageSyncRoot = new();
     private DiskUsageSnapshot? _diskUsageSnapshot;
+    // 传感器对象本身可复用，采样时只刷新硬件树后读取 Value，避免每次遍历整棵树做名称匹配。
     private SensorCache? _sensorCache;
     private bool _isOpen;
     private bool _disposed;
@@ -62,6 +66,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
             RefreshHardwareTree();
             var sensorCache = GetOrBuildSensorCacheCore();
 
+            // LibreHardwareMonitor 不同硬件暴露的传感器名称不完全一致，后续读取都按优先级选择可用值。
             var cpuUsage = ReadSensorValue(sensorCache.CpuUsageSensor);
             var (cpuTemperature, cpuTemperatureSource) = ReadPreferredCpuTemperature(sensorCache);
             var (cpuFrequencyMhz, cpuFrequencySource) = ReadCpuClock(sensorCache.CpuSensors);
@@ -127,6 +132,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private SensorCache GetOrBuildSensorCacheCore()
     {
+        // 传感器树通常稳定，首次采样后缓存具体 ISensor 引用；重新 Open Computer 时会清空缓存。
         if (_sensorCache is not null)
         {
             return _sensorCache;
@@ -144,6 +150,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private static (double? Value, string? Source) ReadPreferredCpuTemperature(SensorCache sensorCache)
     {
+        // CPU Package 更接近整颗 CPU 的温度；缺失时回退到 Core Max，保证不同主板/CPU 上尽量有值。
         var preferred = ReadSensor(sensorCache.CpuPackageTemperatureSensor, sensorCache.CpuPackageTemperatureSource);
         if (preferred.Value.HasValue)
         {
@@ -201,6 +208,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private static (double? Value, string? Source) ReadPreferredDiskTemperature(StorageTemperatureGroup group)
     {
+        // NVMe、SATA 和不同控制器暴露的温度名称不一致；先选常见主温度，再回退到任一可用温度传感器。
         var preferredNames = new[]
         {
             "Temperature",
@@ -272,6 +280,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     [SupportedOSPlatform("windows")]
     private DiskUsageSnapshot GetDiskUsageSnapshot()
     {
+        // 磁盘空间通过 Win32 API 读取，成本高于普通传感器；短缓存可避免首页频繁刷新时重复枚举卷。
         var now = DateTimeOffset.UtcNow;
         lock (_diskUsageSyncRoot)
         {
@@ -288,6 +297,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     [SupportedOSPlatform("windows")]
     private DiskUsageSnapshot LoadDiskUsageSnapshot(DateTimeOffset createdAt)
     {
+        // 先按卷读取使用量，再按物理磁盘聚合；一个物理盘可能包含多个卷或盘符。
         var volumeNames = _diskTopologyEntries
             .SelectMany(entry => entry.VolumeNames)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -448,6 +458,8 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private static (double? Value, string? Source) ReadCpuClock(IEnumerable<ISensor> cpuSensors)
     {
+        // 频率传感器按可信度分层：Frequency 总值优先，其次 Effective Clock，最后普通 Clock/Core 平均。
+        // 这样能兼容不同 CPU 和主板暴露的传感器名称，同时尽量避免 Bus Clock 这类非核心频率污染结果。
         double freqSum = 0;
         int freqCount = 0;
         double? freqTotal = null;
@@ -547,6 +559,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private static (double? Value, string? Source) ReadCpuPower(IEnumerable<ISensor> cpuSensors)
     {
+        // CPU Package/Package 功耗最贴近整颗 CPU；如果没有，再退回任意 Power 传感器。
         var preferredPatterns = new[]
         {
             "CPU Package",
@@ -586,6 +599,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     [SupportedOSPlatform("windows")]
     private IReadOnlyList<DiskTopologyEntry> LoadDiskTopologyEntries()
     {
+        // 磁盘温度来自硬件名称，空间来自卷；这里构建可匹配的物理盘候选名，把两条数据链路接起来。
         try
         {
             var volumeNamesByDiskNumber = new Dictionary<uint, HashSet<string>>();
@@ -646,6 +660,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     [SupportedOSPlatform("windows")]
     private static IReadOnlyList<string> EnumerateVolumeNames()
     {
+        // 使用 Windows volume name 枚举而不是盘符枚举，才能覆盖无盘符卷和挂载到目录的卷。
         const int bufferLength = 1024;
         var volumeNames = new List<string>();
         var volumeNameBuffer = new StringBuilder(bufferLength);
@@ -689,6 +704,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     [SupportedOSPlatform("windows")]
     private static IReadOnlyList<uint> GetDiskNumbersForVolume(string volumeName)
     {
+        // IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS 可把卷映射回物理 DiskNumber；跨盘卷会返回多个 extent。
         if (string.IsNullOrWhiteSpace(volumeName))
         {
             return Array.Empty<uint>();
@@ -729,6 +745,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     [SupportedOSPlatform("windows")]
     private static IReadOnlyList<uint> ParseDiskNumbers(byte[] buffer)
     {
+        // DeviceIoControl 返回的是非托管结构数组，需要 pin 住托管 buffer 后按结构偏移解析。
         var diskNumbers = new HashSet<uint>();
         var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
 
@@ -757,6 +774,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private static long? ResolveDiskUsedBytes(DiskTopologyEntry? entry, IReadOnlyDictionary<string, long> usageByVolume)
     {
+        // 一个物理盘可能对应多个卷，展示物理盘已用空间时需要把这些卷的使用量相加。
         if (entry is null || entry.VolumeNames.Count == 0)
         {
             return null;
@@ -782,6 +800,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     [SupportedOSPlatform("windows")]
     private static string BuildDiskSpaceDisplayName(DiskTopologyEntry entry)
     {
+        // 优先用盘符/挂载点作为前端展示名；没有可见路径时再退回“磁盘 N”。
         var pathNames = entry.VolumeNames
             .SelectMany(GetVolumePathNames)
             .Select(path => path.Trim().TrimEnd('\\'))
@@ -797,6 +816,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private DiskTopologyEntry? ResolveDiskTopologyEntry(string hardwareName)
     {
+        // LibreHardwareMonitor 的硬件名和 Windows 物理盘名不一定完全一致，先精确匹配，再做包含匹配。
         var normalizedHardwareName = NormalizeDiskName(hardwareName);
         if (string.IsNullOrWhiteSpace(normalizedHardwareName) || _diskTopologyEntries.Count == 0)
         {
@@ -912,6 +932,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private static string NormalizeDiskName(string? value)
     {
+        // 去掉空格、标点和大小写差异，提升 “Samsung SSD” 与 “PHYSICALDRIVE0/DISK0” 候选名的匹配容错。
         if (string.IsNullOrWhiteSpace(value))
         {
             return string.Empty;
@@ -925,6 +946,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private static string? ReadAnsiString(byte[] buffer, uint offset)
     {
+        // STORAGE_DEVICE_DESCRIPTOR 内的字符串字段是 offset 指向的 ANSI 结尾字符串，而不是固定长度字段。
         if (offset == 0 || offset >= buffer.Length)
         {
             return null;
@@ -945,6 +967,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     [SupportedOSPlatform("windows")]
     private static IntPtr OpenDeviceHandle(string path)
     {
+        // 查询卷和磁盘元数据只需要打开设备句柄，不需要读写权限；共享读写删除避免影响系统正常挂载。
         return CreateFile(
             path,
             0,
@@ -1086,6 +1109,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         public byte RawDeviceProperties;
     }
 
+    // 磁盘空间快照按物理 DiskNumber 建索引，同时保留前端可直接展示的磁盘空间列表。
     private sealed record DiskUsageSnapshot(
         DateTimeOffset CreatedAt,
         IReadOnlyDictionary<uint, long?> UsedBytesByDiskNumber,
@@ -1093,6 +1117,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
     private sealed record DiskTopologyEntry(string NormalizedName, uint DiskNumber, long SizeBytes, IReadOnlyList<string> VolumeNames);
 
+    // SensorCache 保存已选中的传感器引用和存储温度分组，避免每次采样都做全树名称匹配。
     private sealed class SensorCache(
         string? cpuHardwareName,
         string? totalMemoryHardwareName,
@@ -1151,6 +1176,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
         public SensorCache Build(LibreHardwareCollector owner)
         {
+            // 构建缓存时完成温度传感器到物理盘拓扑的匹配，后续采样只读传感器值。
             var storageTemperatureGroups = _storageTemperatureSensors
                 .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
                 .Select(pair =>
@@ -1187,6 +1213,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
         private void VisitCore(IHardware hardware)
         {
+            // LibreHardwareMonitor 的硬件树可能有多层 SubHardware，必须递归访问才能收集完整传感器。
             switch (hardware.HardwareType)
             {
                 case HardwareType.Cpu:
@@ -1278,6 +1305,7 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
 
         private void CollectStorageSensors(IHardware hardware)
         {
+            // 存储设备可能暴露多个温度传感器，先按硬件名分组，读取时再按优先级选择代表温度。
             foreach (var sensor in hardware.Sensors)
             {
                 if (sensor.SensorType != SensorType.Temperature)

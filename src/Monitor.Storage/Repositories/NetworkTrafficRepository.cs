@@ -8,6 +8,8 @@ using Monitor.Storage.Abstractions;
 
 namespace Monitor.Storage.Repositories;
 
+// NetworkTrafficRepository 是网络历史数据的唯一 SQL 边界。
+// 写入路径保存细粒度 raw bucket；查询路径会按时间范围混合使用 raw bucket 和已完成的 12 小时 rollup，兼顾准确性和长时间查询性能。
 public sealed class NetworkTrafficRepository(
     IDbConnectionFactory dbConnectionFactory,
     IAppRegistry appRegistry,
@@ -46,6 +48,7 @@ public sealed class NetworkTrafficRepository(
         await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);
         var transaction = (SqliteTransaction)transactionHandle;
 
+        // 先确保 app_registry 有对应 id，bucket 表只保存 app_id，避免重复写入进程路径和显示名。
         var appIds = await UpsertAppRegistryAndGetIdsAsync(connection, transaction, buckets, cancellationToken);
         var currentRollupWindowStart = AlignDownToRollupWindow(DateTimeOffset.UtcNow);
 
@@ -93,6 +96,7 @@ public sealed class NetworkTrafficRepository(
             await command.ExecuteNonQueryAsync(cancellationToken);
 
             var bucketRollupWindowStart = AlignDownToRollupWindow(bucketStartTime);
+            // 如果迟到 bucket 属于已经 rollup 的完整窗口，需要同步增量更新 rollup，避免历史查询漏计。
             if (bucketRollupWindowStart < currentRollupWindowStart)
             {
                 await ApplyCompletedRollupBucketDeltaAsync(
@@ -388,6 +392,7 @@ public sealed class NetworkTrafficRepository(
         int maxWindows,
         CancellationToken cancellationToken = default)
     {
+        // 只处理已经完整结束的 12 小时窗口；当前窗口继续从 raw bucket 查询，避免边写边 rollup。
         if (maxWindows <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(maxWindows), maxWindows, "Rollup window count must be positive.");
@@ -402,6 +407,7 @@ public sealed class NetworkTrafficRepository(
             return 0;
         }
 
+        // 首个可 rollup 窗口必须从完整窗口边界开始，避免把开头不完整的历史片段误聚合。
         var firstEligibleWindowStart = AlignUpToRollupWindow(earliestBucketTime.Value);
         var currentWindowStart = AlignDownToRollupWindow(DateTimeOffset.UtcNow);
         if (firstEligibleWindowStart >= currentWindowStart)
@@ -750,6 +756,7 @@ public sealed class NetworkTrafficRepository(
         CancellationToken cancellationToken,
         IReadOnlyList<TrafficSourceFilter>? sourceFilters = null)
     {
+        // 查询源计划决定哪些完整窗口走 rollup、哪些边缘或未完成窗口回退 raw bucket。
         var plan = await BuildTrafficSourcePlanAsync(
             connection,
             from.ToUniversalTime(),
@@ -819,6 +826,7 @@ public sealed class NetworkTrafficRepository(
         TrafficScopeFilter scopeFilter,
         TrafficDirectionFilter directionFilter)
     {
+        // Total + 单一 scope 要拆成上传/下载两个方向，方便复用 direction/scope 组合索引。
         if (scopeFilter is TrafficScopeFilter.All && directionFilter is TrafficDirectionFilter.Total)
         {
             return [TrafficSourceFilter.Empty];
@@ -864,6 +872,7 @@ public sealed class NetworkTrafficRepository(
         DateTimeOffset to,
         CancellationToken cancellationToken)
     {
+        // 一个查询范围可能横跨 raw 和 rollup：边缘不完整窗口用 raw，中间完整且已标记完成的窗口用 rollup。
         if (from >= to)
         {
             return new TrafficSourcePlan([], []);
@@ -1053,6 +1062,7 @@ public sealed class NetworkTrafficRepository(
         DateTimeOffset windowStart,
         CancellationToken cancellationToken)
     {
+        // 单个窗口 rollup 是可重建的：先删除旧结果，再从 raw bucket 全量聚合并写入完成标记。
         var windowEnd = windowStart.Add(RollupWindowDuration);
         var updatedAt = DateTimeOffset.UtcNow;
 
@@ -1164,6 +1174,7 @@ public sealed class NetworkTrafficRepository(
         long packets,
         CancellationToken cancellationToken)
     {
+        // raw bucket 可能迟到。如果对应窗口已经有完成标记，就把增量补进 rollup 和窗口 source_bucket_count。
         var updatedAt = DateTimeOffset.UtcNow;
 
         await using var command = connection.CreateCommand();
@@ -1406,6 +1417,7 @@ public sealed class NetworkTrafficRepository(
         DateTimeOffset to,
         TimeSpan segmentDuration)
     {
+        // 分段图的 12 小时粒度要和 rollup 窗口对齐，才能最大化复用预聚合数据。
         var rangeFrom = from.ToUniversalTime();
         var rangeTo = to.ToUniversalTime();
         if (rangeFrom >= rangeTo)
@@ -1488,6 +1500,7 @@ public sealed class NetworkTrafficRepository(
 
     private readonly record struct TimeRange(DateTimeOffset From, DateTimeOffset To);
 
+    // 查询计划把一个时间范围拆成 rollup 窗口列表和 raw 时间段列表，最终由 UNION ALL 拼成统一流量源。
     private sealed record TrafficSourcePlan(
         IReadOnlyList<DateTimeOffset> RollupWindowStarts,
         IReadOnlyList<TimeRange> RawRanges);

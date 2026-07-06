@@ -4,9 +4,8 @@ public static class MonitorHubEvents
 {
     public const string HardwareRealtime = "hardwareRealtime";
 
-    // Reserved event name.
-    // Network realtime push was planned before, but it is intentionally disabled for now.
-    // Keep the constant so front-end/back-end event names stay aligned if restored later.
+    // 保留的事件名：当前后端不主动推送 networkRealtime，但前后端都保留常量。
+    // 后续恢复网络实时推送时，可以复用同一个事件名，避免破坏已有客户端兼容性。
     public const string NetworkRealtime = "networkRealtime";
 
 }

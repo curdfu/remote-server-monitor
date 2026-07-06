@@ -4,6 +4,8 @@ using Monitor.Storage.Repositories;
 
 namespace Monitor.Storage.Services;
 
+// Rollup 服务把已经完整结束的原始网络 bucket 聚合成 12 小时窗口，加速长时间范围的应用排行和汇总查询。
+// 它不处理当前正在写入的窗口，避免实时数据和历史 rollup 之间出现重复或缺口。
 public sealed class NetworkTrafficRollupHostedService(
     NetworkTrafficRepository networkTrafficRepository,
     ILogger<NetworkTrafficRollupHostedService> logger) : BackgroundService
@@ -18,6 +20,7 @@ public sealed class NetworkTrafficRollupHostedService(
     {
         try
         {
+            // 启动后延迟一小段时间，让数据库初始化、采集器和首批 raw bucket 先稳定下来。
             await Task.Delay(StartupDelay, stoppingToken);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -40,6 +43,7 @@ public sealed class NetworkTrafficRollupHostedService(
                     MaxWindowsPerCycle,
                     stoppingToken);
 
+                // 如果本轮达到处理上限，说明仍有历史窗口待追赶；缩短下一轮间隔直到追平。
                 nextDelay = processedWindows >= MaxWindowsPerCycle ? CatchUpDelay : IdleDelay;
                 if (processedWindows > 0)
                 {
@@ -58,6 +62,7 @@ public sealed class NetworkTrafficRollupHostedService(
                 logger.LogWarning(
                     exception,
                     "Network traffic rollup cycle failed. The service will retry on the next scheduled cycle.");
+                // 失败后使用单独的退避间隔，避免故障时每 5 秒持续打数据库。
                 nextDelay = FailureDelay;
             }
 

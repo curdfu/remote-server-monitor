@@ -3,6 +3,8 @@ using Monitor.Contracts.Options;
 
 namespace Monitor.WebApi.Services;
 
+// 实时推送服务只负责调度广播频率，实际 DTO 组装和 SignalR 发送交给 MonitorRealtimeBroadcaster。
+// 广播周期跟随硬件采样和网络实时刷新中更短的那个间隔，设置变化后立即触发一次广播。
 public sealed class MonitorRealtimePushHostedService(
     MonitorRealtimeBroadcaster broadcaster,
     IMonitorSettingsProvider settings,
@@ -10,11 +12,13 @@ public sealed class MonitorRealtimePushHostedService(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // 启动后先尝试推送一次；如果采样缓存还没准备好，Broadcaster 会自行跳过。
         await BroadcastSafeAsync(stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             var interval = GetInterval(settings.Current);
+            // 设置变化时不等待旧周期结束，立即推送一次，让前端尽快感知新采样节奏。
             var settingsChanged = await WaitForIntervalOrSettingsChangeAsync(interval, stoppingToken);
             if (settingsChanged)
             {
@@ -44,6 +48,7 @@ public sealed class MonitorRealtimePushHostedService(
 
     private async Task BroadcastSafeAsync(CancellationToken cancellationToken)
     {
+        // SignalR 单轮发送失败不应终止后台服务，下一周期继续尝试。
         try
         {
             await broadcaster.BroadcastOnceAsync(cancellationToken);
@@ -60,6 +65,7 @@ public sealed class MonitorRealtimePushHostedService(
 
     private static TimeSpan GetInterval(MonitorSettings settings)
     {
+        // 最小 500ms 防止误配置导致广播过于频繁；取较短周期保证硬件或网络任一路数据更新都能及时推送。
         var intervalMs = Math.Max(
             500,
             Math.Min(settings.HardwareSampleIntervalMs, MonitorSettings.NetworkRealtimeIntervalMs));

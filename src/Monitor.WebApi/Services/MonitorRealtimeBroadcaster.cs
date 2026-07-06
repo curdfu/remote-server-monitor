@@ -5,6 +5,8 @@ using Monitor.WebApi.Hubs;
 
 namespace Monitor.WebApi.Services;
 
+// Broadcaster 把内存中的最新硬件采样转换为前端实时 DTO，并通过 SignalR 推送给所有客户端。
+// 它不主动采样硬件，只消费 CollectorHostedService 已写入 HardwareSnapshotBuffer 的最新快照。
 public sealed class MonitorRealtimeBroadcaster(
     IHardwareSnapshotBuffer hardwareSnapshotBuffer,
     IDiskUsageProvider diskUsageProvider,
@@ -12,6 +14,7 @@ public sealed class MonitorRealtimeBroadcaster(
     ILogger<MonitorRealtimeBroadcaster> logger)
 {
     private readonly object _syncRoot = new();
+    // 用采样时间去重，避免推送周期比硬件采样周期短时重复发送同一份数据。
     private DateTimeOffset _lastBroadcastSampleTime = DateTimeOffset.MinValue;
 
     public async Task BroadcastOnceAsync(CancellationToken cancellationToken = default)
@@ -31,6 +34,7 @@ public sealed class MonitorRealtimeBroadcaster(
             }
         }
 
+        // 温度数据来自硬件快照，磁盘空间可能需要额外查询 Win32 API，因此在组装 DTO 时按磁盘号补齐。
         var diskUsedBytes = diskUsageProvider.GetCurrentUsedBytesByDiskNumber(
             hardware.Disk.Drives
                 .Where(drive => drive.DiskNumber.HasValue)
@@ -72,6 +76,7 @@ public sealed class MonitorRealtimeBroadcaster(
 
         await hubContext.Clients.All.SendAsync(MonitorHubEvents.HardwareRealtime, hardwareDto, cancellationToken);
 
+        // 只有发送成功后才更新游标；失败时下一轮仍可重试同一个采样点。
         lock (_syncRoot)
         {
             _lastBroadcastSampleTime = hardware.SampleTime;

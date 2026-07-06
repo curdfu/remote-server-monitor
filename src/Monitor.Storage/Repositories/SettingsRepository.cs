@@ -5,6 +5,8 @@ using Monitor.Storage.Abstractions;
 
 namespace Monitor.Storage.Repositories;
 
+// SettingsRepository 负责运行时设置的 SQLite 持久化；启动前读取使用 PersistedSettingsLoader，运行后读写走这里。
+// settings 表固定 id=1，保存时使用 upsert，保证首次初始化和后续更新共用同一条记录。
 public sealed class SettingsRepository(
     IDbConnectionFactory dbConnectionFactory,
     ILogger<SettingsRepository> logger)
@@ -15,6 +17,7 @@ public sealed class SettingsRepository(
         await connection.OpenAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
+        // 只读取当前前端可编辑且会影响运行时行为的设置字段。
         command.CommandText = """
                               SELECT http_port,
                                      hardware_sample_interval_ms,
@@ -50,6 +53,7 @@ public sealed class SettingsRepository(
         await connection.OpenAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
+        // network_sample_interval_ms 目前是常量配置，仍写入表中以保持 schema 完整和后续兼容。
         command.CommandText = """
                               INSERT INTO settings (
                                   id,

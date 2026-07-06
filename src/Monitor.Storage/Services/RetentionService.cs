@@ -4,6 +4,8 @@ using Monitor.Storage.Abstractions;
 
 namespace Monitor.Storage.Services;
 
+// 保留策略负责删除超过 HistoryRetentionDays 的历史数据，并在确实删除后回收 WAL 空间。
+// 清理顺序需要保留引用完整性：先删事实表和 rollup，再删除已经没有任何流量引用的 app_registry 记录。
 public sealed class RetentionService(
     IDbConnectionFactory dbConnectionFactory,
     IMonitorSettingsProvider settingsMonitor,
@@ -20,6 +22,7 @@ public sealed class RetentionService(
 
         var cutoff = DateTimeOffset.UtcNow.AddDays(-retentionDays);
 
+        // 所有删除放在同一个事务里，避免只清掉部分表后留下 rollup、raw bucket 和 app_registry 不一致的状态。
         await using var connection = dbConnectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
         await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);
@@ -65,6 +68,7 @@ public sealed class RetentionService(
             cutoff,
             cancellationToken);
 
+        // app_registry 只删除没有 raw bucket 和 rollup 引用的陈旧应用，避免历史查询丢失进程显示信息。
         var deletedAppRegistryEntries = await ExecuteDeleteAsync(
             connection,
             transaction,
@@ -94,6 +98,7 @@ public sealed class RetentionService(
                            + deletedAppRegistryEntries;
         if (totalDeleted > 0)
         {
+            // SQLite/WAL 删除行后不会立即缩小文件；只有发生实际删除时才做 checkpoint，避免空跑增加 I/O。
             await ReclaimSpaceAsync(connection, cancellationToken);
         }
 
@@ -125,6 +130,7 @@ public sealed class RetentionService(
         Microsoft.Data.Sqlite.SqliteConnection connection,
         CancellationToken cancellationToken)
     {
+        // TRUNCATE checkpoint 会把 WAL 内容合并回主库并截断 WAL 文件；这里不执行 VACUUM，避免长时间锁库。
         await using var checkpointCommand = connection.CreateCommand();
         checkpointCommand.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
         await checkpointCommand.ExecuteNonQueryAsync(cancellationToken);

@@ -480,6 +480,7 @@ const isMobileFiltersExpanded = ref(false);
 let autoRefreshTimer: number | null = null;
 let mobileViewportQuery: MediaQueryList | null = null;
 let pendingReloadSource: 'filter' | 'manual' = 'filter';
+// 应用明细请求可能被切换筛选条件、关闭弹层或重新选择应用打断；版本号用于丢弃过期响应。
 let segmentsRequestVersion = 0;
 
 // 查询条件：分别驱动筛选区、占比面板和应用排行
@@ -635,6 +636,7 @@ onUnmounted(() => {
 watch(
   () => [filters.from, filters.to, filters.topN, filters.scope, filters.direction],
   () => {
+    // 多个筛选控件可能连续变化，统一 debounce 后再请求，减少无效接口调用和骨架屏闪烁。
     if (autoRefreshTimer !== null) {
       window.clearTimeout(autoRefreshTimer);
     }
@@ -697,6 +699,7 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
 }
 
 function refreshApps() {
+  // 当前时间范围命中预设时，手动刷新会先重算“到当前时间”的范围，再由 watcher 触发加载。
   const presetHours = activePresetHours.value;
   if (presetHours) {
     pendingReloadSource = 'manual';
@@ -728,6 +731,7 @@ async function loadSelectedAppSegments() {
     return;
   }
 
+  // 记录本次请求版本；响应回来时只有仍是最新版本，才允许写入弹层状态。
   const requestVersion = ++segmentsRequestVersion;
   isSegmentsLoading.value = true;
   segmentsErrorMessage.value = '';
@@ -760,6 +764,7 @@ async function loadSelectedAppSegments() {
 }
 
 function syncSelectedAppAfterRankingLoad(apps: AppTrafficSummaryDto[]) {
+  // 排行刷新后如果选中应用仍在结果中，用新汇总数据替换旧对象，保持弹层标题和数值同步。
   if (!selectedApp.value) {
     return;
   }

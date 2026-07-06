@@ -2,6 +2,8 @@
 
 namespace Monitor.Storage.Configuration;
 
+// Host 构建前还不能使用 DI 和 SettingsRepository，因此这里用最小 SQLite 读取逻辑加载持久化配置。
+// 失败时必须退回 appsettings 默认值，不能因为本地数据库损坏导致服务完全无法启动。
 public static class PersistedSettingsLoader
 {
     public static IDictionary<string, string?> Load(string? baseDirectory = null)
@@ -9,6 +11,7 @@ public static class PersistedSettingsLoader
         try
         {
             var databasePath = GetDatabasePath(baseDirectory);
+            // 首次启动还没有数据库，此时返回空集合，让 appsettings.json 继续作为默认配置来源。
             if (!File.Exists(databasePath))
             {
                 return new Dictionary<string, string?>();
@@ -22,6 +25,7 @@ public static class PersistedSettingsLoader
 
             connection.Open();
 
+            // 数据库文件可能来自旧版本或初始化中断；没有 settings 表时同样安全回退默认值。
             if (!TableExists(connection, "settings"))
             {
                 return new Dictionary<string, string?>();
@@ -45,6 +49,7 @@ public static class PersistedSettingsLoader
                 return new Dictionary<string, string?>();
             }
 
+            // 返回 IConfiguration 使用的冒号分隔键，后续 AddInMemoryCollection 会覆盖 appsettings 中同名配置。
             return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
             {
                 [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:HttpPort"] = reader.GetInt32(0).ToString(),

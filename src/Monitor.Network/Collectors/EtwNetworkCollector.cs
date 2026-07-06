@@ -13,6 +13,9 @@ using Monitor.Network.Models;
 
 namespace Monitor.Network.Collectors;
 
+// ETW 采集器直接管理 Windows 内核网络 TraceEvent 会话，是整条网络链路的最底层入口。
+// 这里的目标是尽量可靠地把 TCP/UDP 事件转换成统一的 NetworkTraceEvent，后续进程解析、地址分类、聚合和落库都不在本类完成。
+// 因为 ETW 资源是系统级共享资源，本类特别处理了启动失败、陈旧会话清理、丢事件监控和自适应 buffer 重启。
 public sealed class EtwNetworkCollector(
     ILogger<EtwNetworkCollector> logger,
     IMonitorSettingsProvider settingsMonitor) : INetworkCollector, INetworkCollectorDiagnostics, IDisposable
@@ -24,6 +27,7 @@ public sealed class EtwNetworkCollector(
     private static readonly string[] TargetProcessNames = ["chrome", "verge-mihomo", "telegram"];
 
     private readonly object _syncRoot = new();
+    // 目标进程事件日志是临时诊断通道，缓存进程名可避免在 ETW 高频回调路径反复打开进程句柄。
     private readonly ConcurrentDictionary<int, string?> _targetProcessNameCache = new();
     private readonly Dictionary<string, int> _targetProcessLogCounts = TargetProcessNames.ToDictionary(
         static name => name,
@@ -63,6 +67,7 @@ public sealed class EtwNetworkCollector(
                 return Task.CompletedTask;
             }
 
+            // 进程异常退出后可能残留同前缀 ETW 会话；启动前先清理，减少系统 ETW 资源不足的概率。
             TryCleanupStaleMonitorSessions();
             _sessionName = BuildSessionName();
 
@@ -76,6 +81,7 @@ public sealed class EtwNetworkCollector(
                 var requestedBufferSizeMb = GetInitialAdaptiveBufferSize();
                 CleanupFailedStart(clearTotals: false);
 
+                // 资源不足时只做一次清理重试，避免服务启动阶段进入无限重试并持续占用系统资源。
                 var cleanedSessionCount = TryCleanupStaleMonitorSessions();
                 if (cleanedSessionCount > 0)
                 {
@@ -151,6 +157,7 @@ public sealed class EtwNetworkCollector(
                 return;
             }
 
+            // 停止前最后读取一次 EventsLost，保证诊断快照和日志包含本会话结束前的丢事件统计。
             RefreshLostEventsCore(logIfIncreased: true);
             processingTask = _processingTask;
             adaptiveRestartTask = _adaptiveRestartTask;
@@ -273,6 +280,7 @@ public sealed class EtwNetworkCollector(
 
     private void RegisterHandlers(KernelTraceEventParser parser)
     {
+        // TCP/UDP、IPv4/IPv6 事件在这里统一归一化成 NetworkTraceEvent，供上层聚合器按同一模型消费。
         parser.TcpIpSend += data => PublishTcpSend(data, false);
         parser.TcpIpRecv += data => PublishTcpRecv(data, false);
         parser.TcpIpSendIPV6 += data => PublishTcpSendV6(data);
@@ -285,6 +293,7 @@ public sealed class EtwNetworkCollector(
 
     private static void ProcessSession(TraceEventSession session, ILogger logger)
     {
+        // Source.Process() 是阻塞式 ETW 消费循环，必须放到 LongRunning 后台任务中运行。
         try
         {
             session.Source.Process();
@@ -297,6 +306,7 @@ public sealed class EtwNetworkCollector(
 
     private async Task MonitorSessionAsync(TraceEventSession session, CancellationTokenSource cancellationTokenSource)
     {
+        // TraceEvent 不会主动推送 EventsLost 变化；额外轮询用于及时发现 buffer 不足并触发自适应重启。
         using (cancellationTokenSource)
         {
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
@@ -345,22 +355,12 @@ public sealed class EtwNetworkCollector(
 
     private void PublishTcpRecv(TcpIpTraceData data, bool isIpv6)
     {
-        // NOTE:
-        // For TcpIpRecv/TcpIpRecvIPV6, raw ETW field names (saddr/daddr, sport/dport)
-        // suggest the classic packet-level meaning:
-        //   saddr/sport = source/remote endpoint
-        //   daddr/dport = destination/local endpoint
-        //
-        // However, during runtime verification on this machine, using that direct mapping
-        // produced impossible socket tuples in logs, for example:
-        //   - inbound chrome traffic showing Local=<public-ip>:443, Remote=<local-ip>:ephemeral
-        //   - inbound verge-mihomo traffic showing Local=<client-ephemeral>, Remote=<local-listen-port>
-        //
-        // Swapping the mapping below restored socket tuples that match observed process
-        // behavior (Local=local endpoint, Remote=peer endpoint) and fixed WAN/LAN download
-        // classification. Because of that, this mapping is intentionally based on empirical
-        // verification of TraceEvent's runtime behavior in this pipeline, not just on ETW
-        // field-name intuition.
+        // TcpIpRecv/TcpIpRecvIPV6 的原始字段名看起来像经典包方向语义：
+        // saddr/sport 表示源端，daddr/dport 表示目标端。
+        // 但在本采集链路的运行验证中，直接按字段名映射会生成不可能的 socket 元组，
+        // 例如入站 chrome 流量出现 Local=<public-ip>:443、Remote=<local-ip>:ephemeral。
+        // 当前映射以 TraceEvent 在本管线里的实测行为为准，确保 Local 表示本机端点、Remote 表示对端，
+        // 否则 WAN/LAN 下载方向分类会被反转。
         Publish(new NetworkTraceEvent
         {
             Timestamp = new DateTimeOffset(data.TimeStamp),
@@ -395,11 +395,7 @@ public sealed class EtwNetworkCollector(
 
     private void PublishTcpRecvV6(TcpIpV6TraceData data)
     {
-        // See the note in PublishTcpRecv(...): although the raw ETW field names look like
-        // packet source/destination fields, runtime validation showed that using them
-        // directly produced reversed local/remote socket tuples for inbound TCP events in
-        // this collector pipeline. Keep IPv6 behavior aligned with the empirically verified
-        // IPv4 mapping.
+        // 与 IPv4 入站 TCP 保持同一套实测映射规则，避免 IPv6 下载流量的本地/远端端点方向不一致。
         Publish(new NetworkTraceEvent
         {
             Timestamp = new DateTimeOffset(data.TimeStamp),
@@ -451,6 +447,7 @@ public sealed class EtwNetworkCollector(
 
     private void Publish(NetworkTraceEvent traceEvent)
     {
+        // ETW 偶尔会出现无进程或异常字节数事件；这里直接丢弃，避免污染应用维度统计。
         if (traceEvent.ProcessId <= 0 || traceEvent.Bytes < 0)
         {
             return;
@@ -614,6 +611,7 @@ public sealed class EtwNetworkCollector(
             }
         }
 
+        // 只要检测到丢事件，就尝试提升 buffer；实际是否重启由 ScheduleAdaptiveBufferIncreaseCore 去重和限档。
         ScheduleAdaptiveBufferIncreaseCore();
     }
 
@@ -641,6 +639,7 @@ public sealed class EtwNetworkCollector(
 
     private async Task IncreaseBufferAsync(int targetBufferSizeMb)
     {
+        // 自适应扩容通过新建 ETW 会话完成。旧任务在锁外等待，避免 Stop/Start 期间阻塞采集器状态锁。
         Task? previousProcessingTask = null;
         Task? previousSessionMonitorTask = null;
         string? previousSessionName = null;
@@ -766,6 +765,7 @@ public sealed class EtwNetworkCollector(
 
     private void StartSessionCore(int bufferSizeMb)
     {
+        // 每次启动都使用唯一会话名，避免和旧进程或并行实例的内核会话互相覆盖。
         var sessionOptions = TraceEventSessionOptions.Create |
                              TraceEventSessionOptions.NoPerProcessorBuffering;
 
@@ -855,6 +855,7 @@ public sealed class EtwNetworkCollector(
 
     private int TryCleanupStaleMonitorSessions()
     {
+        // 只清理本应用前缀的 ETW 会话，不能影响其他工具或系统组件正在使用的 TraceEvent 会话。
         try
         {
             var cleanedCount = 0;

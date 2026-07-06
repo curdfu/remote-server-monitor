@@ -5,6 +5,8 @@ using Monitor.Storage.Repositories;
 
 namespace Monitor.Service.HostedServices;
 
+// CollectorHostedService 负责启动网络 ETW 采集，并按配置周期采样硬件快照。
+// 硬件快照先进入内存缓冲，再按数量或时间批量落库，避免高频采样时每次都写 SQLite。
 public sealed class CollectorHostedService(
     ILogger<CollectorHostedService> logger,
     IHardwareCollector hardwareCollector,
@@ -19,6 +21,7 @@ public sealed class CollectorHostedService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // 网络采集是事件驱动，必须先启动 ETW 会话；硬件采样随后立即执行一次，保证首屏有数据。
         await networkCollector.StartAsync(stoppingToken);
         await CollectSnapshotAsync(stoppingToken);
 
@@ -27,6 +30,7 @@ public sealed class CollectorHostedService(
         while (!stoppingToken.IsCancellationRequested)
         {
             var interval = TimeSpan.FromMilliseconds(settings.Current.HardwareSampleIntervalMs);
+            // 采样间隔支持运行时修改；设置变化时不等旧 delay 结束，立即采一次并进入新周期。
             var settingsChanged = await WaitForIntervalOrSettingsChangeAsync(interval, stoppingToken);
             if (settingsChanged)
             {
@@ -37,6 +41,7 @@ public sealed class CollectorHostedService(
             await CollectSnapshotAsync(stoppingToken);
 
             var now = DateTimeOffset.UtcNow;
+            // 数量阈值限制内存增长，时间阈值保证低频变化时也会定期落库。
             if (hardwareSnapshotBuffer.PendingCount >= PersistenceBatchSize || now - lastPersistedAt >= PersistenceInterval)
             {
                 await PersistPendingSnapshotsAsync(hardwareSnapshotBuffer, hardwareRepository, stoppingToken);
@@ -56,6 +61,7 @@ public sealed class CollectorHostedService(
 
     private async Task<bool> WaitForIntervalOrSettingsChangeAsync(TimeSpan interval, CancellationToken cancellationToken)
     {
+        // 用 TaskCompletionSource 把配置变更回调并入等待逻辑，避免后台循环轮询配置版本。
         var settingsChangedSource = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var registration = settings.RegisterChangeCallback(_ => settingsChangedSource.TrySetResult());
         var delayTask = Task.Delay(interval, cancellationToken);
@@ -72,6 +78,7 @@ public sealed class CollectorHostedService(
 
     private async Task FlushPendingSnapshotsAsync(CancellationToken cancellationToken)
     {
+        // 关闭时尽力刷盘，但设置超时，避免 Windows 服务停止被 SQLite 写入长时间阻塞。
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(StopFlushTimeout);
 
@@ -98,6 +105,7 @@ public sealed class CollectorHostedService(
                 return;
             }
 
+            // 硬件历史是辅助数据，按批从内存缓冲取出后直接保存；网络流量这类不可丢数据另有确认机制。
             var batch = snapshotBuffer.DequeuePendingBatch(PersistenceBatchSize);
             if (batch.Count == 0)
             {

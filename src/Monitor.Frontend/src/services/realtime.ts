@@ -13,8 +13,7 @@ export type RealtimeConnectionState =
   | 'disconnected';
 
 const hardwareListeners = new Set<Listener<HardwareRealtimeDto>>();
-// Reserved: network realtime is intentionally unused for now.
-// Keep the listener set and subscribe API so the connection layer stays stable if restored later.
+// 当前 UI 暂不消费 network realtime，但保留 listener 集合和订阅 API，方便后续恢复网络实时推送时保持连接层兼容。
 const networkListeners = new Set<Listener<NetworkRealtimeDto>>();
 const connectionStateListeners = new Set<Listener<RealtimeConnectionState>>();
 
@@ -76,7 +75,7 @@ function ensureConnection() {
     emitPayload(hardwareListeners, payload);
   });
 
-  // Reserved: the current backend does not actively push networkRealtime.
+  // 后端当前不主动推送 networkRealtime；监听保留用于兼容未来恢复的事件名。
   connection.on('networkRealtime', (payload: NetworkRealtimeDto) => {
     emitPayload(networkListeners, payload);
   });
@@ -117,6 +116,7 @@ export async function startRealtimeConnection() {
     return startPromise;
   }
 
+  // startPromise 复用同一次连接启动过程，避免多个页面同时订阅时重复调用 HubConnection.start()。
   emitConnectionState('connecting');
   startPromise = hubConnection
     .start()
@@ -148,7 +148,7 @@ export function subscribeHardwareRealtime(listener: Listener<HardwareRealtimeDto
   return subscribe(hardwareListeners, listener);
 }
 
-// Reserved: current UI does not consume network realtime, but keep the API for compatibility.
+// 当前页面未消费网络实时事件，但保留订阅函数，避免未来恢复推送时改动调用方 API。
 export function subscribeNetworkRealtime(listener: Listener<NetworkRealtimeDto>) {
   return subscribe(networkListeners, listener);
 }

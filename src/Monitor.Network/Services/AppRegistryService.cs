@@ -4,6 +4,8 @@ using Monitor.Network.Models;
 
 namespace Monitor.Network.Services;
 
+// AppRegistryService 是内存态应用注册表，把短生命周期 PID 映射到稳定 appKey。
+// 聚合器只需要 appKey 和应用元数据快照，真正落库由 NetworkTrafficRepository 在保存 bucket 时完成。
 public sealed class AppRegistryService(IProcessResolver processResolver) : IAppRegistry
 {
     private static readonly TimeSpan PidCacheLifetime = TimeSpan.FromSeconds(30);
@@ -11,6 +13,7 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
     private const int PruneFrequency = 256;
 
     private readonly ConcurrentDictionary<string, AppRegistryState> _entries = new(StringComparer.OrdinalIgnoreCase);
+    // PID 缓存只做短期加速，避免同一个进程的高频网络事件反复解析进程信息。
     private readonly ConcurrentDictionary<int, PidCacheItem> _pidCache = new();
     private int _accessCount;
 
@@ -26,6 +29,7 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
         }
 
         var resolved = processResolver.Resolve(pid);
+        // appKey 相同代表同一个应用身份；后续解析到更完整的显示名/路径时更新已有状态。
         var state = _entries.AddOrUpdate(
             resolved.AppKey,
             _ => AppRegistryState.Create(resolved),
@@ -59,6 +63,7 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
 
     private void PruneIfNeeded(DateTimeOffset now)
     {
+        // 注册表是运行期缓存，不无限增长；清理按访问次数分摊，避免高频路径上每次扫描字典。
         if (Interlocked.Increment(ref _accessCount) % PruneFrequency != 0)
         {
             return;
@@ -133,6 +138,7 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
 
         public void Update(ResolvedProcessInfo resolved)
         {
+            // 更新只覆盖非空字段，避免一次权限受限的解析把已有显示名或可执行路径清掉。
             lock (_syncRoot)
             {
                 if (!string.IsNullOrWhiteSpace(resolved.ProcessName))

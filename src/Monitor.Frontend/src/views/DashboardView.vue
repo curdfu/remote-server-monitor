@@ -485,6 +485,7 @@ function mergeHardwarePayload(
   hardware: RealtimeOverviewDto['hardware'],
   previousHardware?: RealtimeOverviewDto['hardware']
 ) {
+  // SignalR 推送有时只带最新传感器值，磁盘容量/已用空间可能为空；这里保留上一帧可用的磁盘补充字段。
   return {
     ...mergeHardwareDisks(hardware, previousHardware?.disks ?? []),
     diskSpaces: mergeDiskSpaces(hardware.diskSpaces, previousHardware?.diskSpaces ?? [])
@@ -512,6 +513,7 @@ function applyHardwarePayload(
   target: RealtimeOverviewDto['hardware'],
   next: RealtimeOverviewDto['hardware']
 ) {
+  // 保持 disks/diskSpaces 数组引用稳定，避免表格和卡片在实时刷新时出现不必要的 DOM 重建。
   Object.assign(target, next, {
     disks: target.disks,
     diskSpaces: target.diskSpaces
@@ -522,6 +524,7 @@ function applyHardwarePayload(
 }
 
 function syncNamedItems<T extends { name: string }>(target: T[], next: T[]) {
+  // 按名称复用已有对象，既更新内容，又尽量保留 Vue 对列表项的响应式跟踪。
   const existingByName = new Map(target.map((item) => [item.name, item]));
   const normalizedItems = next.map((item) => {
     const existing = existingByName.get(item.name);

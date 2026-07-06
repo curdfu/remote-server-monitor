@@ -8,6 +8,8 @@ using Monitor.Network.Enums;
 
 namespace Monitor.Network.Services;
 
+// 地址分类器负责把 ETW 事件里的远端/本地地址归入 WAN、LAN、Loopback 或 Other。
+// 判定顺序是业务语义的一部分：显式配置优先于自动推断，本机回环和广播/组播等特殊地址要先处理，避免被私网规则误归类。
 public sealed class AddressClassifier : IAddressClassifier, IDisposable
 {
     private static readonly TimeSpan LocalSubnetRefreshInterval = TimeSpan.FromSeconds(30);
@@ -51,6 +53,7 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
         var settings = Volatile.Read(ref _settings);
         var additionalSubnets = GetAdditionalSubnets(settings);
 
+        // 回环地址可能出现在 remote 或 local 任一侧，只要配置允许就直接归为 Loopback。
         if (settings.TreatLoopbackAsLoopback &&
             (IPAddress.IsLoopback(remote) || (local is not null && IPAddress.IsLoopback(local))))
         {
@@ -62,6 +65,7 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
             return AddressScopeType.Other;
         }
 
+        // 用户显式配置的 WAN/LAN CIDR 优先级高于自动私网判断，用于处理 VPN、代理网段等特殊拓扑。
         if (MatchesAny(additionalSubnets.WanSubnets, remote))
         {
             return AddressScopeType.Wan;
@@ -72,6 +76,7 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
             return AddressScopeType.Lan;
         }
 
+        // 本机网卡子网比通用私网规则更贴近真实局域网，但枚举成本更高，所以结果带短缓存。
         if (settings.TreatLocalSubnetsAsLan && IsInLocalSubnet(remote))
         {
             return AddressScopeType.Lan;
@@ -100,6 +105,7 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
 
     private void OnSettingsChanged(MonitorSettings updatedSettings)
     {
+        // 设置对象克隆后再发布，避免外部数组引用变化导致缓存匹配和分类结果不稳定。
         Volatile.Write(ref _settings, CloneSettings(updatedSettings.AddressClassification));
 
         lock (_syncRoot)
@@ -111,6 +117,7 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
 
     private AdditionalSubnetCache GetAdditionalSubnets(AddressClassificationSettings settings)
     {
+        // AdditionalSubnetCache 按配置数组引用做快速匹配；设置热更新时会替换数组并清空缓存。
         var cache = Volatile.Read(ref _additionalSubnetCache);
         if (cache.Matches(settings))
         {
@@ -144,6 +151,7 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
 
     private void RefreshLocalSubnetsIfNeeded()
     {
+        // 网卡状态变化不需要每个包都重新枚举；30 秒缓存能兼顾拓扑变化和高频分类成本。
         var now = DateTimeOffset.UtcNow;
         lock (_syncRoot)
         {
@@ -287,6 +295,7 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
     {
         public bool Contains(IPAddress address)
         {
+            // CIDR 匹配同时支持 IPv4 和 IPv6；IPv4-mapped IPv6 会先归一化，避免同一地址两套表示。
             var normalized = Normalize(address);
             if (normalized.AddressFamily != AddressFamily)
             {
