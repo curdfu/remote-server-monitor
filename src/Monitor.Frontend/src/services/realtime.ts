@@ -13,7 +13,6 @@ export type RealtimeConnectionState =
   | 'disconnected';
 
 const hardwareListeners = new Set<Listener<HardwareRealtimeDto>>();
-// 当前 UI 暂不消费 network realtime，但保留 listener 集合和订阅 API，方便后续恢复网络实时推送时保持连接层兼容。
 const networkListeners = new Set<Listener<NetworkRealtimeDto>>();
 const connectionStateListeners = new Set<Listener<RealtimeConnectionState>>();
 
@@ -43,6 +42,29 @@ function clearReconnectTimer() {
     window.clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+}
+
+async function invokeIfConnected(methodName: string) {
+  if (connection?.state !== signalR.HubConnectionState.Connected) {
+    return;
+  }
+
+  try {
+    await connection.invoke(methodName);
+  } catch (error) {
+    console.warn(`SignalR topic subscription failed: ${methodName}`, error);
+  }
+}
+
+async function syncActiveTopicSubscriptions() {
+  await Promise.all([
+    hardwareListeners.size > 0
+      ? invokeIfConnected('SubscribeHardware')
+      : Promise.resolve(),
+    networkListeners.size > 0
+      ? invokeIfConnected('SubscribeNetwork')
+      : Promise.resolve()
+  ]);
 }
 
 // SignalR 断开后兜底重连：后端 Hub 不可用时，前端每 5 秒再尝试一次
@@ -75,7 +97,6 @@ function ensureConnection() {
     emitPayload(hardwareListeners, payload);
   });
 
-  // 后端当前不主动推送 networkRealtime；监听保留用于兼容未来恢复的事件名。
   connection.on('networkRealtime', (payload: NetworkRealtimeDto) => {
     emitPayload(networkListeners, payload);
   });
@@ -87,6 +108,7 @@ function ensureConnection() {
   connection.onreconnected(() => {
     clearReconnectTimer();
     emitConnectionState('connected');
+    void syncActiveTopicSubscriptions();
   });
 
   connection.onclose(() => {
@@ -120,9 +142,10 @@ export async function startRealtimeConnection() {
   emitConnectionState('connecting');
   startPromise = hubConnection
     .start()
-    .then(() => {
+    .then(async () => {
       clearReconnectTimer();
       emitConnectionState('connected');
+      await syncActiveTopicSubscriptions();
     })
     .catch((error) => {
       emitConnectionState('disconnected');
@@ -143,14 +166,44 @@ function subscribe<T>(listeners: Set<Listener<T>>, listener: Listener<T>) {
   };
 }
 
-// 首页使用：订阅后端推送的 hardwareRealtime 事件
-export function subscribeHardwareRealtime(listener: Listener<HardwareRealtimeDto>) {
-  return subscribe(hardwareListeners, listener);
+function subscribeTopic<T>(
+  listeners: Set<Listener<T>>,
+  listener: Listener<T>,
+  subscribeMethod: string,
+  unsubscribeMethod: string
+) {
+  const wasEmpty = listeners.size === 0;
+  listeners.add(listener);
+
+  if (wasEmpty) {
+    void invokeIfConnected(subscribeMethod);
+  }
+
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      void invokeIfConnected(unsubscribeMethod);
+    }
+  };
 }
 
-// 当前页面未消费网络实时事件，但保留订阅函数，避免未来恢复推送时改动调用方 API。
+// 首页使用：订阅后端推送的 hardwareRealtime 事件
+export function subscribeHardwareRealtime(listener: Listener<HardwareRealtimeDto>) {
+  return subscribeTopic(
+    hardwareListeners,
+    listener,
+    'SubscribeHardware',
+    'UnsubscribeHardware'
+  );
+}
+
 export function subscribeNetworkRealtime(listener: Listener<NetworkRealtimeDto>) {
-  return subscribe(networkListeners, listener);
+  return subscribeTopic(
+    networkListeners,
+    listener,
+    'SubscribeNetwork',
+    'UnsubscribeNetwork'
+  );
 }
 
 // 页面可通过这个订阅连接状态变化，用于提示当前实时通道是否正常

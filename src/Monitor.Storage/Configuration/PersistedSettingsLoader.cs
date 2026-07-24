@@ -35,6 +35,7 @@ public static class PersistedSettingsLoader
             command.CommandText = """
                                   SELECT http_port,
                                          hardware_sample_interval_ms,
+                                         network_sample_interval_ms,
                                          aggregate_interval_seconds,
                                          history_retention_days,
                                          top_n_default
@@ -54,9 +55,10 @@ public static class PersistedSettingsLoader
             {
                 [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:HttpPort"] = reader.GetInt32(0).ToString(),
                 [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:HardwareSampleIntervalMs"] = reader.GetInt32(1).ToString(),
-                [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:AggregateIntervalSeconds"] = reader.GetInt32(2).ToString(),
-                [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:HistoryRetentionDays"] = reader.GetInt32(3).ToString(),
-                [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:TopNDefault"] = reader.GetInt32(4).ToString()
+                [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:NetworkRealtimeIntervalMs"] = reader.GetInt32(2).ToString(),
+                [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:AggregateIntervalSeconds"] = reader.GetInt32(3).ToString(),
+                [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:HistoryRetentionDays"] = reader.GetInt32(4).ToString(),
+                [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:TopNDefault"] = reader.GetInt32(5).ToString()
             };
         }
         catch (Exception exception)

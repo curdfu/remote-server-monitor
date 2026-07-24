@@ -84,9 +84,17 @@ export interface NetworkPeriodSummaryDto {
   otherDownloadBytes: number;
 }
 
+export interface NetworkDashboardDto {
+  apps: AppTrafficSummaryDto[];
+  overview: NetworkPeriodSummaryDto;
+  totals: NetworkPeriodSummaryDto;
+  realtime?: NetworkRealtimeDto | null;
+}
+
 export interface AppSettingsDto {
   httpPort: number;
   hardwareSampleIntervalMs: number;
+  networkRealtimeIntervalMs: number;
   aggregateIntervalSeconds: number;
   historyRetentionDays: number;
   topNDefault: number;

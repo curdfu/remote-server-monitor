@@ -12,6 +12,13 @@ public static class NetworkEndpoints
 
     public static IEndpointRouteBuilder MapNetworkEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/network/realtime/history", (
+            INetworkAggregator networkAggregator) =>
+        {
+            var snapshots = networkAggregator.GetRecentRealtimeSnapshots();
+            return Results.Ok(snapshots.Select(ToRealtimeDto).ToArray());
+        });
+
         app.MapGet("/api/network/realtime", (
             INetworkAggregator networkAggregator) =>
         {
@@ -24,6 +31,61 @@ public static class NetworkEndpoints
             }
 
             return Results.Ok(ToRealtimeDto(snapshot));
+        });
+
+        app.MapGet("/api/network/dashboard", async (
+            DateTimeOffset? from,
+            DateTimeOffset? to,
+            int? topN,
+            string? scope,
+            string? direction,
+            NetworkTrafficRepository networkTrafficRepository,
+            INetworkAggregator networkAggregator,
+            IMonitorSettingsProvider settings,
+            CancellationToken cancellationToken) =>
+        {
+            var (rangeFrom, rangeTo) = NormalizeRange(from, to, TimeSpan.FromHours(1));
+            if (rangeFrom >= rangeTo)
+            {
+                return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
+            }
+
+            var limit = Math.Clamp(topN ?? settings.Current.TopNDefault, 1, 100);
+            var scopeFilter = ParseScope(scope);
+            var directionFilter = ParseDirection(direction);
+
+            // 页面原本需要三次 HTTP 往返。组合接口保持三类统计语义不变，
+            // 但由服务端统一调度并返回同一个一致时间窗口的快照。
+            var appsTask = networkTrafficRepository.QueryAppSummariesAsync(
+                rangeFrom,
+                rangeTo,
+                scopeFilter,
+                directionFilter,
+                limit,
+                cancellationToken);
+            var overviewTask = networkTrafficRepository.QueryTotalsAsync(
+                rangeFrom,
+                rangeTo,
+                NetworkTrafficRepository.TrafficScopeFilter.All,
+                directionFilter,
+                cancellationToken);
+            var totalsTask = networkTrafficRepository.QueryTotalsAsync(
+                rangeFrom,
+                rangeTo,
+                scopeFilter,
+                NetworkTrafficRepository.TrafficDirectionFilter.Total,
+                cancellationToken);
+
+            await Task.WhenAll(appsTask, overviewTask, totalsTask);
+            var realtime = networkAggregator.GetLatestRealtimeSnapshot();
+
+            return Results.Ok(new NetworkDashboardDto
+            {
+                Apps = appsTask.Result.Select(ToSummaryDto).ToArray(),
+                Overview = ToPeriodSummaryDto(overviewTask.Result),
+                Totals = ToPeriodSummaryDto(totalsTask.Result),
+                Realtime = realtime is null ? null : ToRealtimeDto(realtime)
+            });
         });
 
         app.MapGet("/api/network/apps", async (
@@ -42,7 +104,7 @@ public static class NetworkEndpoints
                 return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
             }
 
-            var limit = topN is > 0 ? topN : settings.Current.TopNDefault;
+            var limit = Math.Clamp(topN ?? settings.Current.TopNDefault, 1, 100);
             var scopeFilter = ParseScope(scope);
             var directionFilter = ParseDirection(direction);
             var summaries = await networkTrafficRepository.QueryAppSummariesAsync(

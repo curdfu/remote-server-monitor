@@ -3,6 +3,7 @@
   AppTrafficSegmentDto,
   AppTrafficSummaryDto,
   HardwareRealtimeDto,
+  NetworkDashboardDto,
   NetworkPeriodSummaryDto,
   NetworkRealtimeDto,
   RealtimeOverviewDto
@@ -12,20 +13,66 @@ const apiBase = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? '';
 
 // 通用 HTTP 请求封装：统一拼接 API 基地址，并处理后端返回的错误文本
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {})
-    },
-    ...init
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBase}${path}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {})
+      },
+      ...init
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error;
+    }
+
+    throw new Error('无法连接监控服务，请稍后重试；实时通道会在服务恢复后自动重连。');
+  }
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed: ${response.status}`);
+    throw new Error(await resolveResponseError(response));
   }
 
   return (await response.json()) as T;
+}
+
+async function resolveResponseError(response: Response) {
+  if ([502, 503, 504].includes(response.status)) {
+    return '监控服务暂时不可用，请稍后重试；实时通道会在服务恢复后自动重连。';
+  }
+
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+  if (contentType.includes('json')) {
+    try {
+      const payload = await response.json() as {
+        title?: unknown;
+        detail?: unknown;
+        errors?: Record<string, unknown>;
+      };
+      const validationMessages = Object.values(payload.errors ?? {})
+        .flatMap((value) => Array.isArray(value) ? value : [value])
+        .filter((value): value is string => typeof value === 'string');
+
+      if (validationMessages.length > 0) {
+        return validationMessages.join('；');
+      }
+
+      if (typeof payload.detail === 'string' && payload.detail.trim()) {
+        return payload.detail;
+      }
+
+      if (typeof payload.title === 'string' && payload.title.trim()) {
+        return payload.title;
+      }
+    } catch {
+      // 非标准 JSON 错误体继续使用状态码兜底，不把解析异常暴露给页面。
+    }
+  }
+
+  return response.status >= 500
+    ? '服务处理请求时发生异常，请稍后重试。'
+    : `请求失败（HTTP ${response.status}）。`;
 }
 
 // 调用后端 /api/overview：获取首页概览数据
@@ -86,6 +133,29 @@ export function getNetworkSummary(params?: {
   if (params?.scope) query.set('scope', params.scope);
   if (params?.direction) query.set('direction', params.direction);
   return request<NetworkPeriodSummaryDto>(`/api/network/summary${query.toString() ? `?${query}` : ''}`);
+}
+
+export function getNetworkDashboard(params?: {
+  from?: string;
+  to?: string;
+  topN?: number;
+  scope?: 'all' | 'wan' | 'lan' | 'loopback';
+  direction?: 'total' | 'upload' | 'download';
+  signal?: AbortSignal;
+}) {
+  const query = new URLSearchParams();
+  if (params?.from) query.set('from', params.from);
+  if (params?.to) query.set('to', params.to);
+  if (params?.topN) query.set('topN', String(params.topN));
+  if (params?.scope) query.set('scope', params.scope);
+  if (params?.direction) query.set('direction', params.direction);
+  return request<NetworkDashboardDto>(`/api/network/dashboard${query.toString() ? `?${query}` : ''}`, {
+    signal: params?.signal
+  });
+}
+
+export function getNetworkRealtimeHistory() {
+  return request<NetworkRealtimeDto[]>('/api/network/realtime/history');
 }
 
 // 调用后端 /api/settings：读取设置页表单初始值

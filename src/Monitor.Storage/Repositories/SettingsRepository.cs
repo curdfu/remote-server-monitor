@@ -2,6 +2,7 @@
 using Monitor.Contracts.Dtos;
 using Monitor.Contracts.Options;
 using Monitor.Storage.Abstractions;
+using Monitor.Storage.Services;
 
 namespace Monitor.Storage.Repositories;
 
@@ -21,6 +22,7 @@ public sealed class SettingsRepository(
         command.CommandText = """
                               SELECT http_port,
                                      hardware_sample_interval_ms,
+                                     network_sample_interval_ms,
                                      aggregate_interval_seconds,
                                      history_retention_days,
                                      top_n_default
@@ -39,21 +41,29 @@ public sealed class SettingsRepository(
         {
             HttpPort = reader.GetInt32(0),
             HardwareSampleIntervalMs = reader.GetInt32(1),
-            AggregateIntervalSeconds = reader.GetInt32(2),
-            HistoryRetentionDays = reader.GetInt32(3),
-            TopNDefault = reader.GetInt32(4)
+            NetworkRealtimeIntervalMs = reader.GetInt32(2),
+            AggregateIntervalSeconds = reader.GetInt32(3),
+            HistoryRetentionDays = reader.GetInt32(4),
+            TopNDefault = reader.GetInt32(5)
         };
     }
 
-    public async Task SaveAsync(AppSettingsDto settings, CancellationToken cancellationToken = default)
+    public Task SaveAsync(AppSettingsDto settings, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
+        return SqliteBusyRetry.ExecuteAsync(
+            token => SaveCoreAsync(settings, token),
+            cancellationToken);
+    }
+
+    private async Task SaveCoreAsync(AppSettingsDto settings, CancellationToken cancellationToken)
+    {
         await using var connection = dbConnectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
-        // network_sample_interval_ms 目前是常量配置，仍写入表中以保持 schema 完整和后续兼容。
+        // 网络实时刷新间隔与历史聚合粒度分别保存，避免把页面刷新节奏和历史 bucket 粒度混为一谈。
         command.CommandText = """
                               INSERT INTO settings (
                                   id,
@@ -80,6 +90,7 @@ public sealed class SettingsRepository(
                               ON CONFLICT(id) DO UPDATE SET
                                   http_port = excluded.http_port,
                                   hardware_sample_interval_ms = excluded.hardware_sample_interval_ms,
+                                  network_sample_interval_ms = excluded.network_sample_interval_ms,
                                   aggregate_interval_seconds = excluded.aggregate_interval_seconds,
                                   history_retention_days = excluded.history_retention_days,
                                   top_n_default = excluded.top_n_default,
@@ -89,7 +100,7 @@ public sealed class SettingsRepository(
         var now = DateTimeOffset.UtcNow.ToString("O");
         command.Parameters.AddWithValue("$httpPort", settings.HttpPort);
         command.Parameters.AddWithValue("$hardwareSampleIntervalMs", settings.HardwareSampleIntervalMs);
-        command.Parameters.AddWithValue("$networkRealtimeIntervalMs", MonitorSettings.NetworkRealtimeIntervalMs);
+        command.Parameters.AddWithValue("$networkRealtimeIntervalMs", settings.NetworkRealtimeIntervalMs);
         command.Parameters.AddWithValue("$aggregateIntervalSeconds", settings.AggregateIntervalSeconds);
         command.Parameters.AddWithValue("$historyRetentionDays", settings.HistoryRetentionDays);
         command.Parameters.AddWithValue("$topNDefault", settings.TopNDefault);
@@ -98,9 +109,10 @@ public sealed class SettingsRepository(
 
         await command.ExecuteNonQueryAsync(cancellationToken);
         logger.LogInformation(
-            "Settings persisted to SQLite. HttpPort={HttpPort}, HardwareIntervalMs={HardwareIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}",
+            "Settings persisted to SQLite. HttpPort={HttpPort}, HardwareIntervalMs={HardwareIntervalMs}, NetworkRealtimeIntervalMs={NetworkRealtimeIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}",
             settings.HttpPort,
             settings.HardwareSampleIntervalMs,
+            settings.NetworkRealtimeIntervalMs,
             settings.AggregateIntervalSeconds,
             settings.HistoryRetentionDays,
             settings.TopNDefault);

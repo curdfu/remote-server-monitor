@@ -4,17 +4,21 @@ import { readFile } from 'node:fs/promises';
 
 const viewPath = new URL('./src/views/NetworkView.vue', import.meta.url);
 
-test('network view does not issue an unused scoped summary request', async () => {
+test('network view loads rankings and summaries through one dashboard request', async () => {
   const source = await readFile(viewPath, 'utf8');
-  const summaryCalls = source.match(/getNetworkSummary\(\{[\s\S]*?\n\s*\}\)/g) ?? [];
+  const dashboardCalls = source.match(/getNetworkDashboard\(\{[\s\S]*?\n\s*\}\)/g) ?? [];
 
-  assert.ok(
-    summaryCalls.length > 0,
-    'expected NetworkView to issue network summary requests',
+  assert.equal(
+    dashboardCalls.length,
+    1,
+    'expected NetworkView to issue a single combined dashboard request',
   );
 
-  assert.ok(
-    summaryCalls.every((call) => !/scope: filters\.scope,[\s\S]*?direction: filters\.direction/.test(call)),
-    'expected loadApps to avoid requesting a scoped summary that is not consumed by the UI',
+  assert.match(
+    dashboardCalls[0],
+    /scope: filters\.scope,[\s\S]*?direction: filters\.direction/,
+    'expected the dashboard request to preserve the active scope and direction',
   );
+
+  assert.doesNotMatch(source, /getNetworkApps|getNetworkSummary/, 'expected legacy duplicate requests to be removed');
 });

@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using Monitor.Hardware.Models;
 using Monitor.Storage.Abstractions;
+using Monitor.Storage.Services;
 
 namespace Monitor.Storage.Repositories;
 
@@ -15,14 +16,23 @@ public sealed class HardwareRepository(
         return SaveBatchAsync([snapshot], cancellationToken);
     }
 
-    public async Task SaveBatchAsync(IReadOnlyCollection<HardwareSnapshot> snapshots, CancellationToken cancellationToken = default)
+    public Task SaveBatchAsync(IReadOnlyCollection<HardwareSnapshot> snapshots, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(snapshots);
         if (snapshots.Count == 0)
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        return SqliteBusyRetry.ExecuteAsync(
+            token => SaveBatchCoreAsync(snapshots, token),
+            cancellationToken);
+    }
+
+    private async Task SaveBatchCoreAsync(
+        IReadOnlyCollection<HardwareSnapshot> snapshots,
+        CancellationToken cancellationToken)
+    {
         await using var connection = dbConnectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
         await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);

@@ -2,8 +2,6 @@
   <section class="page network-page">
     <!-- 页面头部：标题、说明和手动刷新按钮 -->
     <PageHeader
-      iconName="network"
-      kicker="网络"
       title="网络"
       description="查看一段时间内的流量汇总、占比和应用排行。"
     >
@@ -119,6 +117,34 @@
     <div v-if="errorMessage" class="card state-card error-state">
       {{ errorMessage }}
     </div>
+
+    <section class="card page-tier-panel network-live-panel">
+      <div class="section-header section-header-rich">
+        <div>
+          <h3>实时网络速率</h3>
+          <p class="section-subtitle">呈现最近两分钟的实时上传与下载变化。</p>
+        </div>
+        <span class="section-tag">{{ realtimeStatusText }}</span>
+      </div>
+      <div class="network-live-grid">
+        <MetricTrend
+          title="上传速率"
+          eyebrow=""
+          :points="uploadRealtimeTrend"
+          unit=" Mbps"
+          range-label="最近 2 分钟"
+          tone="warning"
+        />
+        <MetricTrend
+          title="下载速率"
+          eyebrow=""
+          :points="downloadRealtimeTrend"
+          unit=" Mbps"
+          range-label="最近 2 分钟"
+          tone="signal"
+        />
+      </div>
+    </section>
 
     <section class="panel-grid network-section network-section-analytics">
       <div class="network-section network-section-column network-section-column-analytics">
@@ -318,6 +344,14 @@
             </div>
           </div>
 
+          <div class="ranking-table-head" aria-hidden="true">
+            <span>排名</span>
+            <span>应用名称</span>
+            <span>应用路径</span>
+            <span>上传 / 下载</span>
+            <span>当前统计</span>
+          </div>
+
           <ol v-if="showRankingSkeleton" class="ranking-list ranking-list-skeleton" aria-hidden="true">
             <li v-for="placeholder in rankingSkeletonRows" :key="placeholder" class="ranking-item ranking-item-skeleton">
               <div class="ranking-main">
@@ -449,9 +483,16 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
+import MetricTrend from '../components/MetricTrend.vue';
 import PageHeader from '../components/PageHeader.vue';
-import { getNetworkAppSegments, getNetworkApps, getNetworkSummary } from '../services/api';
-import type { AppTrafficSegmentDto, AppTrafficSummaryDto, NetworkPeriodSummaryDto } from '../types/monitor';
+import { getNetworkAppSegments, getNetworkDashboard, getNetworkRealtimeHistory } from '../services/api';
+import { startRealtimeConnection, subscribeNetworkRealtime } from '../services/realtime';
+import type {
+  AppTrafficSegmentDto,
+  AppTrafficSummaryDto,
+  NetworkPeriodSummaryDto,
+  NetworkRealtimeDto
+} from '../types/monitor';
 
 // 常用时间预设，对应页面顶部的快捷时间按钮
 const presetOptions = [
@@ -475,10 +516,13 @@ const isSegmentsLoading = ref(false);
 const loadingSource = ref<'filter' | 'manual'>('filter');
 const errorMessage = ref('');
 const segmentsErrorMessage = ref('');
+const networkRealtimeHistory = ref<NetworkRealtimeDto[]>([]);
 const isMobileViewport = ref(false);
 const isMobileFiltersExpanded = ref(false);
 let autoRefreshTimer: number | null = null;
 let mobileViewportQuery: MediaQueryList | null = null;
+let dashboardAbortController: AbortController | null = null;
+let unsubscribeNetworkRealtime: (() => void) | null = null;
 let pendingReloadSource: 'filter' | 'manual' = 'filter';
 // 应用明细请求可能被切换筛选条件、关闭弹层或重新选择应用打断；版本号用于丢弃过期响应。
 let segmentsRequestVersion = 0;
@@ -593,6 +637,24 @@ const activePresetHours = computed(() => getMatchedPresetHours(filters.from, fil
 const showAdvancedFilters = computed(() => !isMobileViewport.value || isMobileFiltersExpanded.value);
 
 const rangeParts = computed(() => formatRangeParts());
+const uploadRealtimeTrend = computed(() =>
+  networkRealtimeHistory.value.map((sample) => ({
+    time: sample.sampleTime,
+    value: bytesPerSecondToMegabits(sample.totalUploadBytesPerSecond)
+  }))
+);
+const downloadRealtimeTrend = computed(() =>
+  networkRealtimeHistory.value.map((sample) => ({
+    time: sample.sampleTime,
+    value: bytesPerSecondToMegabits(sample.totalDownloadBytesPerSecond)
+  }))
+);
+const realtimeStatusText = computed(() => {
+  const latest = networkRealtimeHistory.value.at(-1);
+  if (!latest) return '等待实时样本';
+  const ageSeconds = Math.max(0, Math.round((Date.now() - new Date(latest.sampleTime).getTime()) / 1000));
+  return ageSeconds < 5 ? '实时' : `${ageSeconds} 秒前`;
+});
 
 const dominantScopeLabel = computed(() => {
   if (overviewTotalBytes.value === 0) return '--';
@@ -616,11 +678,18 @@ onMounted(() => {
     mobileViewportQuery.addEventListener('change', handleMobileViewportChange);
   }
 
+  unsubscribeNetworkRealtime = subscribeNetworkRealtime(appendNetworkRealtimeSample);
+  void startRealtimeConnection().catch(() => {
+    // 历史查询仍可正常使用，实时通道状态由全局侧栏展示。
+  });
+  void loadRealtimeHistory();
   void loadApps('filter');
 });
 
 onUnmounted(() => {
   segmentsRequestVersion++;
+  dashboardAbortController?.abort();
+  unsubscribeNetworkRealtime?.();
 
   if (autoRefreshTimer !== null) {
     window.clearTimeout(autoRefreshTimer);
@@ -651,6 +720,9 @@ watch(
 );
 
 async function loadApps(source: 'filter' | 'manual' = 'filter') {
+  dashboardAbortController?.abort();
+  const requestController = new AbortController();
+  dashboardAbortController = requestController;
   loadingSource.value = source;
   isLoading.value = true;
   errorMessage.value = '';
@@ -658,44 +730,70 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
   try {
     const from = toIsoString(filters.from);
     const to = toIsoString(filters.to);
-    // 这里集中调用网络页相关后端接口：
-    // 1. /api/network/apps：获取应用流量排行
-    // 2. /api/network/summary（scope=all + 当前 direction）：获取占比面板数据，忽略 scope，但保留时间和方向
-    // 3. /api/network/summary（scope=当前 scope + direction=total）：获取累计上传/下载卡片数据，保持当前范围并忽略方向
-    const [apps, overviewData, totalsData] = await Promise.all([
-      getNetworkApps({
-        from,
-        to,
-        topN: filters.topN,
-        scope: filters.scope,
-        direction: filters.direction
-      }),
-      getNetworkSummary({
-        from,
-        to,
-        scope: 'all',
-        direction: filters.direction
-      }),
-      getNetworkSummary({
-        from,
-        to,
-        scope: filters.scope,
-        direction: 'total'
-      })
-    ]);
+    const dashboard = await getNetworkDashboard({
+      from,
+      to,
+      topN: filters.topN,
+      scope: filters.scope,
+      direction: filters.direction,
+      signal: requestController.signal
+    });
 
-    items.value = apps;
-    overviewSummary.value = overviewData;
-    totalsSummary.value = totalsData;
-    syncSelectedAppAfterRankingLoad(apps);
+    items.value = dashboard.apps;
+    overviewSummary.value = dashboard.overview;
+    totalsSummary.value = dashboard.totals;
+    if (dashboard.realtime) {
+      appendNetworkRealtimeSample(dashboard.realtime);
+    }
+    syncSelectedAppAfterRankingLoad(dashboard.apps);
     if (selectedApp.value) {
       void loadSelectedAppSegments();
     }
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return;
+    }
     errorMessage.value = error instanceof Error ? error.message : '加载网络汇总失败。';
   } finally {
-    isLoading.value = false;
+    if (dashboardAbortController === requestController) {
+      dashboardAbortController = null;
+      isLoading.value = false;
+    }
   }
+}
+
+function appendNetworkRealtimeSample(sample: NetworkRealtimeDto) {
+  mergeNetworkRealtimeSamples([sample]);
+}
+
+async function loadRealtimeHistory() {
+  try {
+    const samples = await getNetworkRealtimeHistory();
+    mergeNetworkRealtimeSamples(samples);
+  } catch {
+    // 缓存读取失败不阻断网络页，SignalR 后续样本仍会正常补充趋势。
+  }
+}
+
+function mergeNetworkRealtimeSamples(samples: NetworkRealtimeDto[]) {
+  const cutoffTime = Date.now() - 2 * 60 * 1000;
+  const samplesByTime = new Map<string, NetworkRealtimeDto>();
+
+  for (const sample of [...networkRealtimeHistory.value, ...samples]) {
+    const sampleTime = new Date(sample.sampleTime).getTime();
+    if (!Number.isFinite(sampleTime) || sampleTime < cutoffTime) {
+      continue;
+    }
+
+    samplesByTime.set(sample.sampleTime, sample);
+  }
+
+  networkRealtimeHistory.value = [...samplesByTime.values()]
+    .sort((left, right) => new Date(left.sampleTime).getTime() - new Date(right.sampleTime).getTime());
+}
+
+function bytesPerSecondToMegabits(value: number) {
+  return value * 8 / 1_000_000;
 }
 
 function refreshApps() {

@@ -1,6 +1,8 @@
 ﻿using Monitor.Contracts.Options;
 using Monitor.Network.Abstractions;
 using Monitor.Storage.Repositories;
+using Monitor.Storage.Services;
+using Microsoft.Data.Sqlite;
 
 namespace Monitor.Service.HostedServices;
 
@@ -10,7 +12,8 @@ public sealed class AggregationHostedService(
     ILogger<AggregationHostedService> logger,
     INetworkAggregator networkAggregator,
     INetworkCollector networkCollector,
-    NetworkTrafficRepository networkTrafficRepository) : BackgroundService
+    NetworkTrafficRepository networkTrafficRepository,
+    IMonitorSettingsProvider settings) : BackgroundService
 {
     private const int PersistenceBatchSize = 500;
 
@@ -21,7 +24,8 @@ public sealed class AggregationHostedService(
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(MonitorSettings.NetworkRealtimeIntervalMs), stoppingToken);
+            var interval = TimeSpan.FromMilliseconds(settings.Current.NetworkRealtimeIntervalMs);
+            await WaitForIntervalOrSettingsChangeAsync(interval, stoppingToken);
             await RefreshRealtimeCacheAsync(stoppingToken);
         }
     }
@@ -35,6 +39,21 @@ public sealed class AggregationHostedService(
         await base.StopAsync(cancellationToken);
     }
 
+    private async Task WaitForIntervalOrSettingsChangeAsync(
+        TimeSpan interval,
+        CancellationToken cancellationToken)
+    {
+        var settingsChangedSource = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = settings.RegisterChangeCallback(_ => settingsChangedSource.TrySetResult());
+        var delayTask = Task.Delay(interval, cancellationToken);
+        var completedTask = await Task.WhenAny(delayTask, settingsChangedSource.Task);
+
+        if (completedTask == delayTask)
+        {
+            await delayTask;
+        }
+    }
+
     private async Task PersistPendingBucketsAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -45,10 +64,21 @@ public sealed class AggregationHostedService(
                 return;
             }
 
-            await networkTrafficRepository.SaveAsync(batch, cancellationToken);
-            // 只有数据库写入成功后才确认 bucket，失败时保留在聚合器 pending 队列等待下一轮。
-            networkAggregator.ConfirmPendingBuckets(batch.Count);
-            logger.LogDebug("Persisted {Count} network traffic buckets.", batch.Count);
+            try
+            {
+                await networkTrafficRepository.SaveAsync(batch, cancellationToken);
+                // 只有数据库写入成功后才确认 bucket，失败时保留在聚合器 pending 队列等待下一轮。
+                networkAggregator.ConfirmPendingBuckets(batch.Count);
+                logger.LogDebug("Persisted {Count} network traffic buckets.", batch.Count);
+            }
+            catch (SqliteException exception) when (SqliteBusyRetry.IsBusy(exception))
+            {
+                logger.LogWarning(
+                    exception,
+                    "SQLite remained busy after retries. Retaining {Count} network traffic buckets for the next cycle.",
+                    batch.Count);
+                return;
+            }
         }
     }
 

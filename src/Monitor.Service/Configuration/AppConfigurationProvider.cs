@@ -37,6 +37,7 @@ public sealed class AppConfigurationProvider : IAppConfigurationProvider, IMonit
         {
             updated = Clone(_current);
             updated.HardwareSampleIntervalMs = settings.HardwareSampleIntervalMs;
+            updated.NetworkRealtimeIntervalMs = settings.NetworkRealtimeIntervalMs;
             updated.AggregateIntervalSeconds = settings.AggregateIntervalSeconds;
             updated.HistoryRetentionDays = settings.HistoryRetentionDays;
             updated.TopNDefault = settings.TopNDefault;
@@ -82,6 +83,7 @@ public sealed class AppConfigurationProvider : IAppConfigurationProvider, IMonit
         {
             HttpPort = settings.HttpPort,
             HardwareSampleIntervalMs = settings.HardwareSampleIntervalMs,
+            NetworkRealtimeIntervalMs = settings.NetworkRealtimeIntervalMs,
             AggregateIntervalSeconds = settings.AggregateIntervalSeconds,
             HistoryRetentionDays = settings.HistoryRetentionDays,
             TopNDefault = settings.TopNDefault,

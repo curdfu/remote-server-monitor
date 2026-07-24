@@ -1,22 +1,50 @@
 <template>
   <section class="page dashboard-page">
     <PageHeader
-      iconName="dashboard"
-      kicker="首页"
       title="概览"
       description="查看 CPU、内存、磁盘等关键硬件状态。"
     >
       <template #actions>
-        <button class="ghost-button" :disabled="isLoading" @click="loadOverview">
+        <button class="ghost-button" :disabled="isLoading" @click="refreshDashboard">
           <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
           {{ isLoading ? '刷新中...' : '立即刷新' }}
         </button>
       </template>
     </PageHeader>
 
-    <div v-if="errorMessage" class="card state-card error-state">
+    <div v-if="errorMessage" class="card state-card error-state" role="alert">
       {{ errorMessage }}
     </div>
+
+    <section class="card system-status-card" :class="`system-status-${healthState.tone}`">
+      <div class="system-status-main">
+        <span class="system-status-beacon" aria-hidden="true">
+          <AppIcon name="status" :size="24" />
+        </span>
+        <div>
+          <h3>{{ healthState.title }}</h3>
+          <p>{{ healthState.description }}</p>
+        </div>
+      </div>
+      <dl class="system-status-facts">
+        <div>
+          <dt>最新样本</dt>
+          <dd>{{ latestSampleText }}</dd>
+        </div>
+        <div>
+          <dt>开机时间</dt>
+          <dd>{{ formatDateTime(bootTimeText) }}</dd>
+        </div>
+        <div>
+          <dt>运行时间</dt>
+          <dd>{{ formatUptime(hardware?.uptimeSeconds) }}</dd>
+        </div>
+        <div>
+          <dt>存储状态</dt>
+          <dd>{{ storageStatusText }}</dd>
+        </div>
+      </dl>
+    </section>
 
     <section class="dashboard-section dashboard-core-metrics-section">
       <article class="card dashboard-core-metrics-panel">
@@ -25,20 +53,10 @@
             <h3>核心运行指标</h3>
             <p class="section-subtitle">优先展示最关键、最常看的首页指标。</p>
           </div>
-          <span class="section-tag">Core Metrics</span>
         </div>
 
         <div class="dashboard-core-metrics-panel-body">
           <div class="dashboard-hero-grid page-tier-stats">
-            <MetricCard
-              label="已开机"
-              :value="formatUptime(hardware?.uptimeSeconds)"
-              :hint="`启动时间 ${formatDateTime(bootTimeText)}`"
-              badge="运行"
-              tone="info"
-              icon-name="uptime"
-              small-value
-            />
             <MetricCard
               label="CPU 当前频率"
               :value="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
@@ -97,6 +115,40 @@
       </article>
     </section>
 
+    <section class="card page-tier-panel dashboard-trends-panel">
+      <div class="section-header section-header-rich">
+        <div>
+          <h3>最近一小时趋势</h3>
+          <p class="section-subtitle">历史查询与实时样本共同组成，仅在当前页面内绘制。</p>
+        </div>
+        <span class="section-tag">最近 1 小时</span>
+      </div>
+      <div v-if="historyErrorMessage" class="trend-inline-state">{{ historyErrorMessage }}</div>
+      <div class="trend-grid">
+        <MetricTrend
+          title="CPU 使用率"
+          eyebrow=""
+          :points="cpuTrend"
+          unit="%"
+          tone="signal"
+        />
+        <MetricTrend
+          title="内存使用率"
+          eyebrow=""
+          :points="memoryTrend"
+          unit="%"
+          tone="info"
+        />
+        <MetricTrend
+          title="CPU 温度"
+          eyebrow=""
+          :points="temperatureTrend"
+          unit="°C"
+          tone="warning"
+        />
+      </div>
+    </section>
+
     <section class="panel-grid dashboard-storage-grid">
       <article class="card dashboard-panel-card page-tier-panel">
         <div class="panel-header">
@@ -151,8 +203,8 @@
           <span class="section-tag">按卷汇总</span>
         </div>
 
-        <div class="table-shell realtime-table-shell">
-          <table class="data-table">
+        <div class="table-shell realtime-table-shell disk-space-table-shell">
+          <table class="data-table disk-space-table">
             <thead>
               <tr>
                 <th>磁盘 / 卷</th>
@@ -163,9 +215,9 @@
             </thead>
             <tbody>
               <tr v-for="disk in sortedDiskSpaces" :key="disk.name">
-                <td>{{ disk.name }}</td>
-                <td class="align-right">{{ formatDiskSize(disk.totalBytes) }}</td>
-                <td class="align-right">
+                <td data-label="磁盘 / 卷">{{ disk.name }}</td>
+                <td class="align-right" data-label="总容量">{{ formatDiskSize(disk.totalBytes) }}</td>
+                <td class="align-right" data-label="已用空间">
                   <div class="table-metric">
                     <div class="table-metric-head">
                       <strong>{{ formatDiskSize(disk.usedBytes) }}</strong>
@@ -181,7 +233,7 @@
                     </div>
                   </div>
                 </td>
-                <td class="align-right">
+                <td class="align-right" data-label="剩余空间">
                   <strong class="disk-space-value">{{ formatDiskSize(disk.freeBytes) }}</strong>
                 </td>
               </tr>
@@ -198,15 +250,24 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import AppIcon from '../components/AppIcon.vue';
 import MetricCard from '../components/MetricCard.vue';
+import MetricTrend from '../components/MetricTrend.vue';
 import PageHeader from '../components/PageHeader.vue';
-import { getOverview } from '../services/api';
+import { getHardwareHistory, getOverview } from '../services/api';
 import { startRealtimeConnection, subscribeHardwareRealtime } from '../services/realtime';
-import type { DiskSpaceDto, DiskTemperatureDto, RealtimeOverviewDto } from '../types/monitor';
+import type {
+  DiskSpaceDto,
+  DiskTemperatureDto,
+  HardwareRealtimeDto,
+  RealtimeOverviewDto
+} from '../types/monitor';
 
 const hardware = ref<RealtimeOverviewDto['hardware'] | null>(null);
 const isLoading = ref(false);
 const errorMessage = ref('');
+const historyErrorMessage = ref('');
+const history = ref<HardwareRealtimeDto[]>([]);
 const diskSortField = ref<'temperatureC'>('temperatureC');
 const diskSortDescending = ref(true);
 let unsubscribeHardware: (() => void) | null = null;
@@ -235,9 +296,80 @@ const bootTimeText = computed(() => {
   return new Date(Date.now() - uptimeSeconds * 1000).toISOString();
 });
 
+const cpuTrend = computed(() => toTrendPoints((sample) => sample.cpuUsagePercent));
+const memoryTrend = computed(() => toTrendPoints((sample) => sample.memoryUsagePercent));
+const temperatureTrend = computed(() => toTrendPoints((sample) => sample.cpuTemperatureC));
+
+const latestSampleText = computed(() => {
+  if (!hardware.value?.sampleTime) return '等待数据';
+  const ageSeconds = Math.max(0, Math.round((Date.now() - new Date(hardware.value.sampleTime).getTime()) / 1000));
+  if (ageSeconds < 5) return '刚刚更新';
+  if (ageSeconds < 60) return `${ageSeconds} 秒前`;
+  return formatDateTime(hardware.value.sampleTime);
+});
+
+const storageStatusText = computed(() => {
+  const usage = maximumDiskUsagePercent.value;
+  if (usage == null) return '等待容量数据';
+  if (usage >= 90) return '空间紧张';
+  if (usage >= 75) return '需要关注';
+  return '容量充足';
+});
+
+const maximumDiskUsagePercent = computed(() => {
+  const percentages = (hardware.value?.diskSpaces ?? [])
+    .map((disk) => getCapacityPercent(disk.usedBytes, disk.totalBytes))
+    .filter((value): value is number => value != null);
+  return percentages.length ? Math.max(...percentages) : null;
+});
+
+const healthState = computed(() => {
+  if (!hardware.value) {
+    return {
+      tone: 'neutral',
+      title: '等待监控数据',
+      description: '采集服务准备完成后，这里会汇总关键运行状态。'
+    };
+  }
+
+  const dangerReasons: string[] = [];
+  const warningReasons: string[] = [];
+  if ((hardware.value.cpuUsagePercent ?? 0) >= 90) dangerReasons.push('CPU 负载过高');
+  if ((hardware.value.cpuTemperatureC ?? 0) >= 80) dangerReasons.push('CPU 温度过高');
+  if ((hardware.value.memoryUsagePercent ?? 0) >= 90) dangerReasons.push('内存空间紧张');
+  if ((maximumDiskUsagePercent.value ?? 0) >= 90) dangerReasons.push('磁盘空间紧张');
+  if ((hardware.value.cpuUsagePercent ?? 0) >= 70) warningReasons.push('CPU 负载偏高');
+  if ((hardware.value.cpuTemperatureC ?? 0) >= 65) warningReasons.push('CPU 温度偏高');
+  if ((hardware.value.memoryUsagePercent ?? 0) >= 75) warningReasons.push('内存使用偏高');
+  if ((maximumDiskUsagePercent.value ?? 0) >= 75) warningReasons.push('磁盘余量下降');
+
+  if (dangerReasons.length) {
+    return {
+      tone: 'danger',
+      title: '发现需要立即处理的资源压力',
+      description: dangerReasons.join('、')
+    };
+  }
+
+  if (warningReasons.length) {
+    return {
+      tone: 'warning',
+      title: '系统运行中，部分指标需要关注',
+      description: warningReasons.join('、')
+    };
+  }
+
+  return {
+    tone: 'success',
+    title: '系统运行平稳',
+    description: '当前关键资源均处于建议范围内。'
+  };
+});
+
 onMounted(() => {
   // 进入首页时先调用后端 /api/overview，保证首屏有完整概览数据
   void loadOverview();
+  void loadHistory();
   // 再连接后端 /hubs/monitor，后续通过 SignalR 增量刷新硬件实时数据
   void startRealtimeConnection().catch(() => {
     errorMessage.value = 'SignalR 实时通道连接失败，将继续保留当前页面数据。';
@@ -247,6 +379,7 @@ onMounted(() => {
   unsubscribeHardware = subscribeHardwareRealtime((hardware) => {
     errorMessage.value = '';
     updateHardwareState(mergeHardwarePayload(hardware, hardwareState()));
+    appendHistorySample(hardware);
   });
 });
 
@@ -267,6 +400,38 @@ async function loadOverview() {
   } finally {
     isLoading.value = false;
   }
+}
+
+async function loadHistory() {
+  historyErrorMessage.value = '';
+  const to = new Date();
+  const from = new Date(to.getTime() - 60 * 60 * 1000);
+
+  try {
+    history.value = await getHardwareHistory(from.toISOString(), to.toISOString());
+  } catch {
+    historyErrorMessage.value = '历史趋势暂时不可用，实时指标仍会继续更新。';
+  }
+}
+
+async function refreshDashboard() {
+  await Promise.allSettled([loadOverview(), loadHistory()]);
+}
+
+function appendHistorySample(sample: HardwareRealtimeDto) {
+  const lastSample = history.value.at(-1);
+  if (lastSample?.sampleTime === sample.sampleTime) return;
+  history.value.push(sample);
+  if (history.value.length > 240) {
+    history.value.splice(0, history.value.length - 240);
+  }
+}
+
+function toTrendPoints(selector: (sample: HardwareRealtimeDto) => number | null) {
+  return history.value.map((sample) => ({
+    time: sample.sampleTime,
+    value: selector(sample)
+  }));
 }
 
 function formatPercent(value?: number | null) {

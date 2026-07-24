@@ -15,6 +15,7 @@ namespace Monitor.Network.Services;
 public sealed class TrafficAggregator : INetworkAggregator, IDisposable
 {
     private static readonly TimeSpan MinimumRealtimeRetention = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan RealtimeHistoryRetention = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan RealtimeSlotDuration = TimeSpan.FromMilliseconds(250);
 
     private readonly object _syncRoot = new();
@@ -22,6 +23,8 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
     private readonly Dictionary<BucketKey, BucketAccumulator> _activeBuckets = new();
     // 已完成时间窗的聚合桶。Repository 成功保存后才会从这里确认出队。
     private readonly Queue<TrafficBucket> _pendingBuckets = new();
+    // 复用既有实时刷新节奏，仅在内存保留最近两分钟的展示快照；不触发额外采集或数据库写入。
+    private readonly Queue<NetworkRealtimeSnapshot> _realtimeHistory = new();
     private readonly INetworkCollector _networkCollector;
     private readonly IAppRegistry _appRegistry;
     private readonly IAddressClassifier _addressClassifier;
@@ -38,6 +41,10 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
     private long _enqueuedSequence;
     private long _processedSequence;
     private bool _disposed;
+
+    public long PendingEventCount => Math.Max(
+        0,
+        Interlocked.Read(ref _enqueuedSequence) - Interlocked.Read(ref _processedSequence));
 
     public TrafficAggregator(
         INetworkCollector networkCollector,
@@ -98,6 +105,15 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         lock (_syncRoot)
         {
             return _latestRealtimeSnapshot;
+        }
+    }
+
+    public IReadOnlyList<NetworkRealtimeSnapshot> GetRecentRealtimeSnapshots()
+    {
+        lock (_syncRoot)
+        {
+            PruneRealtimeHistoryCore(DateTimeOffset.UtcNow);
+            return _realtimeHistory.ToArray();
         }
     }
 
@@ -355,7 +371,8 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
 
     private RealtimeView BuildRealtimeViewCore(DateTimeOffset referenceTime)
     {
-        var intervalSeconds = Math.Max(MonitorSettings.NetworkRealtimeIntervalMs / 1000d, 0.1d);
+        var settings = Volatile.Read(ref _settingsSnapshot);
+        var intervalSeconds = Math.Max(settings.NetworkRealtimeIntervalMs / 1000d, 0.1d);
         if (_realtimeSlots.Length == 0)
         {
             return new RealtimeView(0, 0, 0, 0, 0, 0);
@@ -412,8 +429,19 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         };
 
         _latestRealtimeSnapshot = snapshot;
+        _realtimeHistory.Enqueue(snapshot);
+        PruneRealtimeHistoryCore(sampleTime);
 
         return snapshot;
+    }
+
+    private void PruneRealtimeHistoryCore(DateTimeOffset referenceTime)
+    {
+        var cutoff = referenceTime.Subtract(RealtimeHistoryRetention);
+        while (_realtimeHistory.TryPeek(out var oldest) && oldest.SampleTime < cutoff)
+        {
+            _realtimeHistory.Dequeue();
+        }
     }
 
     private void EnsureRealtimeSlotsCapacityCore()
@@ -456,7 +484,7 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
     {
         // 保留窗口不能只看前端刷新间隔。聚合粒度变大时，需要更长的槽位历史来平滑跨 bucket 的实时读数。
         var settings = Volatile.Read(ref _settingsSnapshot);
-        var realtimeWindow = TimeSpan.FromMilliseconds(MonitorSettings.NetworkRealtimeIntervalMs);
+        var realtimeWindow = TimeSpan.FromMilliseconds(settings.NetworkRealtimeIntervalMs);
         var aggregateWindow = TimeSpan.FromSeconds(settings.AggregateIntervalSeconds * 2d);
         return new[]
         {
@@ -478,11 +506,15 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         return new DateTimeOffset(alignedTicks, TimeSpan.Zero);
     }
 
-    private sealed record AggregationSettingsSnapshot(int AggregateIntervalSeconds)
+    private sealed record AggregationSettingsSnapshot(
+        int AggregateIntervalSeconds,
+        int NetworkRealtimeIntervalMs)
     {
         public static AggregationSettingsSnapshot From(MonitorSettings settings)
         {
-            return new AggregationSettingsSnapshot(settings.AggregateIntervalSeconds);
+            return new AggregationSettingsSnapshot(
+                settings.AggregateIntervalSeconds,
+                settings.NetworkRealtimeIntervalMs);
         }
     }
 

@@ -55,6 +55,7 @@ public static class SettingsEndpoints
         {
             HttpPort = request.HttpPort,
             HardwareSampleIntervalMs = request.HardwareSampleIntervalMs,
+            NetworkRealtimeIntervalMs = request.NetworkRealtimeIntervalMs,
             AggregateIntervalSeconds = request.AggregateIntervalSeconds,
             HistoryRetentionDays = request.HistoryRetentionDays,
             TopNDefault = request.TopNDefault,
@@ -87,6 +88,7 @@ public static class SettingsEndpoints
         {
             HttpPort = settings.HttpPort,
             HardwareSampleIntervalMs = settings.HardwareSampleIntervalMs,
+            NetworkRealtimeIntervalMs = settings.NetworkRealtimeIntervalMs,
             AggregateIntervalSeconds = settings.AggregateIntervalSeconds,
             HistoryRetentionDays = settings.HistoryRetentionDays,
             TopNDefault = settings.TopNDefault

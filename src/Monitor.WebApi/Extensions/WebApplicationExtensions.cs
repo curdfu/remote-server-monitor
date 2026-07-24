@@ -29,6 +29,7 @@ public static class WebApplicationExtensions
             INetworkCollectorDiagnostics networkCollectorDiagnostics,
             IMonitorSettingsProvider settings) =>
         {
+            const long networkAggregationBacklogThreshold = 100_000;
             var utcNow = DateTimeOffset.UtcNow;
             var hardware = hardwareSnapshotBuffer.GetLatest();
             var network = networkAggregator.GetLatestRealtimeSnapshot();
@@ -43,7 +44,7 @@ public static class WebApplicationExtensions
                 : (utcNow - network.SampleTime).TotalSeconds;
 
             var hardwareThresholdSeconds = Math.Max(currentSettings.HardwareSampleIntervalMs / 1000d * 3d, 5d);
-            var networkThresholdSeconds = Math.Max(MonitorSettings.NetworkRealtimeIntervalMs / 1000d * 3d, 5d);
+            var networkThresholdSeconds = Math.Max(currentSettings.NetworkRealtimeIntervalMs / 1000d * 3d, 5d);
             var sessionObservedEvents = collectorDiagnostics.PublishedEvents + collectorDiagnostics.LostEvents;
             var sessionLossRate = sessionObservedEvents > 0
                 ? collectorDiagnostics.LostEvents * 100d / sessionObservedEvents
@@ -57,7 +58,8 @@ public static class WebApplicationExtensions
             var networkHealthy = networkCollector.IsRunning &&
                                  networkAgeSeconds.HasValue &&
                                  networkAgeSeconds.Value <= networkThresholdSeconds &&
-                                 collectorDiagnostics.LostEvents == 0;
+                                 collectorDiagnostics.LostEvents == 0 &&
+                                 networkAggregator.PendingEventCount < networkAggregationBacklogThreshold;
 
             return Results.Ok(new
             {
@@ -77,6 +79,11 @@ public static class WebApplicationExtensions
                     sampleAgeSeconds = networkAgeSeconds,
                     thresholdSeconds = networkThresholdSeconds,
                     isHealthy = networkHealthy,
+                    aggregation = new
+                    {
+                        pendingEventCount = networkAggregator.PendingEventCount,
+                        backlogThreshold = networkAggregationBacklogThreshold
+                    },
                     etw = new
                     {
                         collectorDiagnostics.SessionName,

@@ -26,10 +26,9 @@ public sealed class CleanupHostedService(
         while (!stoppingToken.IsCancellationRequested)
         {
             var interval = TimeSpan.FromHours(Math.Max(1, settings.Current.HistoryRetentionDays > 0 ? 24 : 1));
-            var settingsChanged = await WaitForIntervalOrSettingsChangeAsync(interval, stoppingToken);
-            if (settingsChanged)
+            var cleanupRequired = await WaitForScheduledCleanupOrRetentionReductionAsync(interval, stoppingToken);
+            if (!cleanupRequired)
             {
-                await RunCleanupAsync(stoppingToken);
                 continue;
             }
 
@@ -37,20 +36,38 @@ public sealed class CleanupHostedService(
         }
     }
 
-    private async Task<bool> WaitForIntervalOrSettingsChangeAsync(TimeSpan interval, CancellationToken cancellationToken)
+    private async Task<bool> WaitForScheduledCleanupOrRetentionReductionAsync(
+        TimeSpan interval,
+        CancellationToken cancellationToken)
     {
-        var settingsChangedSource = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = settings.RegisterChangeCallback(_ => settingsChangedSource.TrySetResult());
+        var observedRetentionDays = settings.Current.HistoryRetentionDays;
+        var retentionChangedSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = settings.RegisterChangeCallback(updated =>
+        {
+            if (updated.HistoryRetentionDays != observedRetentionDays)
+            {
+                retentionChangedSource.TrySetResult(updated.HistoryRetentionDays);
+            }
+        });
+
+        // 覆盖读取基线和注册回调之间的极小竞态窗口。
+        var currentRetentionDays = settings.Current.HistoryRetentionDays;
+        if (currentRetentionDays != observedRetentionDays)
+        {
+            retentionChangedSource.TrySetResult(currentRetentionDays);
+        }
+
         var delayTask = Task.Delay(interval, cancellationToken);
-        var completedTask = await Task.WhenAny(delayTask, settingsChangedSource.Task);
+        var completedTask = await Task.WhenAny(delayTask, retentionChangedSource.Task);
 
         if (completedTask == delayTask)
         {
             await delayTask;
-            return false;
+            return true;
         }
 
-        return true;
+        var updatedRetentionDays = await retentionChangedSource.Task;
+        return updatedRetentionDays > 0 && updatedRetentionDays < observedRetentionDays;
     }
 
     private async Task RunCleanupAsync(CancellationToken cancellationToken)

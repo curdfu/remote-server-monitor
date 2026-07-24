@@ -9,6 +9,8 @@ public static class LoggingBootstrapper
     {
         "Monitor.Storage.Services.DatabaseInitializer",
         "Monitor.Storage.Services.NetworkTrafficRollupHostedService",
+        "Monitor.Storage.Services.RetentionService",
+        "Monitor.Service.HostedServices.CleanupHostedService",
         "Monitor.Hardware.Implementations.LibreHardwareCollector",
         "Monitor.Network.Collectors.EtwNetworkCollector",
         "Monitor.Storage.Repositories.NetworkTrafficRepository",

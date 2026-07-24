@@ -14,7 +14,8 @@ public sealed class SqliteDbConnectionFactory : IDbConnectionFactory
             DataSource = DatabasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Pooling = true,
-            ForeignKeys = true
+            ForeignKeys = true,
+            DefaultTimeout = 2
         }.ToString();
     }
 

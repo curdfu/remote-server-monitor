@@ -1,22 +1,19 @@
 ﻿import type { RouteRecordRaw } from 'vue-router';
-import DashboardView from '../views/DashboardView.vue';
-import NetworkView from '../views/NetworkView.vue';
-import SettingsView from '../views/SettingsView.vue';
 
 export const routes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'dashboard',
-    component: DashboardView
+    component: () => import('../views/DashboardView.vue')
   },
   {
     path: '/network',
     name: 'network',
-    component: NetworkView
+    component: () => import('../views/NetworkView.vue')
   },
   {
     path: '/settings',
     name: 'settings',
-    component: SettingsView
+    component: () => import('../views/SettingsView.vue')
   }
 ];

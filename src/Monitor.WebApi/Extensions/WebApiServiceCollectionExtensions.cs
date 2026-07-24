@@ -21,6 +21,7 @@ public static class WebApiServiceCollectionExtensions
 
         services.AddSignalR();
         services.AddEndpointsApiExplorer();
+        services.AddSingleton<DiskUsageSnapshotCache>();
         services.AddSingleton<MonitorRealtimeBroadcaster>();
         services.AddHostedService<MonitorRealtimePushHostedService>();
         return services;

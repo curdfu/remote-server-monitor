@@ -1,5 +1,6 @@
 <template>
   <div class="layout">
+    <a class="skip-link" href="#main-content">跳转到主要内容</a>
     <aside class="sidebar">
       <div class="sidebar-brand">
         <div class="sidebar-brand-copy">
@@ -128,29 +129,71 @@
         </div>
 
         <div class="sidebar-nav-meta">
-          <div class="sidebar-mini-card">
-            <span class="sidebar-meta-label">
-              <AppIcon name="status" :size="12" />
-              <span>实时通道</span>
+          <div class="sidebar-mini-card sidebar-realtime-card" :class="`is-${connectionState}`">
+            <div class="sidebar-realtime-main">
+              <span class="sidebar-realtime-icon" aria-hidden="true">
+                <AppIcon name="status" :size="17" />
+                <span class="sidebar-realtime-indicator" />
+              </span>
+              <span class="sidebar-realtime-copy">
+                <span class="sidebar-realtime-label">实时通道</span>
+                <strong aria-live="polite">{{ connectionStatusText }}</strong>
+              </span>
+            </div>
+            <span class="sidebar-realtime-description">
+              {{ connectionStatusCompactDescription }}
             </span>
-            <small :style="{ marginLeft: '18px' }">{{ connectionStatusText }}</small>
           </div>
 
-          <label class="sidebar-mini-card theme-field">
+          <div class="sidebar-mini-card theme-field">
             <span class="sidebar-meta-label">
               <AppIcon name="palette" :size="12" />
               <span>界面主题</span>
             </span>
-            <select v-model="themePreference" class="theme-select">
-              <option value="system">跟随系统</option>
-              <option value="light">亮色</option>
-              <option value="dark">暗色</option>
-            </select>
-          </label>
+            <div class="sidebar-theme-control">
+              <button
+                ref="desktopThemeButtonRef"
+                type="button"
+                class="sidebar-theme-trigger"
+                :aria-expanded="showDesktopThemeMenu"
+                aria-haspopup="menu"
+                :aria-label="`界面主题，当前${themePreferenceText}`"
+                @click="toggleDesktopThemeMenu"
+              >
+                <span>{{ themePreferenceText }}</span>
+              </button>
+
+              <div
+                v-if="showDesktopThemeMenu"
+                ref="desktopThemeMenuRef"
+                class="sidebar-theme-menu"
+                role="menu"
+                aria-label="界面主题"
+              >
+                <button
+                  v-for="option in themeOptions"
+                  :key="option.value"
+                  type="button"
+                  class="sidebar-theme-option"
+                  :class="{ 'is-active': themePreference === option.value }"
+                  role="menuitemradio"
+                  :aria-checked="themePreference === option.value"
+                  @click="setThemePreference(option.value)"
+                >
+                  <span class="sidebar-theme-option-swatch" :data-theme-option="option.value" aria-hidden="true"></span>
+                  <span class="sidebar-theme-option-copy">
+                    <strong>{{ option.label }}</strong>
+                    <small>{{ option.description }}</small>
+                  </span>
+                  <span v-if="themePreference === option.value" class="sidebar-theme-option-check" aria-hidden="true">✓</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </nav>
     </aside>
-    <main class="content">
+    <main id="main-content" class="content" tabindex="-1">
       <RouterView />
     </main>
   </div>
@@ -167,15 +210,28 @@ import {
 
 type ThemePreference = 'system' | 'light' | 'dark';
 
+const themeOptions: ReadonlyArray<{
+  value: ThemePreference;
+  label: string;
+  description: string;
+}> = [
+  { value: 'system', label: '跟随系统', description: '自动匹配设备设置' },
+  { value: 'light', label: '亮色', description: '明亮清晰，适合白天' },
+  { value: 'dark', label: '暗色', description: '降低亮度，适合夜间' }
+];
+
 const themeStorageKey = 'monitor.frontend.theme';
 const connectionState = ref<RealtimeConnectionState>('disconnected');
 const themePreference = ref<ThemePreference>('system');
 const showRealtimePanel = ref(false);
 const showThemeMenu = ref(false);
+const showDesktopThemeMenu = ref(false);
 const realtimeButtonRef = ref<HTMLElement | null>(null);
 const realtimePanelRef = ref<HTMLElement | null>(null);
 const themeButtonRef = ref<HTMLElement | null>(null);
 const themeMenuRef = ref<HTMLElement | null>(null);
+const desktopThemeButtonRef = ref<HTMLElement | null>(null);
+const desktopThemeMenuRef = ref<HTMLElement | null>(null);
 let unsubscribeConnectionState: (() => void) | null = null;
 
 onMounted(() => {
@@ -232,6 +288,19 @@ const connectionStatusDescription = computed(() => {
   }
 });
 
+const connectionStatusCompactDescription = computed(() => {
+  switch (connectionState.value) {
+    case 'connected':
+      return '实时数据正在持续推送';
+    case 'connecting':
+      return '正在建立实时连接';
+    case 'reconnecting':
+      return '连接中断，正在自动重试';
+    default:
+      return '实时推送暂不可用';
+  }
+});
+
 const themePreferenceText = computed(() => {
   switch (themePreference.value) {
     case 'light':
@@ -279,6 +348,7 @@ function toggleRealtimePanel() {
   showRealtimePanel.value = !showRealtimePanel.value;
   if (showRealtimePanel.value) {
     showThemeMenu.value = false;
+    showDesktopThemeMenu.value = false;
   }
 }
 
@@ -286,17 +356,28 @@ function toggleThemeMenu() {
   showThemeMenu.value = !showThemeMenu.value;
   if (showThemeMenu.value) {
     showRealtimePanel.value = false;
+    showDesktopThemeMenu.value = false;
   }
 }
 
-function closeMobileOverlays() {
+function toggleDesktopThemeMenu() {
+  showDesktopThemeMenu.value = !showDesktopThemeMenu.value;
+  if (showDesktopThemeMenu.value) {
+    showRealtimePanel.value = false;
+    showThemeMenu.value = false;
+  }
+}
+
+function closeUtilityOverlays() {
   showRealtimePanel.value = false;
   showThemeMenu.value = false;
+  showDesktopThemeMenu.value = false;
 }
 
 function setThemePreference(value: ThemePreference) {
   themePreference.value = value;
   showThemeMenu.value = false;
+  showDesktopThemeMenu.value = false;
 }
 
 function retryRealtimeConnection() {
@@ -315,17 +396,19 @@ function handleDocumentPointerDown(event: PointerEvent) {
     containsTarget(realtimeButtonRef.value, target) ||
     containsTarget(realtimePanelRef.value, target) ||
     containsTarget(themeButtonRef.value, target) ||
-    containsTarget(themeMenuRef.value, target)
+    containsTarget(themeMenuRef.value, target) ||
+    containsTarget(desktopThemeButtonRef.value, target) ||
+    containsTarget(desktopThemeMenuRef.value, target)
   ) {
     return;
   }
 
-  closeMobileOverlays();
+  closeUtilityOverlays();
 }
 
 function handleDocumentKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
-    closeMobileOverlays();
+    closeUtilityOverlays();
   }
 }
 

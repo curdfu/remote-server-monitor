@@ -303,9 +303,8 @@ button:disabled {
   color: var(--text-soft);
   font-size: 12px;
   line-height: 1.45;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .sidebar-nav {

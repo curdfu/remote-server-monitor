@@ -68,7 +68,7 @@ public sealed class MonitorRealtimePushHostedService(
         // 最小 500ms 防止误配置导致广播过于频繁；取较短周期保证硬件或网络任一路数据更新都能及时推送。
         var intervalMs = Math.Max(
             500,
-            Math.Min(settings.HardwareSampleIntervalMs, MonitorSettings.NetworkRealtimeIntervalMs));
+            Math.Min(settings.HardwareSampleIntervalMs, settings.NetworkRealtimeIntervalMs));
         return TimeSpan.FromMilliseconds(intervalMs);
     }
 }

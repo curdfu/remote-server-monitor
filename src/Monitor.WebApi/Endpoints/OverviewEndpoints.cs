@@ -1,6 +1,7 @@
-﻿using Monitor.Contracts.Dtos;
+using Monitor.Contracts.Dtos;
 using Monitor.Hardware.Abstractions;
 using Monitor.Network.Abstractions;
+using Monitor.WebApi.Services;
 
 namespace Monitor.WebApi.Endpoints;
 
@@ -10,7 +11,7 @@ public static class OverviewEndpoints
     {
         app.MapGet("/api/overview", (
             IHardwareSnapshotBuffer hardwareSnapshotBuffer,
-            IDiskUsageProvider diskUsageProvider,
+            DiskUsageSnapshotCache diskUsageSnapshotCache,
             INetworkAggregator networkAggregator) =>
         {
             var hardware = hardwareSnapshotBuffer.GetLatest();
@@ -29,11 +30,10 @@ public static class OverviewEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            var diskUsedBytes = diskUsageProvider.GetCurrentUsedBytesByDiskNumber(
+            var diskUsageSnapshot = diskUsageSnapshotCache.GetSnapshot(
                 hardware.Disk.Drives
                     .Where(drive => drive.DiskNumber.HasValue)
                     .Select(drive => drive.DiskNumber!.Value));
-            var diskSpaces = diskUsageProvider.GetCurrentDiskSpaces();
 
             return Results.Ok(new RealtimeOverviewDto
             {
@@ -54,13 +54,15 @@ public static class OverviewEndpoints
                         Name = drive.Name,
                         SizeBytes = drive.SizeBytes,
                         UsedBytes = drive.DiskNumber.HasValue &&
-                                    diskUsedBytes.TryGetValue(drive.DiskNumber.Value, out var usedBytes)
+                                    diskUsageSnapshot.UsedBytesByDiskNumber.TryGetValue(
+                                        drive.DiskNumber.Value,
+                                        out var usedBytes)
                             ? usedBytes
                             : null,
                         TemperatureC = drive.TemperatureC,
                         TemperatureSource = drive.TemperatureSource
                     }).ToArray(),
-                    DiskSpaces = diskSpaces.Select(space => new DiskSpaceDto
+                    DiskSpaces = diskUsageSnapshot.DiskSpaces.Select(space => new DiskSpaceDto
                     {
                         Name = space.Name,
                         TotalBytes = space.TotalBytes,

@@ -2,6 +2,8 @@
 using Monitor.Hardware.Abstractions;
 using Monitor.Network.Abstractions;
 using Monitor.Storage.Repositories;
+using Monitor.Storage.Services;
+using Microsoft.Data.Sqlite;
 
 namespace Monitor.Service.HostedServices;
 
@@ -112,8 +114,21 @@ public sealed class CollectorHostedService(
                 return;
             }
 
-            await repository.SaveBatchAsync(batch, cancellationToken);
-            logger.LogDebug("Persisted {Count} hardware snapshots in batch.", batch.Count);
+            try
+            {
+                await repository.SaveBatchAsync(batch, cancellationToken);
+                logger.LogDebug("Persisted {Count} hardware snapshots in batch.", batch.Count);
+            }
+            catch (SqliteException exception) when (SqliteBusyRetry.IsBusy(exception))
+            {
+                snapshotBuffer.RequeuePendingBatch(batch);
+                logger.LogWarning(
+                    exception,
+                    "SQLite remained busy after retries. Requeued {Count} hardware snapshots; PendingCount={PendingCount}.",
+                    batch.Count,
+                    snapshotBuffer.PendingCount);
+                return;
+            }
         }
     }
 

@@ -1,45 +1,55 @@
-﻿using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.SignalR;
 using Monitor.Contracts.Dtos;
 using Monitor.Hardware.Abstractions;
+using Monitor.Hardware.Models;
+using Monitor.Network.Abstractions;
+using Monitor.Network.Models;
 using Monitor.WebApi.Hubs;
 
 namespace Monitor.WebApi.Services;
 
-// Broadcaster 把内存中的最新硬件采样转换为前端实时 DTO，并通过 SignalR 推送给所有客户端。
-// 它不主动采样硬件，只消费 CollectorHostedService 已写入 HardwareSnapshotBuffer 的最新快照。
+// 广播器只消费采集服务已经写入内存的最新快照，不触发额外硬件或网络采样。
 public sealed class MonitorRealtimeBroadcaster(
     IHardwareSnapshotBuffer hardwareSnapshotBuffer,
-    IDiskUsageProvider diskUsageProvider,
+    DiskUsageSnapshotCache diskUsageSnapshotCache,
+    INetworkAggregator networkAggregator,
     IHubContext<MonitorHub> hubContext,
     ILogger<MonitorRealtimeBroadcaster> logger)
 {
     private readonly object _syncRoot = new();
-    // 用采样时间去重，避免推送周期比硬件采样周期短时重复发送同一份数据。
-    private DateTimeOffset _lastBroadcastSampleTime = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastHardwareSampleTime = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastNetworkSampleTime = DateTimeOffset.MinValue;
 
     public async Task BroadcastOnceAsync(CancellationToken cancellationToken = default)
     {
         var hardware = hardwareSnapshotBuffer.GetLatest();
-        if (hardware is null)
+        var network = networkAggregator.GetLatestRealtimeSnapshot();
+        var broadcastTasks = new List<Task>(2);
+
+        if (hardware is not null && ShouldBroadcastHardware(hardware.SampleTime))
         {
-            logger.LogDebug("Skip realtime broadcast because cached hardware payload is not ready yet.");
-            return;
+            broadcastTasks.Add(BroadcastHardwareAsync(hardware, cancellationToken));
         }
 
-        lock (_syncRoot)
+        if (network is not null && ShouldBroadcastNetwork(network.SampleTime))
         {
-            if (hardware.SampleTime <= _lastBroadcastSampleTime)
-            {
-                return;
-            }
+            broadcastTasks.Add(BroadcastNetworkAsync(network, cancellationToken));
         }
 
-        // 温度数据来自硬件快照，磁盘空间可能需要额外查询 Win32 API，因此在组装 DTO 时按磁盘号补齐。
-        var diskUsedBytes = diskUsageProvider.GetCurrentUsedBytesByDiskNumber(
+        if (broadcastTasks.Count > 0)
+        {
+            await Task.WhenAll(broadcastTasks);
+        }
+    }
+
+    private async Task BroadcastHardwareAsync(
+        HardwareSnapshot hardware,
+        CancellationToken cancellationToken)
+    {
+        var diskUsageSnapshot = diskUsageSnapshotCache.GetSnapshot(
             hardware.Disk.Drives
                 .Where(drive => drive.DiskNumber.HasValue)
                 .Select(drive => drive.DiskNumber!.Value));
-        var diskSpaces = diskUsageProvider.GetCurrentDiskSpaces();
 
         var hardwareDto = new HardwareRealtimeDto
         {
@@ -58,13 +68,15 @@ public sealed class MonitorRealtimeBroadcaster(
                 Name = drive.Name,
                 SizeBytes = drive.SizeBytes,
                 UsedBytes = drive.DiskNumber.HasValue &&
-                            diskUsedBytes.TryGetValue(drive.DiskNumber.Value, out var usedBytes)
+                            diskUsageSnapshot.UsedBytesByDiskNumber.TryGetValue(
+                                drive.DiskNumber.Value,
+                                out var usedBytes)
                     ? usedBytes
                     : null,
                 TemperatureC = drive.TemperatureC,
                 TemperatureSource = drive.TemperatureSource
             }).ToArray(),
-            DiskSpaces = diskSpaces.Select(space => new DiskSpaceDto
+            DiskSpaces = diskUsageSnapshot.DiskSpaces.Select(space => new DiskSpaceDto
             {
                 Name = space.Name,
                 TotalBytes = space.TotalBytes,
@@ -74,16 +86,62 @@ public sealed class MonitorRealtimeBroadcaster(
             UptimeSeconds = hardware.System.UptimeSeconds
         };
 
-        await hubContext.Clients.All.SendAsync(MonitorHubEvents.HardwareRealtime, hardwareDto, cancellationToken);
+        await hubContext.Clients
+            .Group(MonitorHub.HardwareGroup)
+            .SendAsync(MonitorHubEvents.HardwareRealtime, hardwareDto, cancellationToken);
 
-        // 只有发送成功后才更新游标；失败时下一轮仍可重试同一个采样点。
         lock (_syncRoot)
         {
-            _lastBroadcastSampleTime = hardware.SampleTime;
+            _lastHardwareSampleTime = hardware.SampleTime;
         }
 
         logger.LogDebug(
-            "Broadcasted hardware realtime hub payload. hardware={HardwareSampleTime}.",
-            hardwareDto.SampleTime);
+            "Broadcasted hardware realtime payload. sampleTime={SampleTime}.",
+            hardware.SampleTime);
+    }
+
+    private async Task BroadcastNetworkAsync(
+        NetworkRealtimeSnapshot network,
+        CancellationToken cancellationToken)
+    {
+        var networkDto = new NetworkRealtimeDto
+        {
+            SampleTime = network.SampleTime,
+            TotalUploadBytesPerSecond = network.TotalUploadBytesPerSecond,
+            TotalDownloadBytesPerSecond = network.TotalDownloadBytesPerSecond,
+            WanUploadBytesPerSecond = network.WanUploadBytesPerSecond,
+            WanDownloadBytesPerSecond = network.WanDownloadBytesPerSecond,
+            LanUploadBytesPerSecond = network.LanUploadBytesPerSecond,
+            LanDownloadBytesPerSecond = network.LanDownloadBytesPerSecond
+        };
+
+        await hubContext.Clients
+            .Group(MonitorHub.NetworkGroup)
+            .SendAsync(MonitorHubEvents.NetworkRealtime, networkDto, cancellationToken);
+
+        lock (_syncRoot)
+        {
+            _lastNetworkSampleTime = network.SampleTime;
+        }
+
+        logger.LogDebug(
+            "Broadcasted network realtime payload. sampleTime={SampleTime}.",
+            network.SampleTime);
+    }
+
+    private bool ShouldBroadcastHardware(DateTimeOffset sampleTime)
+    {
+        lock (_syncRoot)
+        {
+            return sampleTime > _lastHardwareSampleTime;
+        }
+    }
+
+    private bool ShouldBroadcastNetwork(DateTimeOffset sampleTime)
+    {
+        lock (_syncRoot)
+        {
+            return sampleTime > _lastNetworkSampleTime;
+        }
     }
 }

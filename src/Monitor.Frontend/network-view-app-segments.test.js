@@ -27,8 +27,8 @@ test('network view renders clickable app traffic segment details', async () => {
 
   assert.match(
     source,
-    /import \{ getNetworkAppSegments, getNetworkApps, getNetworkSummary \}/,
-    'expected NetworkView to import the app segment API client',
+    /import \{[^}]*getNetworkAppSegments[^}]*getNetworkDashboard[^}]*\}/,
+    'expected NetworkView to import the app segment and dashboard API clients',
   );
 
   assert.match(

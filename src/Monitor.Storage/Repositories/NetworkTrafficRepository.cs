@@ -5,6 +5,7 @@ using Monitor.Network.Abstractions;
 using Monitor.Network.Enums;
 using Monitor.Network.Models;
 using Monitor.Storage.Abstractions;
+using Monitor.Storage.Services;
 
 namespace Monitor.Storage.Repositories;
 
@@ -35,14 +36,23 @@ public sealed class NetworkTrafficRepository(
         Download
     }
 
-    public async Task SaveAsync(IReadOnlyList<TrafficBucket> buckets, CancellationToken cancellationToken = default)
+    public Task SaveAsync(IReadOnlyList<TrafficBucket> buckets, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(buckets);
         if (buckets.Count == 0)
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        return SqliteBusyRetry.ExecuteAsync(
+            token => SaveCoreAsync(buckets, token),
+            cancellationToken);
+    }
+
+    private async Task SaveCoreAsync(
+        IReadOnlyList<TrafficBucket> buckets,
+        CancellationToken cancellationToken)
+    {
         await using var connection = dbConnectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
         await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);
@@ -434,7 +444,9 @@ public sealed class NetworkTrafficRepository(
                 continue;
             }
 
-            await RollupWindowAsync(connection, windowStart, cancellationToken);
+            await SqliteBusyRetry.ExecuteAsync(
+                token => RollupWindowAsync(connection, windowStart, token),
+                cancellationToken);
             firstProcessedWindowStart ??= windowStart;
             lastProcessedWindowStart = windowStart;
             processed++;
@@ -452,16 +464,25 @@ public sealed class NetworkTrafficRepository(
         return processed;
     }
 
-    public async Task UpsertAppRegistryAsync(
+    public Task UpsertAppRegistryAsync(
         IReadOnlyCollection<AppRegistryEntry> entries,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entries);
         if (entries.Count == 0)
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        return SqliteBusyRetry.ExecuteAsync(
+            token => UpsertAppRegistryCoreAsync(entries, token),
+            cancellationToken);
+    }
+
+    private async Task UpsertAppRegistryCoreAsync(
+        IReadOnlyCollection<AppRegistryEntry> entries,
+        CancellationToken cancellationToken)
+    {
         await using var connection = dbConnectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
         await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);

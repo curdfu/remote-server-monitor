@@ -62,4 +62,14 @@ public sealed class HardwareSnapshotBuffer : IHardwareSnapshotBuffer
 
         return items;
     }
+
+    public void RequeuePendingBatch(IReadOnlyCollection<HardwareSnapshot> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+
+        foreach (var snapshot in snapshots)
+        {
+            _pendingSnapshots.Enqueue(snapshot);
+        }
+    }
 }

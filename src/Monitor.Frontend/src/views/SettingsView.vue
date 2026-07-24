@@ -4,7 +4,7 @@
       iconName="settings"
       kicker="设置"
       title="设置"
-      description="调整端口、硬件采样间隔、统计粒度和历史保留时间。"
+      description="调整端口、硬件与网络实时刷新间隔、统计粒度和历史保留时间。"
     >
       <template #actions>
         <div class="actions-row settings-actions page-tier-toolbar-inline">
@@ -19,6 +19,52 @@
         </div>
       </template>
     </PageHeader>
+
+    <section class="card settings-profile-panel">
+      <div class="section-header section-header-rich">
+        <div>
+          <span class="section-overline">RUNTIME PROFILE</span>
+          <h3>选择运行策略</h3>
+          <p class="section-subtitle">预设仅调整硬件与网络实时刷新频率；统计粒度、历史保留时间和排行数量保持不变。</p>
+        </div>
+        <span class="section-tag">{{ activeProfileLabel }}</span>
+      </div>
+
+      <div class="settings-profile-grid">
+        <button
+          v-for="profile in performanceProfiles"
+          :key="profile.id"
+          type="button"
+          class="settings-profile-button"
+          :class="{ 'settings-profile-button-active': activeProfileId === profile.id }"
+          :aria-pressed="activeProfileId === profile.id"
+          @click="applyPerformanceProfile(profile)"
+        >
+          <span class="settings-profile-kicker">{{ profile.kicker }}</span>
+          <strong>{{ profile.label }}</strong>
+          <small>{{ profile.description }}</small>
+        </button>
+      </div>
+
+      <div class="settings-impact-grid">
+        <div class="settings-impact-item">
+          <span>硬件样本</span>
+          <strong>{{ hardwareSamplesPerMinute }}/分钟</strong>
+        </div>
+        <div class="settings-impact-item">
+          <span>理论样本量</span>
+          <strong>{{ hardwareSamplesPerDay }}/天</strong>
+        </div>
+        <div class="settings-impact-item">
+          <span>网络实时刷新</span>
+          <strong>{{ networkRefreshesPerMinute }}/分钟</strong>
+        </div>
+        <div class="settings-impact-item">
+          <span>资源倾向</span>
+          <strong>{{ resourceImpactLabel }}</strong>
+        </div>
+      </div>
+    </section>
 
     <div class="grid page-tier-stats">
       <div class="card metric-card metric-card-compact settings-stat-card">
@@ -37,9 +83,9 @@
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
-          <span class="metric-label metric-label-inline"><AppIcon name="network" :size="14" />网络统计粒度</span>
+          <span class="metric-label metric-label-inline"><AppIcon name="network" :size="14" />网络实时刷新间隔</span>
         </div>
-        <strong class="metric-value">{{ form.aggregateIntervalSeconds }} s</strong>
+        <strong class="metric-value">{{ form.networkRealtimeIntervalMs }} ms</strong>
         <span class="metric-hint">保存后会实时生效</span>
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
@@ -51,12 +97,8 @@
       </div>
     </div>
 
-    <div v-if="errorMessage" class="card state-card error-state">
+    <div v-if="errorMessage" class="card state-card error-state" role="alert">
       {{ errorMessage }}
-    </div>
-
-    <div v-if="successMessage" class="card state-card success-state">
-      {{ successMessage }}
     </div>
 
     <section class="panel-grid">
@@ -98,6 +140,13 @@
             <input v-model.number="form.hardwareSampleIntervalMs" type="number" min="500" max="60000" />
             <small class="field-help">建议 1000ms 左右，兼顾刷新速度和资源占用。</small>
             <small v-if="validation.hardwareSampleIntervalMs" class="field-error">{{ validation.hardwareSampleIntervalMs }}</small>
+          </label>
+
+          <label class="field">
+            <span>网络实时刷新间隔 (ms)</span>
+            <input v-model.number="form.networkRealtimeIntervalMs" type="number" min="500" max="60000" />
+            <small class="field-help">控制实时速率聚合、持久化检查和推送节奏；ETW 原始事件仍会持续采集。</small>
+            <small v-if="validation.networkRealtimeIntervalMs" class="field-error">{{ validation.networkRealtimeIntervalMs }}</small>
           </label>
 
           <label class="field">
@@ -166,11 +215,27 @@
         </div>
       </aside>
     </section>
+
+    <Transition name="settings-toast">
+      <aside v-if="successMessage" class="settings-save-toast" role="status" aria-live="polite">
+        <span class="settings-save-toast-icon" aria-hidden="true">
+          <AppIcon name="status" :size="18" />
+        </span>
+        <div class="settings-save-toast-copy">
+          <strong>设置已保存</strong>
+          <p>{{ successMessage }}</p>
+        </div>
+        <button class="settings-save-toast-close" type="button" aria-label="关闭保存提示" @click="clearSuccessMessage">
+          <span aria-hidden="true">×</span>
+        </button>
+      </aside>
+    </Transition>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { onBeforeRouteLeave } from 'vue-router';
 import AppIcon from '../components/AppIcon.vue';
 import PageHeader from '../components/PageHeader.vue';
 import { getSettings, saveSettings } from '../services/api';
@@ -179,10 +244,57 @@ import type { AppSettingsDto } from '../types/monitor';
 const defaultForm: AppSettingsDto = {
   httpPort: 5188,
   hardwareSampleIntervalMs: 1000,
+  networkRealtimeIntervalMs: 1000,
   aggregateIntervalSeconds: 10,
   historyRetentionDays: 30,
   topNDefault: 10
 };
+
+type PerformanceProfileId = 'economy' | 'balanced' | 'realtime';
+
+interface PerformanceProfile {
+  id: PerformanceProfileId;
+  kicker: string;
+  label: string;
+  description: string;
+  values: Pick<
+    AppSettingsDto,
+    'hardwareSampleIntervalMs' | 'networkRealtimeIntervalMs'
+  >;
+}
+
+const performanceProfiles: readonly PerformanceProfile[] = [
+  {
+    id: 'economy',
+    kicker: 'LOW OVERHEAD',
+    label: '节能',
+    description: '适合长期后台运行，优先降低采样与聚合开销。',
+    values: {
+      hardwareSampleIntervalMs: 5000,
+      networkRealtimeIntervalMs: 5000
+    }
+  },
+  {
+    id: 'balanced',
+    kicker: 'RECOMMENDED',
+    label: '均衡',
+    description: '兼顾监控响应、图表细节和日常服务器开销。',
+    values: {
+      hardwareSampleIntervalMs: 2000,
+      networkRealtimeIntervalMs: 2000
+    }
+  },
+  {
+    id: 'realtime',
+    kicker: 'HIGH FIDELITY',
+    label: '实时',
+    description: '更快响应与更细网络粒度，适合短期排障观察。',
+    values: {
+      hardwareSampleIntervalMs: 1000,
+      networkRealtimeIntervalMs: 1000
+    }
+  }
+] as const;
 
 const form = reactive<AppSettingsDto>({ ...defaultForm });
 const original = ref<AppSettingsDto>({ ...defaultForm });
@@ -190,27 +302,32 @@ const isLoading = ref(false);
 const isSaving = ref(false);
 const errorMessage = ref('');
 const successMessage = ref('');
+let successMessageTimer: number | null = null;
 
 const validation = computed<Record<string, string>>(() => {
   const errors: Record<string, string> = {};
 
-  if (form.httpPort < 1 || form.httpPort > 65535) {
+  if (!isIntegerInRange(form.httpPort, 1, 65535)) {
     errors.httpPort = 'HTTP 端口必须在 1 ~ 65535 之间。';
   }
 
-  if (form.hardwareSampleIntervalMs < 500 || form.hardwareSampleIntervalMs > 60000) {
+  if (!isIntegerInRange(form.hardwareSampleIntervalMs, 500, 60000)) {
     errors.hardwareSampleIntervalMs = '硬件采样间隔必须在 500 ~ 60000 ms 之间。';
   }
 
-  if (form.aggregateIntervalSeconds < 1 || form.aggregateIntervalSeconds > 3600) {
+  if (!isIntegerInRange(form.networkRealtimeIntervalMs, 500, 60000)) {
+    errors.networkRealtimeIntervalMs = '网络实时刷新间隔必须在 500 ~ 60000 ms 之间。';
+  }
+
+  if (!isIntegerInRange(form.aggregateIntervalSeconds, 1, 3600)) {
     errors.aggregateIntervalSeconds = '默认统计粒度必须在 1 ~ 3600 秒之间。';
   }
 
-  if (form.historyRetentionDays < 1 || form.historyRetentionDays > 3650) {
+  if (!isIntegerInRange(form.historyRetentionDays, 1, 3650)) {
     errors.historyRetentionDays = '历史保留天数必须在 1 ~ 3650 天之间。';
   }
 
-  if (form.topNDefault < 1 || form.topNDefault > 100) {
+  if (!isIntegerInRange(form.topNDefault, 1, 100)) {
     errors.topNDefault = '默认排行数量必须在 1 ~ 100 之间。';
   }
 
@@ -223,11 +340,59 @@ const isDirty = computed(() =>
   JSON.stringify(form) !== JSON.stringify(original.value)
 );
 
-onMounted(() => {
-  void loadSettings();
+const activeProfileId = computed<PerformanceProfileId | null>(() =>
+  performanceProfiles.find((profile) =>
+    Object.entries(profile.values).every(
+      ([key, value]) => form[key as keyof AppSettingsDto] === value
+    )
+  )?.id ?? null
+);
+
+const activeProfileLabel = computed(() =>
+  performanceProfiles.find((profile) => profile.id === activeProfileId.value)?.label ?? '自定义'
+);
+
+const hardwareSamplesPerMinute = computed(() =>
+  formatCompactNumber(safeDivide(60_000, form.hardwareSampleIntervalMs))
+);
+
+const hardwareSamplesPerDay = computed(() =>
+  formatCompactNumber(safeDivide(86_400_000, form.hardwareSampleIntervalMs))
+);
+
+const networkRefreshesPerMinute = computed(() =>
+  formatCompactNumber(safeDivide(60_000, form.networkRealtimeIntervalMs))
+);
+
+const resourceImpactLabel = computed(() => {
+  if (form.hardwareSampleIntervalMs >= 5000 && form.networkRealtimeIntervalMs >= 5000) {
+    return '低占用';
+  }
+
+  if (form.hardwareSampleIntervalMs <= 1000 || form.networkRealtimeIntervalMs <= 1000) {
+    return '高实时';
+  }
+
+  return '均衡';
 });
 
-async function loadSettings() {
+onMounted(() => {
+  window.addEventListener('beforeunload', handleBeforeUnload);
+  void loadSettings(true);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload);
+  clearSuccessMessageTimer();
+});
+
+onBeforeRouteLeave(() => confirmDiscardChanges());
+
+async function loadSettings(skipDiscardConfirmation = false) {
+  if (!skipDiscardConfirmation && !confirmDiscardChanges()) {
+    return;
+  }
+
   isLoading.value = true;
   errorMessage.value = '';
   successMessage.value = '';
@@ -250,6 +415,12 @@ function resetForm() {
   successMessage.value = '';
 }
 
+function applyPerformanceProfile(profile: PerformanceProfile) {
+  Object.assign(form, profile.values);
+  errorMessage.value = '';
+  successMessage.value = '';
+}
+
 async function save() {
   if (!canSave.value) {
     errorMessage.value = '请先修正表单中的非法配置。';
@@ -266,11 +437,55 @@ async function save() {
     const saved = await saveSettings({ ...form });
     Object.assign(form, saved);
     original.value = { ...saved };
-    successMessage.value = '设置已保存。除访问端口外，其余配置已实时生效；端口变更仍需重启服务。';
+    showSuccessMessage('除访问端口外，其余配置已实时生效；端口变更仍需重启服务。');
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '保存设置失败。';
   } finally {
     isSaving.value = false;
   }
+}
+
+function showSuccessMessage(message: string) {
+  clearSuccessMessageTimer();
+  successMessage.value = message;
+  successMessageTimer = window.setTimeout(clearSuccessMessage, 6000);
+}
+
+function clearSuccessMessage() {
+  successMessage.value = '';
+  clearSuccessMessageTimer();
+}
+
+function clearSuccessMessageTimer() {
+  if (successMessageTimer == null) return;
+  window.clearTimeout(successMessageTimer);
+  successMessageTimer = null;
+}
+
+function confirmDiscardChanges() {
+  return !isDirty.value ||
+    isSaving.value ||
+    window.confirm('当前设置尚未保存，确定要放弃这些修改吗？');
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!isDirty.value || isSaving.value) {
+    return;
+  }
+
+  event.preventDefault();
+  event.returnValue = '';
+}
+
+function isIntegerInRange(value: number, minimum: number, maximum: number) {
+  return Number.isInteger(value) && value >= minimum && value <= maximum;
+}
+
+function safeDivide(dividend: number, divisor: number) {
+  return Number.isFinite(divisor) && divisor > 0 ? dividend / divisor : 0;
+}
+
+function formatCompactNumber(value: number) {
+  return Math.round(value).toLocaleString('zh-CN');
 }
 </script>
