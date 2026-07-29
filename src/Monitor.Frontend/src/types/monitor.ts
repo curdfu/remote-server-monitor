@@ -56,6 +56,13 @@ export interface AppTrafficSummaryDto {
   otherDownloadBytes: number;
 }
 
+export interface IgnoredNetworkAppDto {
+  appKey: string;
+  processName: string;
+  displayName?: string | null;
+  executablePath?: string | null;
+}
+
 export interface AppTrafficSegmentDto {
   from: string;
   to: string;
@@ -86,6 +93,7 @@ export interface NetworkPeriodSummaryDto {
 
 export interface NetworkDashboardDto {
   apps: AppTrafficSummaryDto[];
+  ignoredApps: IgnoredNetworkAppDto[];
   overview: NetworkPeriodSummaryDto;
   totals: NetworkPeriodSummaryDto;
   realtime?: NetworkRealtimeDto | null;

@@ -518,7 +518,7 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         }
     }
 
-    private sealed record QueuedTraceEvent(long Sequence, NetworkTraceEvent TraceEvent);
+    private readonly record struct QueuedTraceEvent(long Sequence, NetworkTraceEvent TraceEvent);
 
     private sealed class BucketAccumulator(BucketKey key)
     {
@@ -610,7 +610,7 @@ public sealed class TrafficAggregator : INetworkAggregator, IDisposable
         }
     }
 
-    private sealed record BucketKey(
+    private readonly record struct BucketKey(
         DateTimeOffset BucketStartTime,
         int BucketGranularitySeconds,
         string AppKey,

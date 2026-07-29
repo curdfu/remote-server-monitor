@@ -9,9 +9,57 @@ namespace Monitor.WebApi.Endpoints;
 public static class NetworkEndpoints
 {
     private const int MaxAppSegmentCount = 200;
+    private const int AppKeyLength = 64;
+    private const int MaxProcessNameLength = 260;
+    private const int MaxDisplayNameLength = 512;
+    private const int MaxExecutablePathLength = 4096;
 
     public static IEndpointRouteBuilder MapNetworkEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/network/ignored-apps", async (
+            IgnoredNetworkAppRepository ignoredNetworkAppRepository,
+            CancellationToken cancellationToken) =>
+        {
+            var ignoredApps = await ignoredNetworkAppRepository.GetAllAsync(cancellationToken);
+            return Results.Ok(ignoredApps);
+        });
+
+        app.MapPut("/api/network/ignored-apps", async (
+            IgnoredNetworkAppDto request,
+            IgnoredNetworkAppRepository ignoredNetworkAppRepository,
+            CancellationToken cancellationToken) =>
+        {
+            var errors = ValidateIgnoredApp(request);
+            if (errors.Count > 0)
+            {
+                return Results.ValidationProblem(errors);
+            }
+
+            var normalized = NormalizeIgnoredApp(request);
+            var ignoredApps = await ignoredNetworkAppRepository.UpsertAsync(normalized, cancellationToken);
+            return Results.Ok(ignoredApps);
+        });
+
+        app.MapDelete("/api/network/ignored-apps/{appKey}", async (
+            string appKey,
+            IgnoredNetworkAppRepository ignoredNetworkAppRepository,
+            CancellationToken cancellationToken) =>
+        {
+            var normalizedAppKey = appKey.Trim().ToUpperInvariant();
+            if (!IsValidAppKey(normalizedAppKey))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    [nameof(IgnoredNetworkAppDto.AppKey)] = ["AppKey must be a 64-character SHA-256 hexadecimal value."]
+                });
+            }
+
+            var ignoredApps = await ignoredNetworkAppRepository.RemoveAsync(
+                normalizedAppKey,
+                cancellationToken);
+            return Results.Ok(ignoredApps);
+        });
+
         app.MapGet("/api/network/realtime/history", (
             INetworkAggregator networkAggregator) =>
         {
@@ -40,6 +88,7 @@ public static class NetworkEndpoints
             string? scope,
             string? direction,
             NetworkTrafficRepository networkTrafficRepository,
+            IgnoredNetworkAppRepository ignoredNetworkAppRepository,
             INetworkAggregator networkAggregator,
             IMonitorSettingsProvider settings,
             CancellationToken cancellationToken) =>
@@ -50,7 +99,9 @@ public static class NetworkEndpoints
                 return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
             }
 
-            var limit = Math.Clamp(topN ?? settings.Current.TopNDefault, 1, 100);
+            var ignoredApps = await ignoredNetworkAppRepository.GetAllAsync(cancellationToken);
+            var requestedLimit = Math.Clamp(topN ?? settings.Current.TopNDefault, 1, 100);
+            var limit = Math.Clamp(requestedLimit + ignoredApps.Count, 1, 100);
             var scopeFilter = ParseScope(scope);
             var directionFilter = ParseDirection(direction);
 
@@ -82,6 +133,7 @@ public static class NetworkEndpoints
             return Results.Ok(new NetworkDashboardDto
             {
                 Apps = appsTask.Result.Select(ToSummaryDto).ToArray(),
+                IgnoredApps = [.. ignoredApps],
                 Overview = ToPeriodSummaryDto(overviewTask.Result),
                 Totals = ToPeriodSummaryDto(totalsTask.Result),
                 Realtime = realtime is null ? null : ToRealtimeDto(realtime)
@@ -184,6 +236,55 @@ public static class NetworkEndpoints
         });
 
         return app;
+    }
+
+    private static Dictionary<string, string[]> ValidateIgnoredApp(IgnoredNetworkAppDto request)
+    {
+        var errors = new Dictionary<string, string[]>();
+        if (!IsValidAppKey(request.AppKey?.Trim()))
+        {
+            errors[nameof(request.AppKey)] = ["AppKey must be a 64-character SHA-256 hexadecimal value."];
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ProcessName) ||
+            request.ProcessName.Trim().Length > MaxProcessNameLength)
+        {
+            errors[nameof(request.ProcessName)] = [$"ProcessName is required and must not exceed {MaxProcessNameLength} characters."];
+        }
+
+        if (request.DisplayName?.Trim().Length > MaxDisplayNameLength)
+        {
+            errors[nameof(request.DisplayName)] = [$"DisplayName must not exceed {MaxDisplayNameLength} characters."];
+        }
+
+        if (request.ExecutablePath?.Trim().Length > MaxExecutablePathLength)
+        {
+            errors[nameof(request.ExecutablePath)] = [$"ExecutablePath must not exceed {MaxExecutablePathLength} characters."];
+        }
+
+        return errors;
+    }
+
+    private static bool IsValidAppKey(string? appKey)
+    {
+        return appKey is { Length: AppKeyLength } &&
+               appKey.All(character => char.IsAsciiHexDigit(character));
+    }
+
+    private static IgnoredNetworkAppDto NormalizeIgnoredApp(IgnoredNetworkAppDto request)
+    {
+        return new IgnoredNetworkAppDto
+        {
+            AppKey = request.AppKey.Trim().ToUpperInvariant(),
+            ProcessName = request.ProcessName.Trim(),
+            DisplayName = NormalizeOptionalText(request.DisplayName),
+            ExecutablePath = NormalizeOptionalText(request.ExecutablePath)
+        };
+    }
+
+    private static string? NormalizeOptionalText(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     private static NetworkRealtimeDto ToRealtimeDto(NetworkRealtimeSnapshot snapshot)

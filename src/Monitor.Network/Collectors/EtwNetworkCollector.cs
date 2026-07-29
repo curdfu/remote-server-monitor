@@ -345,9 +345,9 @@ public sealed class EtwNetworkCollector(
             Direction = TrafficDirection.Outbound,
             ProtocolType = ProtocolType.Tcp,
             Bytes = data.size,
-            LocalAddress = data.saddr?.ToString(),
+            LocalAddress = data.saddr,
             LocalPort = data.sport,
-            RemoteAddress = data.daddr?.ToString(),
+            RemoteAddress = data.daddr,
             RemotePort = data.dport,
             IsIPv6 = isIpv6
         });
@@ -368,9 +368,9 @@ public sealed class EtwNetworkCollector(
             Direction = TrafficDirection.Inbound,
             ProtocolType = ProtocolType.Tcp,
             Bytes = data.size,
-            LocalAddress = data.saddr?.ToString(),
+            LocalAddress = data.saddr,
             LocalPort = data.sport,
-            RemoteAddress = data.daddr?.ToString(),
+            RemoteAddress = data.daddr,
             RemotePort = data.dport,
             IsIPv6 = isIpv6
         });
@@ -385,9 +385,9 @@ public sealed class EtwNetworkCollector(
             Direction = TrafficDirection.Outbound,
             ProtocolType = ProtocolType.Tcp,
             Bytes = data.size,
-            LocalAddress = data.saddr?.ToString(),
+            LocalAddress = data.saddr,
             LocalPort = data.sport,
-            RemoteAddress = data.daddr?.ToString(),
+            RemoteAddress = data.daddr,
             RemotePort = data.dport,
             IsIPv6 = true
         });
@@ -403,9 +403,9 @@ public sealed class EtwNetworkCollector(
             Direction = TrafficDirection.Inbound,
             ProtocolType = ProtocolType.Tcp,
             Bytes = data.size,
-            LocalAddress = data.saddr?.ToString(),
+            LocalAddress = data.saddr,
             LocalPort = data.sport,
-            RemoteAddress = data.daddr?.ToString(),
+            RemoteAddress = data.daddr,
             RemotePort = data.dport,
             IsIPv6 = true
         });
@@ -420,9 +420,9 @@ public sealed class EtwNetworkCollector(
             Direction = direction,
             ProtocolType = ProtocolType.Udp,
             Bytes = data.size,
-            LocalAddress = direction == TrafficDirection.Outbound ? data.saddr?.ToString() : data.daddr?.ToString(),
+            LocalAddress = direction == TrafficDirection.Outbound ? data.saddr : data.daddr,
             LocalPort = direction == TrafficDirection.Outbound ? data.sport : data.dport,
-            RemoteAddress = direction == TrafficDirection.Outbound ? data.daddr?.ToString() : data.saddr?.ToString(),
+            RemoteAddress = direction == TrafficDirection.Outbound ? data.daddr : data.saddr,
             RemotePort = direction == TrafficDirection.Outbound ? data.dport : data.sport,
             IsIPv6 = isIpv6
         });
@@ -437,9 +437,9 @@ public sealed class EtwNetworkCollector(
             Direction = direction,
             ProtocolType = ProtocolType.Udp,
             Bytes = data.size,
-            LocalAddress = direction == TrafficDirection.Outbound ? data.saddr?.ToString() : data.daddr?.ToString(),
+            LocalAddress = direction == TrafficDirection.Outbound ? data.saddr : data.daddr,
             LocalPort = direction == TrafficDirection.Outbound ? data.sport : data.dport,
-            RemoteAddress = direction == TrafficDirection.Outbound ? data.daddr?.ToString() : data.saddr?.ToString(),
+            RemoteAddress = direction == TrafficDirection.Outbound ? data.daddr : data.saddr,
             RemotePort = direction == TrafficDirection.Outbound ? data.dport : data.sport,
             IsIPv6 = true
         });

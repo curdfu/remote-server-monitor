@@ -17,6 +17,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<NetworkTrafficRepository>();
         services.AddHostedService<NetworkTrafficRollupHostedService>();
         services.AddSingleton<SettingsRepository>();
+        services.AddSingleton<IgnoredNetworkAppRepository>();
         services.AddSingleton<RetentionService>();
         return services;
     }

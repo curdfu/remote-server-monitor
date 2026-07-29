@@ -94,6 +94,15 @@ public sealed class DatabaseInitializer(
                             last_seen_at TEXT NOT NULL
                         );
 
+                        CREATE TABLE IF NOT EXISTS ignored_network_apps (
+                            app_key TEXT PRIMARY KEY,
+                            process_name TEXT NOT NULL,
+                            display_name TEXT,
+                            executable_path TEXT,
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL
+                        );
+
                         CREATE TABLE IF NOT EXISTS network_usage_agg (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             bucket_start_time TEXT NOT NULL,

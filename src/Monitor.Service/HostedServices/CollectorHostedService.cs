@@ -13,6 +13,7 @@ public sealed class CollectorHostedService(
     ILogger<CollectorHostedService> logger,
     IHardwareCollector hardwareCollector,
     IHardwareSnapshotBuffer hardwareSnapshotBuffer,
+    IHardwareMonitoringDemand hardwareMonitoringDemand,
     HardwareRepository hardwareRepository,
     INetworkCollector networkCollector,
     IMonitorSettingsProvider settings) : BackgroundService
@@ -25,6 +26,7 @@ public sealed class CollectorHostedService(
     {
         // 网络采集是事件驱动，必须先启动 ETW 会话；硬件采样随后立即执行一次，保证首屏有数据。
         await networkCollector.StartAsync(stoppingToken);
+        var handledHardwareActivationVersion = hardwareMonitoringDemand.ActivationVersion;
         await CollectSnapshotAsync(stoppingToken);
 
         var lastPersistedAt = DateTimeOffset.UtcNow;
@@ -32,9 +34,13 @@ public sealed class CollectorHostedService(
         while (!stoppingToken.IsCancellationRequested)
         {
             var interval = TimeSpan.FromMilliseconds(settings.Current.HardwareSampleIntervalMs);
-            // 采样间隔支持运行时修改；设置变化时不等旧 delay 结束，立即采一次并进入新周期。
-            var settingsChanged = await WaitForIntervalOrSettingsChangeAsync(interval, stoppingToken);
-            if (settingsChanged)
+            // 设置变化或首页首次订阅时不等待旧 delay 结束，立即采一次并进入新周期。
+            var wokeEarly = await WaitForIntervalSettingsOrHardwareDemandAsync(
+                interval,
+                handledHardwareActivationVersion,
+                stoppingToken);
+            handledHardwareActivationVersion = hardwareMonitoringDemand.ActivationVersion;
+            if (wokeEarly)
             {
                 await CollectSnapshotAsync(stoppingToken);
                 continue;
@@ -61,13 +67,23 @@ public sealed class CollectorHostedService(
         await base.StopAsync(cancellationToken);
     }
 
-    private async Task<bool> WaitForIntervalOrSettingsChangeAsync(TimeSpan interval, CancellationToken cancellationToken)
+    private async Task<bool> WaitForIntervalSettingsOrHardwareDemandAsync(
+        TimeSpan interval,
+        long observedHardwareActivationVersion,
+        CancellationToken cancellationToken)
     {
-        // 用 TaskCompletionSource 把配置变更回调并入等待逻辑，避免后台循环轮询配置版本。
+        // 用 TaskCompletionSource 把配置变更和硬件订阅激活并入等待逻辑，避免后台轮询。
         var settingsChangedSource = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var registration = settings.RegisterChangeCallback(_ => settingsChangedSource.TrySetResult());
-        var delayTask = Task.Delay(interval, cancellationToken);
-        var completedTask = await Task.WhenAny(delayTask, settingsChangedSource.Task);
+        using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var delayTask = Task.Delay(interval, waitCancellation.Token);
+        var hardwareActivatedTask = hardwareMonitoringDemand.WaitForActivationAsync(
+            observedHardwareActivationVersion,
+            waitCancellation.Token);
+        var completedTask = await Task.WhenAny(
+            delayTask,
+            settingsChangedSource.Task,
+            hardwareActivatedTask);
 
         if (completedTask == delayTask)
         {
@@ -75,6 +91,12 @@ public sealed class CollectorHostedService(
             return false;
         }
 
+        if (completedTask == hardwareActivatedTask)
+        {
+            await hardwareActivatedTask;
+        }
+
+        waitCancellation.Cancel();
         return true;
     }
 

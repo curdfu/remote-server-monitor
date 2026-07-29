@@ -3,6 +3,7 @@
   AppTrafficSegmentDto,
   AppTrafficSummaryDto,
   HardwareRealtimeDto,
+  IgnoredNetworkAppDto,
   NetworkDashboardDto,
   NetworkPeriodSummaryDto,
   NetworkRealtimeDto,
@@ -156,6 +157,23 @@ export function getNetworkDashboard(params?: {
 
 export function getNetworkRealtimeHistory() {
   return request<NetworkRealtimeDto[]>('/api/network/realtime/history');
+}
+
+export function getIgnoredNetworkApps() {
+  return request<IgnoredNetworkAppDto[]>('/api/network/ignored-apps');
+}
+
+export function ignoreNetworkApp(payload: IgnoredNetworkAppDto) {
+  return request<IgnoredNetworkAppDto[]>('/api/network/ignored-apps', {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function restoreNetworkApp(appKey: string) {
+  return request<IgnoredNetworkAppDto[]>(`/api/network/ignored-apps/${encodeURIComponent(appKey)}`, {
+    method: 'DELETE'
+  });
 }
 
 // 调用后端 /api/settings：读取设置页表单初始值

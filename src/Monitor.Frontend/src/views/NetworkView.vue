@@ -322,7 +322,19 @@
                 <p class="panel-subtitle">按选择的统计范围和方向排序显示应用流量排行。</p>
               </div>
             </div>
-            <span class="section-tag">{{ rankingDescription }}</span>
+            <div class="ranking-header-tags">
+              <button
+                type="button"
+                class="section-tag ranking-ignored-count"
+                :class="{ 'ranking-ignored-count-active': ignoredApps.length > 0 }"
+                :disabled="ignoredApps.length === 0"
+                @click="scrollToIgnoredApps"
+              >
+                <AppIcon name="eye-off" :size="13" />
+                已忽略 {{ ignoredApps.length }}
+              </button>
+              <span class="section-tag">{{ rankingDescription }}</span>
+            </div>
           </div>
 
           <div class="ranking-meta">
@@ -330,7 +342,7 @@
               <div class="metric-top">
                 <span class="metric-label metric-label-inline"><AppIcon name="apps" :size="14" />应用数量</span>
               </div>
-              <strong class="metric-value">{{ items.length }}</strong>
+              <strong class="metric-value">{{ topRanking.length }}</strong>
             </div>
             <div class="card metric-card metric-card-compact network-stat-card">
               <div class="metric-top">
@@ -350,6 +362,7 @@
             <span>应用路径</span>
             <span>上传 / 下载</span>
             <span>当前统计</span>
+            <span>操作</span>
           </div>
 
           <ol v-if="showRankingSkeleton" class="ranking-list ranking-list-skeleton" aria-hidden="true">
@@ -381,41 +394,121 @@
                 index < 3 ? [`ranking-item-top`, `ranking-item-top-${index + 1}`] : [],
                 { 'ranking-item-active': selectedApp?.appKey === item.appKey }
               ]"
-              role="button"
-              tabindex="0"
-              :aria-pressed="selectedApp?.appKey === item.appKey"
-              @click="selectApp(item)"
-              @keydown.enter.prevent="selectApp(item)"
-              @keydown.space.prevent="selectApp(item)"
             >
-              <div class="ranking-main">
-                <span class="ranking-index">{{ index + 1 }}</span>
-                <strong>{{ item.displayName || item.processName }}</strong>
-                <small class="muted">{{ item.executablePath || item.processName }}</small>
-              </div>
-              <div class="ranking-side">
-                <span class="ranking-value">{{ formatBytes(getRankingValue(item)) }}</span>
-                <div class="ranking-breakdown">
-                  <span class="ranking-flow">
-                    <AppIcon name="upload" :size="12" />
-                    {{ formatBytes(getScopedUploadBytes(item)) }}
-                  </span>
-                  <span class="ranking-flow">
-                    <AppIcon name="download" :size="12" />
-                    {{ formatBytes(getScopedDownloadBytes(item)) }}
-                  </span>
+              <button
+                type="button"
+                class="ranking-open-button"
+                :aria-label="`查看 ${item.displayName || item.processName} 的流量明细`"
+                :aria-pressed="selectedApp?.appKey === item.appKey"
+                @click="selectApp(item)"
+              >
+                <div class="ranking-main">
+                  <span class="ranking-index">{{ index + 1 }}</span>
+                  <strong>{{ item.displayName || item.processName }}</strong>
+                  <small class="muted">{{ item.executablePath || item.processName }}</small>
                 </div>
-                <div class="ranking-progress" aria-hidden="true">
-                  <div class="ranking-progress-bar" :style="{ width: `${getRankingPercent(item)}%` }"></div>
+                <div class="ranking-side">
+                  <span class="ranking-value">{{ formatBytes(getRankingValue(item)) }}</span>
+                  <div class="ranking-breakdown">
+                    <span class="ranking-flow">
+                      <AppIcon name="upload" :size="12" />
+                      {{ formatBytes(getScopedUploadBytes(item)) }}
+                    </span>
+                    <span class="ranking-flow">
+                      <AppIcon name="download" :size="12" />
+                      {{ formatBytes(getScopedDownloadBytes(item)) }}
+                    </span>
+                  </div>
+                  <div class="ranking-progress" aria-hidden="true">
+                    <div class="ranking-progress-bar" :style="{ width: `${getRankingPercent(item)}%` }"></div>
+                  </div>
                 </div>
-              </div>
+              </button>
+              <button
+                type="button"
+                class="ranking-ignore-button"
+                :aria-label="`忽略 ${item.displayName || item.processName}，不再参与排行`"
+                title="忽略此应用"
+                :disabled="isIgnoreMutationPending"
+                @click.stop="ignoreApp(item)"
+              >
+                <AppIcon name="eye-off" :size="17" />
+              </button>
             </li>
             <li v-if="!topRanking.length" class="muted">当前还没有可展示的排行数据。</li>
           </ol>
 
+          <section
+            v-if="ignoredApps.length"
+            ref="ignoredAppsPanel"
+            class="ranking-ignored-panel"
+            aria-labelledby="ranking-ignored-title"
+          >
+            <button
+              type="button"
+              class="ranking-ignored-heading"
+              :aria-expanded="isIgnoredAppsExpanded"
+              aria-controls="ranking-ignored-list"
+              @click="isIgnoredAppsExpanded = !isIgnoredAppsExpanded"
+            >
+              <span class="ranking-ignored-heading-main">
+                <span class="ranking-ignored-icon"><AppIcon name="eye-off" :size="16" /></span>
+                <span>
+                  <strong id="ranking-ignored-title">已忽略的应用</strong>
+                  <small>这些应用不会参与排行，流量统计原始数据保持不变。</small>
+                </span>
+              </span>
+              <span class="ranking-ignored-heading-action">
+                {{ isIgnoredAppsExpanded ? '收起' : '展开' }}
+                <span class="ranking-ignored-count-badge">{{ ignoredApps.length }}</span>
+              </span>
+            </button>
+
+            <ul v-show="isIgnoredAppsExpanded" id="ranking-ignored-list" class="ranking-ignored-list">
+              <li v-for="entry in ignoredAppRows" :key="entry.record.appKey" class="ranking-ignored-item">
+                <div class="ranking-ignored-app">
+                  <strong>{{ entry.record.displayName || entry.record.processName }}</strong>
+                  <small>{{ entry.record.executablePath || entry.record.processName }}</small>
+                </div>
+                <div v-if="entry.summary" class="ranking-ignored-traffic">
+                  <span>
+                    <AppIcon name="upload" :size="12" />
+                    {{ formatBytes(getScopedUploadBytes(entry.summary)) }}
+                  </span>
+                  <span>
+                    <AppIcon name="download" :size="12" />
+                    {{ formatBytes(getScopedDownloadBytes(entry.summary)) }}
+                  </span>
+                </div>
+                <span v-else class="ranking-ignored-unavailable">当前范围无排行数据</span>
+                <button
+                  type="button"
+                  class="ghost-button ranking-restore-button"
+                  :disabled="isIgnoreMutationPending"
+                  @click="restoreIgnoredApp(entry.record.appKey)"
+                >
+                  <AppIcon name="restore" :size="14" />
+                  恢复排行
+                </button>
+              </li>
+            </ul>
+          </section>
         </article>
       </div>
     </section>
+
+    <Teleport to="body">
+      <Transition name="ranking-ignore-toast">
+        <div v-if="recentlyIgnoredApp" class="ranking-ignore-toast" role="status" aria-live="polite">
+          <span class="ranking-ignore-toast-icon"><AppIcon name="eye-off" :size="17" /></span>
+          <span>
+            已忽略
+            <strong>{{ recentlyIgnoredApp.displayName || recentlyIgnoredApp.processName }}</strong>
+          </span>
+          <button type="button" :disabled="isIgnoreMutationPending" @click="undoLastIgnore">撤销</button>
+        </div>
+      </Transition>
+    </Teleport>
 
     <Teleport to="body">
       <div v-if="selectedApp" class="app-segments-overlay" @click.self="closeAppSegmentsPanel">
@@ -481,15 +574,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
 import MetricTrend from '../components/MetricTrend.vue';
 import PageHeader from '../components/PageHeader.vue';
-import { getNetworkAppSegments, getNetworkDashboard, getNetworkRealtimeHistory } from '../services/api';
+import {
+  getNetworkAppSegments,
+  getNetworkDashboard,
+  getNetworkRealtimeHistory,
+  ignoreNetworkApp,
+  restoreNetworkApp
+} from '../services/api';
 import { startRealtimeConnection, subscribeNetworkRealtime } from '../services/realtime';
 import type {
   AppTrafficSegmentDto,
   AppTrafficSummaryDto,
+  IgnoredNetworkAppDto,
   NetworkPeriodSummaryDto,
   NetworkRealtimeDto
 } from '../types/monitor';
@@ -505,14 +605,21 @@ const presetOptions = [
   { hours: 24 * 30, label: '最近 30 天' }
 ] as const;
 
+const ignoredAppsStorageKey = 'monitor.network.ignored-apps.v1';
+
 // 页面主数据：应用排行、汇总卡片、占比面板、加载状态
 const items = ref<AppTrafficSummaryDto[]>([]);
+const ignoredApps = ref<IgnoredNetworkAppDto[]>([]);
+const recentlyIgnoredApp = ref<IgnoredNetworkAppDto | null>(null);
+const isIgnoredAppsExpanded = ref(true);
+const ignoredAppsPanel = ref<HTMLElement | null>(null);
 const selectedApp = ref<AppTrafficSummaryDto | null>(null);
 const appSegments = ref<AppTrafficSegmentDto[]>([]);
 const overviewSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const totalsSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const isLoading = ref(false);
 const isSegmentsLoading = ref(false);
+const isIgnoreMutationPending = ref(false);
 const loadingSource = ref<'filter' | 'manual'>('filter');
 const errorMessage = ref('');
 const segmentsErrorMessage = ref('');
@@ -524,6 +631,7 @@ let mobileViewportQuery: MediaQueryList | null = null;
 let dashboardAbortController: AbortController | null = null;
 let unsubscribeNetworkRealtime: (() => void) | null = null;
 let pendingReloadSource: 'filter' | 'manual' = 'filter';
+let ignoreUndoTimer: number | null = null;
 // 应用明细请求可能被切换筛选条件、关闭弹层或重新选择应用打断；版本号用于丢弃过期响应。
 let segmentsRequestVersion = 0;
 
@@ -602,7 +710,18 @@ const wanTotalBytes = overviewWanTotalBytes;
 const lanTotalBytes = overviewLanTotalBytes;
 const loopbackTotalBytes = overviewLoopbackTotalBytes;
 
-const topRanking = computed(() => items.value.slice(0, filters.topN));
+const ignoredAppKeys = computed(() => new Set(ignoredApps.value.map((item) => item.appKey)));
+const topRanking = computed(() =>
+  items.value
+    .filter((item) => !ignoredAppKeys.value.has(item.appKey))
+    .slice(0, filters.topN)
+);
+const ignoredAppRows = computed(() =>
+  ignoredApps.value.map((record) => ({
+    record,
+    summary: items.value.find((item) => item.appKey === record.appKey) ?? null
+  }))
+);
 const rankingSkeletonRows = [1, 2, 3, 4] as const;
 const showRankingSkeleton = computed(() => isLoading.value && (!topRanking.value.length || loadingSource.value === 'filter'));
 const rankingMaxValue = computed(() =>
@@ -683,7 +802,7 @@ onMounted(() => {
     // 历史查询仍可正常使用，实时通道状态由全局侧栏展示。
   });
   void loadRealtimeHistory();
-  void loadApps('filter');
+  void initializeNetworkPage();
 });
 
 onUnmounted(() => {
@@ -694,6 +813,11 @@ onUnmounted(() => {
   if (autoRefreshTimer !== null) {
     window.clearTimeout(autoRefreshTimer);
     autoRefreshTimer = null;
+  }
+
+  if (ignoreUndoTimer !== null) {
+    window.clearTimeout(ignoreUndoTimer);
+    ignoreUndoTimer = null;
   }
 
   if (mobileViewportQuery) {
@@ -740,6 +864,7 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
     });
 
     items.value = dashboard.apps;
+    ignoredApps.value = dashboard.ignoredApps ?? [];
     overviewSummary.value = dashboard.overview;
     totalsSummary.value = dashboard.totals;
     if (dashboard.realtime) {
@@ -811,6 +936,169 @@ function refreshApps() {
 function selectApp(item: AppTrafficSummaryDto) {
   selectedApp.value = item;
   void loadSelectedAppSegments();
+}
+
+async function ignoreApp(item: AppTrafficSummaryDto) {
+  if (ignoredAppKeys.value.has(item.appKey) || isIgnoreMutationPending.value) {
+    return;
+  }
+
+  const record: IgnoredNetworkAppDto = {
+    appKey: item.appKey,
+    processName: item.processName,
+    displayName: item.displayName ?? null,
+    executablePath: item.executablePath ?? null
+  };
+
+  isIgnoreMutationPending.value = true;
+  errorMessage.value = '';
+  try {
+    ignoredApps.value = await ignoreNetworkApp(record);
+    isIgnoredAppsExpanded.value = true;
+    recentlyIgnoredApp.value = record;
+    scheduleIgnoreUndoDismiss();
+
+    if (selectedApp.value?.appKey === item.appKey) {
+      closeAppSegmentsPanel();
+    }
+
+    await loadApps('manual');
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '保存全局忽略设置失败。';
+  } finally {
+    isIgnoreMutationPending.value = false;
+  }
+}
+
+async function restoreIgnoredApp(appKey: string) {
+  if (isIgnoreMutationPending.value) {
+    return;
+  }
+
+  isIgnoreMutationPending.value = true;
+  errorMessage.value = '';
+  try {
+    ignoredApps.value = await restoreNetworkApp(appKey);
+
+    if (recentlyIgnoredApp.value?.appKey === appKey) {
+      clearIgnoreUndo();
+    }
+
+    await loadApps('manual');
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '恢复全局排行设置失败。';
+  } finally {
+    isIgnoreMutationPending.value = false;
+  }
+}
+
+function undoLastIgnore() {
+  const app = recentlyIgnoredApp.value;
+  if (!app) {
+    return;
+  }
+
+  void restoreIgnoredApp(app.appKey);
+}
+
+function scrollToIgnoredApps() {
+  if (!ignoredApps.value.length) {
+    return;
+  }
+
+  isIgnoredAppsExpanded.value = true;
+  void nextTick(() => {
+    ignoredAppsPanel.value?.scrollIntoView({
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      block: 'nearest'
+    });
+  });
+}
+
+async function initializeNetworkPage() {
+  let migrationError = '';
+  try {
+    await migrateLegacyIgnoredApps();
+  } catch (error) {
+    migrationError = error instanceof Error ? error.message : '迁移旧版忽略列表失败。';
+  }
+
+  await loadApps('filter');
+  if (migrationError && !errorMessage.value) {
+    errorMessage.value = `${migrationError}；旧数据已保留，可刷新后重试。`;
+  }
+}
+
+async function migrateLegacyIgnoredApps() {
+  const legacyApps = loadLegacyIgnoredApps();
+  if (!legacyApps.length) {
+    return;
+  }
+
+  for (const app of legacyApps) {
+    ignoredApps.value = await ignoreNetworkApp(app);
+  }
+
+  window.localStorage.removeItem(ignoredAppsStorageKey);
+}
+
+function loadLegacyIgnoredApps(): IgnoredNetworkAppDto[] {
+  try {
+    const rawValue = window.localStorage.getItem(ignoredAppsStorageKey);
+    if (!rawValue) {
+      return [];
+    }
+
+    const parsedValue: unknown = JSON.parse(rawValue);
+    if (!Array.isArray(parsedValue)) {
+      return [];
+    }
+
+    const seenKeys = new Set<string>();
+    return parsedValue.flatMap((value) => {
+      if (!isIgnoredAppRecord(value) || seenKeys.has(value.appKey)) {
+        return [];
+      }
+
+      seenKeys.add(value.appKey);
+      return [value];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function isIgnoredAppRecord(value: unknown): value is IgnoredNetworkAppDto {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.appKey === 'string'
+    && typeof record.processName === 'string'
+    && (typeof record.displayName === 'string' || record.displayName === null)
+    && (typeof record.executablePath === 'string' || record.executablePath === null)
+  );
+}
+
+function scheduleIgnoreUndoDismiss() {
+  if (ignoreUndoTimer !== null) {
+    window.clearTimeout(ignoreUndoTimer);
+  }
+
+  ignoreUndoTimer = window.setTimeout(() => {
+    ignoreUndoTimer = null;
+    recentlyIgnoredApp.value = null;
+  }, 6000);
+}
+
+function clearIgnoreUndo() {
+  recentlyIgnoredApp.value = null;
+  if (ignoreUndoTimer !== null) {
+    window.clearTimeout(ignoreUndoTimer);
+    ignoreUndoTimer = null;
+  }
 }
 
 function closeAppSegmentsPanel() {

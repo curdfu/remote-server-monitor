@@ -9,6 +9,7 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddMonitorHardware(this IServiceCollection services)
     {
+        services.AddSingleton<IHardwareMonitoringDemand, HardwareMonitoringDemand>();
         services.AddSingleton<LibreHardwareCollector>();
         services.AddSingleton<IHardwareCollector>(sp => sp.GetRequiredService<LibreHardwareCollector>());
         services.AddSingleton<IDiskUsageProvider>(sp => sp.GetRequiredService<LibreHardwareCollector>());

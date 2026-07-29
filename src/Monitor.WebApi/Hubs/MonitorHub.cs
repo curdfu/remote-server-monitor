@@ -2,19 +2,22 @@
 
 namespace Monitor.WebApi.Hubs;
 
-public sealed class MonitorHub : Hub
+public sealed class MonitorHub(
+    Monitor.Hardware.Abstractions.IHardwareMonitoringDemand hardwareMonitoringDemand) : Hub
 {
     public const string HardwareGroup = "hardware";
     public const string NetworkGroup = "network";
 
-    public Task SubscribeHardware()
+    public async Task SubscribeHardware()
     {
-        return Groups.AddToGroupAsync(Context.ConnectionId, HardwareGroup);
+        await Groups.AddToGroupAsync(Context.ConnectionId, HardwareGroup);
+        hardwareMonitoringDemand.AddHardwareSubscriber(Context.ConnectionId);
     }
 
-    public Task UnsubscribeHardware()
+    public async Task UnsubscribeHardware()
     {
-        return Groups.RemoveFromGroupAsync(Context.ConnectionId, HardwareGroup);
+        hardwareMonitoringDemand.RemoveHardwareSubscriber(Context.ConnectionId);
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, HardwareGroup);
     }
 
     public Task SubscribeNetwork()
@@ -25,5 +28,11 @@ public sealed class MonitorHub : Hub
     public Task UnsubscribeNetwork()
     {
         return Groups.RemoveFromGroupAsync(Context.ConnectionId, NetworkGroup);
+    }
+
+    public override async Task OnDisconnectedAsync(Exception? exception)
+    {
+        hardwareMonitoringDemand.RemoveHardwareSubscriber(Context.ConnectionId);
+        await base.OnDisconnectedAsync(exception);
     }
 }

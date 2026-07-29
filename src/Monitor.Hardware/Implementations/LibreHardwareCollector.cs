@@ -20,8 +20,12 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     private const int ErrorNoMoreFiles = 18;
     private const int ErrorMoreData = 234;
     private static readonly IntPtr InvalidHandleValue = new(-1);
+    // 存储 SMART/温度变化远慢于 CPU 与内存。降低存储设备刷新频率可减少
+    // 传感器查询、CPU 唤醒及对机械硬盘节能状态的干扰。
+    private static readonly TimeSpan StorageSensorRefreshInterval = TimeSpan.FromSeconds(30);
 
     private readonly ILogger<LibreHardwareCollector> _logger;
+    private readonly IHardwareMonitoringDemand _hardwareMonitoringDemand;
     private readonly Computer _computer;
     // Windows 卷到物理磁盘的映射在启动时构建；用于把温度传感器和磁盘空间展示关联起来。
     private readonly IReadOnlyList<DiskTopologyEntry> _diskTopologyEntries;
@@ -30,13 +34,18 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
     private DiskUsageSnapshot? _diskUsageSnapshot;
     // 传感器对象本身可复用，采样时只刷新硬件树后读取 Value，避免每次遍历整棵树做名称匹配。
     private SensorCache? _sensorCache;
+    private DateTimeOffset _lastStorageSensorRefreshAt = DateTimeOffset.MinValue;
+    private long _lastStorageDemandActivationVersion = -1;
     private bool _isOpen;
     private bool _disposed;
     private static readonly TimeSpan DiskUsageCacheLifetime = TimeSpan.FromSeconds(10);
 
-    public LibreHardwareCollector(ILogger<LibreHardwareCollector> logger)
+    public LibreHardwareCollector(
+        ILogger<LibreHardwareCollector> logger,
+        IHardwareMonitoringDemand hardwareMonitoringDemand)
     {
         _logger = logger;
+        _hardwareMonitoringDemand = hardwareMonitoringDemand;
         _computer = new Computer
         {
             IsCpuEnabled = true,
@@ -368,6 +377,8 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         {
             _computer.Open();
             _sensorCache = null;
+            _lastStorageSensorRefreshAt = DateTimeOffset.MinValue;
+            _lastStorageDemandActivationVersion = -1;
             _isOpen = true;
             _logger.LogInformation("LibreHardwareMonitor initialized with CPU/Memory/Storage sensors enabled.");
         }
@@ -385,19 +396,37 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
             return;
         }
 
+        var now = DateTimeOffset.UtcNow;
+        var demandActivationVersion = _hardwareMonitoringDemand.ActivationVersion;
+        var refreshStorageSensors =
+            _hardwareMonitoringDemand.HasHardwareSubscribers &&
+            (_lastStorageDemandActivationVersion != demandActivationVersion ||
+             now - _lastStorageSensorRefreshAt >= StorageSensorRefreshInterval);
+
         foreach (var hardware in _computer.Hardware)
         {
-            UpdateHardwareRecursive(hardware);
+            UpdateHardwareRecursive(hardware, refreshStorageSensors);
+        }
+
+        if (refreshStorageSensors)
+        {
+            _lastStorageSensorRefreshAt = now;
+            _lastStorageDemandActivationVersion = demandActivationVersion;
         }
     }
 
-    private static void UpdateHardwareRecursive(IHardware hardware)
+    private static void UpdateHardwareRecursive(IHardware hardware, bool refreshStorageSensors)
     {
+        if (hardware.HardwareType == HardwareType.Storage && !refreshStorageSensors)
+        {
+            return;
+        }
+
         hardware.Update();
 
         foreach (var subHardware in hardware.SubHardware)
         {
-            UpdateHardwareRecursive(subHardware);
+            UpdateHardwareRecursive(subHardware, refreshStorageSensors);
         }
     }
 
@@ -1324,6 +1353,4 @@ public sealed class LibreHardwareCollector : IHardwareCollector, IDiskUsageProvi
         }
     }
 }
-
-
 

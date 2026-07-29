@@ -17,8 +17,8 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
     private readonly object _syncRoot = new();
     private readonly ILogger<AddressClassifier> _logger;
     private readonly IDisposable _settingsRegistration;
-    private IReadOnlyList<SubnetDefinition> _localSubnets = [];
-    private DateTimeOffset _nextRefreshAt = DateTimeOffset.MinValue;
+    private SubnetDefinition[] _localSubnets = [];
+    private long _nextRefreshAtUtcTicks;
     private AdditionalSubnetCache _additionalSubnetCache = AdditionalSubnetCache.Empty;
     private AddressClassificationSettings _settings;
     private bool _disposed;
@@ -52,6 +52,14 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
         var local = localAddress is null ? null : Normalize(localAddress);
         var settings = Volatile.Read(ref _settings);
         var additionalSubnets = GetAdditionalSubnets(settings);
+        Span<byte> remoteAddressBuffer = stackalloc byte[16];
+        if (!remote.TryWriteBytes(remoteAddressBuffer, out var remoteAddressLength))
+        {
+            return AddressScopeType.Other;
+        }
+
+        var remoteAddressBytes = remoteAddressBuffer[..remoteAddressLength];
+        var remoteAddressFamily = remote.AddressFamily;
 
         // 回环地址可能出现在 remote 或 local 任一侧，只要配置允许就直接归为 Loopback。
         if (settings.TreatLoopbackAsLoopback &&
@@ -60,29 +68,33 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
             return AddressScopeType.Loopback;
         }
 
-        if (IsBroadcast(remote) || IsMulticast(remote) || IsUnspecified(remote))
+        if (IsBroadcast(remote) ||
+            IsMulticast(remoteAddressFamily, remoteAddressBytes) ||
+            IsUnspecified(remote))
         {
             return AddressScopeType.Other;
         }
 
         // 用户显式配置的 WAN/LAN CIDR 优先级高于自动私网判断，用于处理 VPN、代理网段等特殊拓扑。
-        if (MatchesAny(additionalSubnets.WanSubnets, remote))
+        if (MatchesAny(additionalSubnets.WanSubnets, remoteAddressFamily, remoteAddressBytes))
         {
             return AddressScopeType.Wan;
         }
 
-        if (MatchesAny(additionalSubnets.LanSubnets, remote))
+        if (MatchesAny(additionalSubnets.LanSubnets, remoteAddressFamily, remoteAddressBytes))
         {
             return AddressScopeType.Lan;
         }
 
         // 本机网卡子网比通用私网规则更贴近真实局域网，但枚举成本更高，所以结果带短缓存。
-        if (settings.TreatLocalSubnetsAsLan && IsInLocalSubnet(remote))
+        if (settings.TreatLocalSubnetsAsLan &&
+            IsInLocalSubnet(remoteAddressFamily, remoteAddressBytes))
         {
             return AddressScopeType.Lan;
         }
 
-        if (settings.TreatPrivateAddressesAsLan && IsPrivateOrLinkLocal(remote))
+        if (settings.TreatPrivateAddressesAsLan &&
+            IsPrivateOrLinkLocal(remoteAddressFamily, remoteAddressBytes, remote.IsIPv6SiteLocal))
         {
             return AddressScopeType.Lan;
         }
@@ -111,7 +123,7 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
         lock (_syncRoot)
         {
             _additionalSubnetCache = AdditionalSubnetCache.Empty;
-            _nextRefreshAt = DateTimeOffset.MinValue;
+            Volatile.Write(ref _nextRefreshAtUtcTicks, 0);
         }
     }
 
@@ -136,36 +148,34 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
         }
     }
 
-    private bool IsInLocalSubnet(IPAddress address)
+    private bool IsInLocalSubnet(AddressFamily addressFamily, ReadOnlySpan<byte> addressBytes)
     {
         RefreshLocalSubnetsIfNeeded();
-
-        IReadOnlyList<SubnetDefinition> localSubnets;
-        lock (_syncRoot)
-        {
-            localSubnets = _localSubnets;
-        }
-
-        return MatchesAny(localSubnets, address);
+        return MatchesAny(Volatile.Read(ref _localSubnets), addressFamily, addressBytes);
     }
 
     private void RefreshLocalSubnetsIfNeeded()
     {
         // 网卡状态变化不需要每个包都重新枚举；30 秒缓存能兼顾拓扑变化和高频分类成本。
         var now = DateTimeOffset.UtcNow;
+        if (now.UtcTicks < Volatile.Read(ref _nextRefreshAtUtcTicks))
+        {
+            return;
+        }
+
         lock (_syncRoot)
         {
-            if (now < _nextRefreshAt)
+            if (now.UtcTicks < Volatile.Read(ref _nextRefreshAtUtcTicks))
             {
                 return;
             }
 
-            _localSubnets = LoadLocalSubnets();
-            _nextRefreshAt = now.Add(LocalSubnetRefreshInterval);
+            Volatile.Write(ref _localSubnets, LoadLocalSubnets());
+            Volatile.Write(ref _nextRefreshAtUtcTicks, now.Add(LocalSubnetRefreshInterval).UtcTicks);
         }
     }
 
-    private IReadOnlyList<SubnetDefinition> LoadLocalSubnets()
+    private SubnetDefinition[] LoadLocalSubnets()
     {
         try
         {
@@ -219,11 +229,14 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
         };
     }
 
-    private static bool MatchesAny(IEnumerable<SubnetDefinition> subnets, IPAddress address)
+    private static bool MatchesAny(
+        IReadOnlyList<SubnetDefinition> subnets,
+        AddressFamily addressFamily,
+        ReadOnlySpan<byte> addressBytes)
     {
-        foreach (var subnet in subnets)
+        for (var index = 0; index < subnets.Count; index++)
         {
-            if (subnet.Contains(address))
+            if (subnets[index].Contains(addressFamily, addressBytes))
             {
                 return true;
             }
@@ -244,40 +257,40 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
         return address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
     }
 
-    private static bool IsPrivateOrLinkLocal(IPAddress address)
+    private static bool IsPrivateOrLinkLocal(
+        AddressFamily addressFamily,
+        ReadOnlySpan<byte> addressBytes,
+        bool isIpv6SiteLocal)
     {
-        if (address.AddressFamily == AddressFamily.InterNetwork)
+        if (addressFamily == AddressFamily.InterNetwork)
         {
-            var bytes = address.GetAddressBytes();
-            return bytes[0] == 10 ||
-                   (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) ||
-                   (bytes[0] == 192 && bytes[1] == 168) ||
-                   (bytes[0] == 169 && bytes[1] == 254);
+            return addressBytes[0] == 10 ||
+                   (addressBytes[0] == 172 && addressBytes[1] is >= 16 and <= 31) ||
+                   (addressBytes[0] == 192 && addressBytes[1] == 168) ||
+                   (addressBytes[0] == 169 && addressBytes[1] == 254);
         }
 
-        if (address.AddressFamily == AddressFamily.InterNetworkV6)
+        if (addressFamily == AddressFamily.InterNetworkV6)
         {
-            var bytes = address.GetAddressBytes();
-            var firstByte = bytes[0];
-            var secondByte = bytes[1];
+            var firstByte = addressBytes[0];
+            var secondByte = addressBytes[1];
             var isUniqueLocal = (firstByte & 0b1111_1110) == 0b1111_1100;
             var isLinkLocal = firstByte == 0xfe && (secondByte & 0b1100_0000) == 0b1000_0000;
 
-            return isUniqueLocal || isLinkLocal || address.IsIPv6SiteLocal;
+            return isUniqueLocal || isLinkLocal || isIpv6SiteLocal;
         }
 
         return false;
     }
 
-    private static bool IsMulticast(IPAddress address)
+    private static bool IsMulticast(AddressFamily addressFamily, ReadOnlySpan<byte> addressBytes)
     {
-        if (address.AddressFamily == AddressFamily.InterNetwork)
+        if (addressFamily == AddressFamily.InterNetwork)
         {
-            var firstByte = address.GetAddressBytes()[0];
-            return firstByte is >= 224 and <= 239;
+            return addressBytes[0] is >= 224 and <= 239;
         }
 
-        return address.AddressFamily == AddressFamily.InterNetworkV6 && address.IsIPv6Multicast;
+        return addressFamily == AddressFamily.InterNetworkV6 && addressBytes[0] == 0xff;
     }
 
     private static bool IsBroadcast(IPAddress address)
@@ -293,16 +306,13 @@ public sealed class AddressClassifier : IAddressClassifier, IDisposable
 
     private readonly record struct SubnetDefinition(AddressFamily AddressFamily, byte[] NetworkBytes, int PrefixLength)
     {
-        public bool Contains(IPAddress address)
+        public bool Contains(AddressFamily addressFamily, ReadOnlySpan<byte> candidateBytes)
         {
-            // CIDR 匹配同时支持 IPv4 和 IPv6；IPv4-mapped IPv6 会先归一化，避免同一地址两套表示。
-            var normalized = Normalize(address);
-            if (normalized.AddressFamily != AddressFamily)
+            if (addressFamily != AddressFamily || candidateBytes.Length != NetworkBytes.Length)
             {
                 return false;
             }
 
-            var candidateBytes = normalized.GetAddressBytes();
             var wholeBytes = PrefixLength / 8;
             var remainingBits = PrefixLength % 8;
 

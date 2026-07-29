@@ -9,21 +9,27 @@ namespace Monitor.Network.Services;
 public sealed class AppRegistryService(IProcessResolver processResolver) : IAppRegistry
 {
     private static readonly TimeSpan PidCacheLifetime = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan PidTouchInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan EntryLifetime = TimeSpan.FromHours(12);
-    private const int PruneFrequency = 256;
+    private static readonly TimeSpan PruneInterval = TimeSpan.FromMinutes(1);
 
     private readonly ConcurrentDictionary<string, AppRegistryState> _entries = new(StringComparer.OrdinalIgnoreCase);
     // PID 缓存只做短期加速，避免同一个进程的高频网络事件反复解析进程信息。
     private readonly ConcurrentDictionary<int, PidCacheItem> _pidCache = new();
-    private int _accessCount;
+    private long _nextPruneAtUtcTicks;
 
     public AppRegistryEntry GetOrAdd(int pid)
     {
         var now = DateTimeOffset.UtcNow;
         if (_pidCache.TryGetValue(pid, out var pidCache) && now - pidCache.LastSeenAt <= PidCacheLifetime)
         {
-            pidCache.Touch(now);
-            pidCache.State.Touch(now);
+            // LastSeen 只用于应用元数据，不参与字节统计；每 PID 每秒更新一次即可，
+            // 避免高包率进程在每个 ETW 事件上进入状态锁。
+            if (pidCache.TryTouch(now))
+            {
+                pidCache.State.Touch(now);
+            }
+
             PruneIfNeeded(now);
             return pidCache.Entry;
         }
@@ -63,8 +69,18 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
 
     private void PruneIfNeeded(DateTimeOffset now)
     {
-        // 注册表是运行期缓存，不无限增长；清理按访问次数分摊，避免高频路径上每次扫描字典。
-        if (Interlocked.Increment(ref _accessCount) % PruneFrequency != 0)
+        // 注册表是运行期缓存，不无限增长；按时间触发清理，避免事件率越高全表扫描越频繁。
+        var nextPruneAtUtcTicks = Volatile.Read(ref _nextPruneAtUtcTicks);
+        if (now.UtcTicks < nextPruneAtUtcTicks)
+        {
+            return;
+        }
+
+        var updatedNextPruneAtUtcTicks = now.Add(PruneInterval).UtcTicks;
+        if (Interlocked.CompareExchange(
+                ref _nextPruneAtUtcTicks,
+                updatedNextPruneAtUtcTicks,
+                nextPruneAtUtcTicks) != nextPruneAtUtcTicks)
         {
             return;
         }
@@ -88,13 +104,25 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
 
     private sealed class PidCacheItem(AppRegistryEntry entry, AppRegistryState state, DateTimeOffset lastSeenAt)
     {
+        private long _lastSeenAtUtcTicks = lastSeenAt.UtcTicks;
+
         public AppRegistryEntry Entry { get; } = entry;
         public AppRegistryState State { get; } = state;
-        public DateTimeOffset LastSeenAt { get; private set; } = lastSeenAt;
+        public DateTimeOffset LastSeenAt =>
+            new(Volatile.Read(ref _lastSeenAtUtcTicks), TimeSpan.Zero);
 
-        public void Touch(DateTimeOffset timestamp)
+        public bool TryTouch(DateTimeOffset timestamp)
         {
-            LastSeenAt = timestamp;
+            var currentTicks = Volatile.Read(ref _lastSeenAtUtcTicks);
+            if (timestamp.UtcTicks - currentTicks < PidTouchInterval.Ticks)
+            {
+                return false;
+            }
+
+            return Interlocked.CompareExchange(
+                       ref _lastSeenAtUtcTicks,
+                       timestamp.UtcTicks,
+                       currentTicks) == currentTicks;
         }
     }
 
@@ -191,4 +219,3 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
         }
     }
 }
-

@@ -11,6 +11,7 @@ namespace Monitor.WebApi.Services;
 // 广播器只消费采集服务已经写入内存的最新快照，不触发额外硬件或网络采样。
 public sealed class MonitorRealtimeBroadcaster(
     IHardwareSnapshotBuffer hardwareSnapshotBuffer,
+    IHardwareMonitoringDemand hardwareMonitoringDemand,
     DiskUsageSnapshotCache diskUsageSnapshotCache,
     INetworkAggregator networkAggregator,
     IHubContext<MonitorHub> hubContext,
@@ -26,7 +27,9 @@ public sealed class MonitorRealtimeBroadcaster(
         var network = networkAggregator.GetLatestRealtimeSnapshot();
         var broadcastTasks = new List<Task>(2);
 
-        if (hardware is not null && ShouldBroadcastHardware(hardware.SampleTime))
+        if (hardwareMonitoringDemand.HasHardwareSubscribers &&
+            hardware is not null &&
+            ShouldBroadcastHardware(hardware.SampleTime))
         {
             broadcastTasks.Add(BroadcastHardwareAsync(hardware, cancellationToken));
         }
