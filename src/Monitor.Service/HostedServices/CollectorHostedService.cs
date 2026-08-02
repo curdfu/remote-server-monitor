@@ -20,7 +20,9 @@ public sealed class CollectorHostedService(
 {
     private static readonly TimeSpan PersistenceInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan StopFlushTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PersistenceFailureLogInterval = TimeSpan.FromMinutes(1);
     private const int PersistenceBatchSize = 10;
+    private DateTimeOffset _lastPersistenceFailureLogAt = DateTimeOffset.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -144,14 +146,44 @@ public sealed class CollectorHostedService(
             catch (SqliteException exception) when (SqliteBusyRetry.IsBusy(exception))
             {
                 snapshotBuffer.RequeuePendingBatch(batch);
-                logger.LogWarning(
+                LogPersistenceFailure(
+                    LogLevel.Warning,
                     exception,
                     "SQLite remained busy after retries. Requeued {Count} hardware snapshots; PendingCount={PendingCount}.",
                     batch.Count,
                     snapshotBuffer.PendingCount);
                 return;
             }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // 硬件历史写入失败时回队重试，避免一次 SQLite 异常终止整个采集服务。
+                snapshotBuffer.RequeuePendingBatch(batch);
+                LogPersistenceFailure(
+                    LogLevel.Error,
+                    exception,
+                    "SQLite persistence failed unexpectedly. Requeued {Count} hardware snapshots; PendingCount={PendingCount}.",
+                    batch.Count,
+                    snapshotBuffer.PendingCount);
+                return;
+            }
         }
+    }
+
+    private void LogPersistenceFailure(
+        LogLevel level,
+        Exception exception,
+        string message,
+        int batchCount,
+        int pendingCount)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastPersistenceFailureLogAt < PersistenceFailureLogInterval)
+        {
+            return;
+        }
+
+        _lastPersistenceFailureLogAt = now;
+        logger.Log(level, exception, message, batchCount, pendingCount);
     }
 
     private async Task CollectSnapshotAsync(CancellationToken cancellationToken)
