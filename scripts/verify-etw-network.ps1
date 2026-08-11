@@ -1,8 +1,6 @@
 ﻿param(
     [string]$BaseUrl = 'http://127.0.0.1:5188',
     [string]$ServiceName = 'RemoteServerMonitor',
-    [int]$SampleCount = 6,
-    [int]$IntervalSeconds = 1,
     [int]$HistoryWindowMinutes = 15,
     [int]$TopN = 10,
     [string]$TrafficUrl = '',
@@ -162,37 +160,6 @@ function Get-RecentEtwFailures {
     return @($matches)
 }
 
-function Sample-Realtime {
-    param(
-        [string]$ResolvedBaseUrl,
-        [int]$Count,
-        [int]$DelaySeconds
-    )
-
-    $items = New-Object System.Collections.Generic.List[object]
-
-    for ($index = 1; $index -le $Count; $index++) {
-        $payload = Invoke-JsonGet -Url "$ResolvedBaseUrl/api/network/realtime"
-
-        $items.Add([PSCustomObject]@{
-            Index = $index
-            SampleTime = $payload.sampleTime
-            TotalUploadBytesPerSecond = [double]$payload.totalUploadBytesPerSecond
-            TotalDownloadBytesPerSecond = [double]$payload.totalDownloadBytesPerSecond
-            WanUploadBytesPerSecond = [double]$payload.wanUploadBytesPerSecond
-            WanDownloadBytesPerSecond = [double]$payload.wanDownloadBytesPerSecond
-            LanUploadBytesPerSecond = [double]$payload.lanUploadBytesPerSecond
-            LanDownloadBytesPerSecond = [double]$payload.lanDownloadBytesPerSecond
-        }) | Out-Null
-
-        if ($index -lt $Count) {
-            Start-Sleep -Seconds $DelaySeconds
-        }
-    }
-
-    return $items.ToArray()
-}
-
 function Invoke-TrafficGeneration {
     param(
         [string]$Url,
@@ -247,16 +214,14 @@ $report = [ordered]@{
     Service = $null
     Health = $null
     RecentEtwFailures = @()
-    BaselineRealtimeSamples = @()
     TrafficGeneration = @()
-    ActiveRealtimeSamples = @()
     AppSummaries = @()
     Verdict = [ordered]@{}
 }
 
 Write-Section 'ETW network verification'
 Write-Host "BaseUrl: $resolvedBaseUrl"
-Write-Host "SampleCount: $SampleCount, IntervalSeconds: $IntervalSeconds, HistoryWindowMinutes: $HistoryWindowMinutes"
+Write-Host "HistoryWindowMinutes: $HistoryWindowMinutes"
 
 $isLocalUrl = Test-IsLocalUrl -Url $resolvedBaseUrl
 if ($isLocalUrl) {
@@ -291,13 +256,6 @@ catch {
     throw
 }
 
-Write-Section 'Baseline realtime sampling'
-$baselineSamples = Sample-Realtime -ResolvedBaseUrl $resolvedBaseUrl -Count $SampleCount -DelaySeconds $IntervalSeconds
-$report.BaselineRealtimeSamples = $baselineSamples
-$baselineSamples | ForEach-Object {
-    Write-Host ("[{0}] up={1}/s, down={2}/s, wanUp={3}/s, wanDown={4}/s, lanUp={5}/s, lanDown={6}/s" -f $_.Index, (Format-Bytes $_.TotalUploadBytesPerSecond), (Format-Bytes $_.TotalDownloadBytesPerSecond), (Format-Bytes $_.WanUploadBytesPerSecond), (Format-Bytes $_.WanDownloadBytesPerSecond), (Format-Bytes $_.LanUploadBytesPerSecond), (Format-Bytes $_.LanDownloadBytesPerSecond))
-}
-
 if ($PauseForManualTraffic) {
     Write-Section 'Manual traffic step'
     Read-Host 'Generate traffic now, then press Enter to continue'
@@ -314,13 +272,6 @@ elseif (-not [string]::IsNullOrWhiteSpace($TrafficUrl)) {
             Write-Host ("[{0}] {1} -> failed: {2}" -f $_.Index, $_.Url, $_.Error) -ForegroundColor Yellow
         }
     }
-}
-
-Write-Section 'Active realtime sampling'
-$activeSamples = Sample-Realtime -ResolvedBaseUrl $resolvedBaseUrl -Count $SampleCount -DelaySeconds $IntervalSeconds
-$report.ActiveRealtimeSamples = $activeSamples
-$activeSamples | ForEach-Object {
-    Write-Host ("[{0}] up={1}/s, down={2}/s, wanUp={3}/s, wanDown={4}/s, lanUp={5}/s, lanDown={6}/s" -f $_.Index, (Format-Bytes $_.TotalUploadBytesPerSecond), (Format-Bytes $_.TotalDownloadBytesPerSecond), (Format-Bytes $_.WanUploadBytesPerSecond), (Format-Bytes $_.WanDownloadBytesPerSecond), (Format-Bytes $_.LanUploadBytesPerSecond), (Format-Bytes $_.LanDownloadBytesPerSecond))
 }
 
 Write-Section 'Historical aggregation check'
@@ -352,33 +303,24 @@ else {
     }
 }
 
-$allRealtimeSamples = @($baselineSamples + $activeSamples)
-$hasRealtimeTraffic = $allRealtimeSamples | Where-Object {
-    $_.TotalUploadBytesPerSecond -gt 0 -or $_.TotalDownloadBytesPerSecond -gt 0
-} | Select-Object -First 1
-
 $hasHistoricalTraffic = $appSummaries.Count -gt 0
 $hasEtwFailureHints = @($report.RecentEtwFailures).Count -gt 0
 
 $verdict = [ordered]@{
     HealthOk = $true
-    RealtimeTrafficObserved = [bool]$hasRealtimeTraffic
     HistoricalTrafficObserved = $hasHistoricalTraffic
     RecentEtwFailureHints = $hasEtwFailureHints
     Conclusion = ''
 }
 
-if ($hasRealtimeTraffic -and $hasHistoricalTraffic) {
-    $verdict.Conclusion = 'PASS: ETW collection, realtime aggregation, and historical aggregation all look healthy.'
-}
-elseif (-not $hasRealtimeTraffic -and $hasHistoricalTraffic) {
-    $verdict.Conclusion = 'PARTIAL: historical aggregation has data, but this realtime sampling window did not capture active traffic. Generate traffic during sampling and run again.'
+if ($hasHistoricalTraffic -and -not $hasEtwFailureHints) {
+    $verdict.Conclusion = 'PASS: ETW collection and historical aggregation both look healthy.'
 }
 elseif ($hasEtwFailureHints) {
     $verdict.Conclusion = 'FAIL: ETW startup/runtime failure hints were found in logs. Check privileges, ETW resource usage, or session conflicts.'
 }
 else {
-    $verdict.Conclusion = 'WARN: no clear traffic was observed in realtime or history. The machine may be idle, or ETW collection may not be working.'
+    $verdict.Conclusion = 'WARN: no traffic was observed in history. The machine may be idle, or ETW collection may not be working.'
 }
 
 $report.Verdict = $verdict

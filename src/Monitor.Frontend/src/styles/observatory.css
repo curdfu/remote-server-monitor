@@ -1233,38 +1233,6 @@ select:focus {
   background: var(--surface-0);
 }
 
-.network-live-panel {
-  display: grid;
-  gap: 16px;
-  padding: 18px;
-}
-
-.network-live-panel > .section-header {
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--line);
-}
-
-.network-live-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface-0);
-}
-
-.network-live-panel .trend-card {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.network-live-panel .trend-card + .trend-card {
-  border-left: 1px solid var(--line);
-}
-
 .network-page .filters-card {
   position: sticky;
   top: 14px;
@@ -1363,12 +1331,12 @@ select:focus {
 
 .network-page .network-section-column-ranking {
   grid-column: 1 / -1;
-  grid-row: 1;
+  grid-row: 2;
 }
 
 .network-page .network-section-upload-download,
 .network-page .network-section-wan-lan {
-  grid-row: 2;
+  grid-row: 1;
   height: 100%;
 }
 
@@ -1897,31 +1865,6 @@ select:focus {
     padding-top: 8px;
   }
 
-  .network-live-panel {
-    gap: 10px;
-    padding: 14px;
-  }
-
-  .network-live-panel > .section-header {
-    padding-bottom: 10px;
-  }
-
-  .network-live-panel .trend-card {
-    padding: 14px 16px 12px;
-  }
-
-  .network-live-panel .trend-plot {
-    margin-top: 10px;
-  }
-
-  .network-live-panel .trend-plot svg {
-    height: 92px;
-  }
-
-  .network-live-panel .trend-empty {
-    min-height: 116px;
-  }
-
   .network-page .network-section-analytics {
     gap: 14px;
   }
@@ -2221,12 +2164,8 @@ select:focus {
     order: 2;
   }
 
-  .network-page > .network-live-panel {
-    order: 3;
-  }
-
   .network-page > .network-section-analytics {
-    order: 4;
+    order: 3;
     display: grid;
     grid-template-columns: 1fr;
     align-items: stretch;
@@ -2235,14 +2174,14 @@ select:focus {
   .network-page .network-section-column-analytics {
     display: grid;
     grid-template-columns: 1fr;
-    order: 2;
+    order: 1;
     gap: 16px;
   }
 
   .network-page .network-section-column-ranking {
     grid-column: auto;
     grid-row: auto;
-    order: 1;
+    order: 2;
   }
 
   .network-page .network-section-upload-download,
@@ -2282,15 +2221,6 @@ select:focus {
   }
 
   .dashboard-trends-panel .trend-card + .trend-card {
-    border-top: 1px solid var(--line);
-    border-left: 0;
-  }
-
-  .network-live-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .network-live-panel .trend-card + .trend-card {
     border-top: 1px solid var(--line);
     border-left: 0;
   }

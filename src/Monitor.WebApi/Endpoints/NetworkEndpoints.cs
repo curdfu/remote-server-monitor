@@ -1,6 +1,5 @@
 ﻿using Monitor.Contracts.Dtos;
 using Monitor.Contracts.Options;
-using Monitor.Network.Abstractions;
 using Monitor.Network.Models;
 using Monitor.Storage.Repositories;
 
@@ -60,27 +59,6 @@ public static class NetworkEndpoints
             return Results.Ok(ignoredApps);
         });
 
-        app.MapGet("/api/network/realtime/history", (
-            INetworkAggregator networkAggregator) =>
-        {
-            var snapshots = networkAggregator.GetRecentRealtimeSnapshots();
-            return Results.Ok(snapshots.Select(ToRealtimeDto).ToArray());
-        });
-
-        app.MapGet("/api/network/realtime", (
-            INetworkAggregator networkAggregator) =>
-        {
-            var snapshot = networkAggregator.GetLatestRealtimeSnapshot();
-            if (snapshot is null)
-            {
-                return Results.Problem(
-                    detail: "Network realtime cache is not ready yet.",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-
-            return Results.Ok(ToRealtimeDto(snapshot));
-        });
-
         app.MapGet("/api/network/dashboard", async (
             DateTimeOffset? from,
             DateTimeOffset? to,
@@ -89,7 +67,6 @@ public static class NetworkEndpoints
             string? direction,
             NetworkTrafficRepository networkTrafficRepository,
             IgnoredNetworkAppRepository ignoredNetworkAppRepository,
-            INetworkAggregator networkAggregator,
             IMonitorSettingsProvider settings,
             CancellationToken cancellationToken) =>
         {
@@ -128,15 +105,12 @@ public static class NetworkEndpoints
                 cancellationToken);
 
             await Task.WhenAll(appsTask, overviewTask, totalsTask);
-            var realtime = networkAggregator.GetLatestRealtimeSnapshot();
-
             return Results.Ok(new NetworkDashboardDto
             {
                 Apps = appsTask.Result.Select(ToSummaryDto).ToArray(),
                 IgnoredApps = [.. ignoredApps],
                 Overview = ToPeriodSummaryDto(overviewTask.Result),
-                Totals = ToPeriodSummaryDto(totalsTask.Result),
-                Realtime = realtime is null ? null : ToRealtimeDto(realtime)
+                Totals = ToPeriodSummaryDto(totalsTask.Result)
             });
         });
 
@@ -285,20 +259,6 @@ public static class NetworkEndpoints
     private static string? NormalizeOptionalText(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    }
-
-    private static NetworkRealtimeDto ToRealtimeDto(NetworkRealtimeSnapshot snapshot)
-    {
-        return new NetworkRealtimeDto
-        {
-            SampleTime = snapshot.SampleTime,
-            TotalUploadBytesPerSecond = snapshot.TotalUploadBytesPerSecond,
-            TotalDownloadBytesPerSecond = snapshot.TotalDownloadBytesPerSecond,
-            WanUploadBytesPerSecond = snapshot.WanUploadBytesPerSecond,
-            WanDownloadBytesPerSecond = snapshot.WanDownloadBytesPerSecond,
-            LanUploadBytesPerSecond = snapshot.LanUploadBytesPerSecond,
-            LanDownloadBytesPerSecond = snapshot.LanDownloadBytesPerSecond
-        };
     }
 
     private static AppTrafficSummaryDto ToSummaryDto(AppTrafficPeriodSummary summary)

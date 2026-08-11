@@ -13,7 +13,7 @@ public sealed class MonitorSettings : IValidatableObject
     public int HardwareSampleIntervalMs { get; set; } = 1000;
 
     [Range(500, 60000)]
-    public int NetworkRealtimeIntervalMs { get; set; } = 1000;
+    public int NetworkProcessingIntervalMs { get; set; } = 1000;
 
     [Range(1, 3600)]
     public int AggregateIntervalSeconds { get; set; } = 10;

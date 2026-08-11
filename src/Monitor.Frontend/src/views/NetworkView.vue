@@ -118,34 +118,6 @@
       {{ errorMessage }}
     </div>
 
-    <section class="card page-tier-panel network-live-panel">
-      <div class="section-header section-header-rich">
-        <div>
-          <h3>实时网络速率</h3>
-          <p class="section-subtitle">呈现最近两分钟的实时上传与下载变化。</p>
-        </div>
-        <span class="section-tag">{{ realtimeStatusText }}</span>
-      </div>
-      <div class="network-live-grid">
-        <MetricTrend
-          title="上传速率"
-          eyebrow=""
-          :points="uploadRealtimeTrend"
-          unit=" Mbps"
-          range-label="最近 2 分钟"
-          tone="warning"
-        />
-        <MetricTrend
-          title="下载速率"
-          eyebrow=""
-          :points="downloadRealtimeTrend"
-          unit=" Mbps"
-          range-label="最近 2 分钟"
-          tone="signal"
-        />
-      </div>
-    </section>
-
     <section class="panel-grid network-section network-section-analytics">
       <div class="network-section network-section-column network-section-column-analytics">
         <article class="card dashboard-panel-card network-section network-section-upload-download">
@@ -576,22 +548,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
-import MetricTrend from '../components/MetricTrend.vue';
 import PageHeader from '../components/PageHeader.vue';
 import {
   getNetworkAppSegments,
   getNetworkDashboard,
-  getNetworkRealtimeHistory,
   ignoreNetworkApp,
   restoreNetworkApp
 } from '../services/api';
-import { startRealtimeConnection, subscribeNetworkRealtime } from '../services/realtime';
 import type {
   AppTrafficSegmentDto,
   AppTrafficSummaryDto,
   IgnoredNetworkAppDto,
-  NetworkPeriodSummaryDto,
-  NetworkRealtimeDto
+  NetworkPeriodSummaryDto
 } from '../types/monitor';
 
 // 常用时间预设，对应页面顶部的快捷时间按钮
@@ -623,13 +591,11 @@ const isIgnoreMutationPending = ref(false);
 const loadingSource = ref<'filter' | 'manual'>('filter');
 const errorMessage = ref('');
 const segmentsErrorMessage = ref('');
-const networkRealtimeHistory = ref<NetworkRealtimeDto[]>([]);
 const isMobileViewport = ref(false);
 const isMobileFiltersExpanded = ref(false);
 let autoRefreshTimer: number | null = null;
 let mobileViewportQuery: MediaQueryList | null = null;
 let dashboardAbortController: AbortController | null = null;
-let unsubscribeNetworkRealtime: (() => void) | null = null;
 let pendingReloadSource: 'filter' | 'manual' = 'filter';
 let ignoreUndoTimer: number | null = null;
 // 应用明细请求可能被切换筛选条件、关闭弹层或重新选择应用打断；版本号用于丢弃过期响应。
@@ -756,24 +722,6 @@ const activePresetHours = computed(() => getMatchedPresetHours(filters.from, fil
 const showAdvancedFilters = computed(() => !isMobileViewport.value || isMobileFiltersExpanded.value);
 
 const rangeParts = computed(() => formatRangeParts());
-const uploadRealtimeTrend = computed(() =>
-  networkRealtimeHistory.value.map((sample) => ({
-    time: sample.sampleTime,
-    value: bytesPerSecondToMegabits(sample.totalUploadBytesPerSecond)
-  }))
-);
-const downloadRealtimeTrend = computed(() =>
-  networkRealtimeHistory.value.map((sample) => ({
-    time: sample.sampleTime,
-    value: bytesPerSecondToMegabits(sample.totalDownloadBytesPerSecond)
-  }))
-);
-const realtimeStatusText = computed(() => {
-  const latest = networkRealtimeHistory.value.at(-1);
-  if (!latest) return '等待实时样本';
-  const ageSeconds = Math.max(0, Math.round((Date.now() - new Date(latest.sampleTime).getTime()) / 1000));
-  return ageSeconds < 5 ? '实时' : `${ageSeconds} 秒前`;
-});
 
 const dominantScopeLabel = computed(() => {
   if (overviewTotalBytes.value === 0) return '--';
@@ -797,18 +745,12 @@ onMounted(() => {
     mobileViewportQuery.addEventListener('change', handleMobileViewportChange);
   }
 
-  unsubscribeNetworkRealtime = subscribeNetworkRealtime(appendNetworkRealtimeSample);
-  void startRealtimeConnection().catch(() => {
-    // 历史查询仍可正常使用，实时通道状态由全局侧栏展示。
-  });
-  void loadRealtimeHistory();
   void initializeNetworkPage();
 });
 
 onUnmounted(() => {
   segmentsRequestVersion++;
   dashboardAbortController?.abort();
-  unsubscribeNetworkRealtime?.();
 
   if (autoRefreshTimer !== null) {
     window.clearTimeout(autoRefreshTimer);
@@ -867,9 +809,6 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
     ignoredApps.value = dashboard.ignoredApps ?? [];
     overviewSummary.value = dashboard.overview;
     totalsSummary.value = dashboard.totals;
-    if (dashboard.realtime) {
-      appendNetworkRealtimeSample(dashboard.realtime);
-    }
     syncSelectedAppAfterRankingLoad(dashboard.apps);
     if (selectedApp.value) {
       void loadSelectedAppSegments();
@@ -885,40 +824,6 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
       isLoading.value = false;
     }
   }
-}
-
-function appendNetworkRealtimeSample(sample: NetworkRealtimeDto) {
-  mergeNetworkRealtimeSamples([sample]);
-}
-
-async function loadRealtimeHistory() {
-  try {
-    const samples = await getNetworkRealtimeHistory();
-    mergeNetworkRealtimeSamples(samples);
-  } catch {
-    // 缓存读取失败不阻断网络页，SignalR 后续样本仍会正常补充趋势。
-  }
-}
-
-function mergeNetworkRealtimeSamples(samples: NetworkRealtimeDto[]) {
-  const cutoffTime = Date.now() - 2 * 60 * 1000;
-  const samplesByTime = new Map<string, NetworkRealtimeDto>();
-
-  for (const sample of [...networkRealtimeHistory.value, ...samples]) {
-    const sampleTime = new Date(sample.sampleTime).getTime();
-    if (!Number.isFinite(sampleTime) || sampleTime < cutoffTime) {
-      continue;
-    }
-
-    samplesByTime.set(sample.sampleTime, sample);
-  }
-
-  networkRealtimeHistory.value = [...samplesByTime.values()]
-    .sort((left, right) => new Date(left.sampleTime).getTime() - new Date(right.sampleTime).getTime());
-}
-
-function bytesPerSecondToMegabits(value: number) {
-  return value * 8 / 1_000_000;
 }
 
 function refreshApps() {

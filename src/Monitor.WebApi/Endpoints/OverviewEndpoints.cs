@@ -1,6 +1,5 @@
 using Monitor.Contracts.Dtos;
 using Monitor.Hardware.Abstractions;
-using Monitor.Network.Abstractions;
 using Monitor.WebApi.Services;
 
 namespace Monitor.WebApi.Endpoints;
@@ -11,22 +10,13 @@ public static class OverviewEndpoints
     {
         app.MapGet("/api/overview", (
             IHardwareSnapshotBuffer hardwareSnapshotBuffer,
-            DiskUsageSnapshotCache diskUsageSnapshotCache,
-            INetworkAggregator networkAggregator) =>
+            DiskUsageSnapshotCache diskUsageSnapshotCache) =>
         {
             var hardware = hardwareSnapshotBuffer.GetLatest();
             if (hardware is null)
             {
                 return Results.Problem(
                     detail: "Hardware snapshot cache is not ready yet.",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-
-            var network = networkAggregator.GetLatestRealtimeSnapshot();
-            if (network is null)
-            {
-                return Results.Problem(
-                    detail: "Network realtime cache is not ready yet.",
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
@@ -70,16 +60,6 @@ public static class OverviewEndpoints
                         FreeBytes = space.FreeBytes
                     }).ToArray(),
                     UptimeSeconds = hardware.System.UptimeSeconds
-                },
-                Network = new NetworkRealtimeDto
-                {
-                    SampleTime = network.SampleTime,
-                    TotalUploadBytesPerSecond = network.TotalUploadBytesPerSecond,
-                    TotalDownloadBytesPerSecond = network.TotalDownloadBytesPerSecond,
-                    WanUploadBytesPerSecond = network.WanUploadBytesPerSecond,
-                    WanDownloadBytesPerSecond = network.WanDownloadBytesPerSecond,
-                    LanUploadBytesPerSecond = network.LanUploadBytesPerSecond,
-                    LanDownloadBytesPerSecond = network.LanDownloadBytesPerSecond
                 }
             });
         });

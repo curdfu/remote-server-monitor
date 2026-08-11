@@ -6,7 +6,6 @@
   IgnoredNetworkAppDto,
   NetworkDashboardDto,
   NetworkPeriodSummaryDto,
-  NetworkRealtimeDto,
   RealtimeOverviewDto
 } from '../types/monitor';
 
@@ -153,10 +152,6 @@ export function getNetworkDashboard(params?: {
   return request<NetworkDashboardDto>(`/api/network/dashboard${query.toString() ? `?${query}` : ''}`, {
     signal: params?.signal
   });
-}
-
-export function getNetworkRealtimeHistory() {
-  return request<NetworkRealtimeDto[]>('/api/network/realtime/history');
 }
 
 export function getIgnoredNetworkApps() {

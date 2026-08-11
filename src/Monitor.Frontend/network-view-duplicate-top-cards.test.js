@@ -37,13 +37,13 @@ test('network view removes the top overview strip and keeps the ranking panel in
   );
   assert.match(
     styles,
-    /\.network-page \.network-section-column-ranking \{[\s\S]*?grid-column: 1 \/ -1;[\s\S]*?grid-row: 1;/,
-    'expected the ranking panel to occupy the first analytics row below realtime traffic',
+    /\.network-page \.network-section-column-ranking \{[\s\S]*?grid-column: 1 \/ -1;[\s\S]*?grid-row: 2;/,
+    'expected the ranking panel to occupy the full row below both traffic summary panels',
   );
   assert.match(
     styles,
-    /\.network-page \.network-section-upload-download,[\s\S]*?\.network-page \.network-section-wan-lan \{[\s\S]*?grid-row: 2;/,
-    'expected the traffic summary panels to render after the ranking panel',
+    /\.network-page \.network-section-upload-download,[\s\S]*?\.network-page \.network-section-wan-lan \{[\s\S]*?grid-row: 1;/,
+    'expected both traffic summary panels to render above the ranking panel',
   );
   assert.match(
     styles,

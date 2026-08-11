@@ -63,9 +63,9 @@ Log.ForContext("ImportantInfo", true).Information(
     persistedSettings.Count > 0);
 
 Log.ForContext("ImportantInfo", true).Information(
-    "Monitor service runtime configuration applied. HardwareIntervalMs={HardwareIntervalMs}, NetworkRealtimeIntervalMs={NetworkRealtimeIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}, EtwBufferSizeMb={EtwBufferSizeMb}",
+    "Monitor service runtime configuration applied. HardwareIntervalMs={HardwareIntervalMs}, NetworkProcessingIntervalMs={NetworkProcessingIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}, EtwBufferSizeMb={EtwBufferSizeMb}",
     currentSettings.HardwareSampleIntervalMs,
-    currentSettings.NetworkRealtimeIntervalMs,
+    currentSettings.NetworkProcessingIntervalMs,
     currentSettings.AggregateIntervalSeconds,
     currentSettings.HistoryRetentionDays,
     currentSettings.TopNDefault,

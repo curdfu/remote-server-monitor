@@ -55,7 +55,7 @@ public static class PersistedSettingsLoader
             {
                 [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:HttpPort"] = reader.GetInt32(0).ToString(),
                 [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:HardwareSampleIntervalMs"] = reader.GetInt32(1).ToString(),
-                [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:NetworkRealtimeIntervalMs"] = reader.GetInt32(2).ToString(),
+                [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:NetworkProcessingIntervalMs"] = reader.GetInt32(2).ToString(),
                 [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:AggregateIntervalSeconds"] = reader.GetInt32(3).ToString(),
                 [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:HistoryRetentionDays"] = reader.GetInt32(4).ToString(),
                 [$"{Monitor.Contracts.Options.MonitorSettings.SectionName}:TopNDefault"] = reader.GetInt32(5).ToString()

@@ -3,8 +3,8 @@ using Monitor.Contracts.Options;
 
 namespace Monitor.WebApi.Services;
 
-// 实时推送服务只负责调度广播频率，实际 DTO 组装和 SignalR 发送交给 MonitorRealtimeBroadcaster。
-// 广播周期跟随硬件采样和网络实时刷新中更短的那个间隔，设置变化后立即触发一次广播。
+// 实时推送服务只负责调度硬件广播频率，实际 DTO 组装和 SignalR 发送交给 MonitorRealtimeBroadcaster。
+// 广播周期跟随硬件采样间隔，设置变化后立即触发一次广播。
 public sealed class MonitorRealtimePushHostedService(
     MonitorRealtimeBroadcaster broadcaster,
     IMonitorSettingsProvider settings,
@@ -65,10 +65,8 @@ public sealed class MonitorRealtimePushHostedService(
 
     private static TimeSpan GetInterval(MonitorSettings settings)
     {
-        // 最小 500ms 防止误配置导致广播过于频繁；取较短周期保证硬件或网络任一路数据更新都能及时推送。
-        var intervalMs = Math.Max(
-            500,
-            Math.Min(settings.HardwareSampleIntervalMs, settings.NetworkRealtimeIntervalMs));
+        // 最小 500ms 防止误配置导致广播过于频繁。
+        var intervalMs = Math.Max(500, settings.HardwareSampleIntervalMs);
         return TimeSpan.FromMilliseconds(intervalMs);
     }
 }

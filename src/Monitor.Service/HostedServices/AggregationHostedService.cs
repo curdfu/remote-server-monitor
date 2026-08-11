@@ -6,8 +6,8 @@ using Microsoft.Data.Sqlite;
 
 namespace Monitor.Service.HostedServices;
 
-// AggregationHostedService 定期驱动网络聚合器刷新实时速率，并把已经封口的流量 bucket 批量写入 SQLite。
-// ETW 原始事件由 collector 推送到聚合器，本服务不直接处理单个包，只负责刷新和持久化节奏。
+// AggregationHostedService 定期追平网络事件，并把已经封口的流量 bucket 批量写入 SQLite。
+// ETW 原始事件由 collector 推送到聚合器，本服务不直接处理单个包，只负责追平和持久化节奏。
 public sealed class AggregationHostedService(
     ILogger<AggregationHostedService> logger,
     INetworkAggregator networkAggregator,
@@ -16,22 +16,22 @@ public sealed class AggregationHostedService(
     IMonitorSettingsProvider settings) : BackgroundService
 {
     private const int PersistenceBatchSize = 500;
-    private static readonly TimeSpan MinimumRealtimeRefreshTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan MaximumRealtimeRefreshTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan MinimumAggregationTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan MaximumAggregationTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan FailureLogInterval = TimeSpan.FromMinutes(1);
     private DateTimeOffset _lastCycleFailureLogAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastPersistenceFailureLogAt = DateTimeOffset.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // 启动后先刷新一次，避免前端第一次请求只能读到空的实时缓存。
-        await RunRealtimeCycleSafeAsync(stoppingToken);
+        // 启动后先追平一次，尽快把已经封口的流量桶写入数据库。
+        await RunAggregationCycleSafeAsync(stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var interval = TimeSpan.FromMilliseconds(settings.Current.NetworkRealtimeIntervalMs);
+            var interval = TimeSpan.FromMilliseconds(settings.Current.NetworkProcessingIntervalMs);
             await WaitForIntervalOrSettingsChangeAsync(interval, stoppingToken);
-            await RunRealtimeCycleSafeAsync(stoppingToken);
+            await RunAggregationCycleSafeAsync(stoppingToken);
         }
     }
 
@@ -87,7 +87,7 @@ public sealed class AggregationHostedService(
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
             {
-                // 实时快照已在当前周期先更新；持久化错误只能延后写入，不能让后台服务退出。
+                // 持久化错误只能延后写入，不能让后台服务退出。
                 LogPersistenceFailure(
                     LogLevel.Error,
                     exception,
@@ -98,14 +98,14 @@ public sealed class AggregationHostedService(
         }
     }
 
-    private async Task RunRealtimeCycleSafeAsync(CancellationToken stoppingToken)
+    private async Task RunAggregationCycleSafeAsync(CancellationToken stoppingToken)
     {
         using var cycleCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-        cycleCancellation.CancelAfter(GetRealtimeRefreshTimeout());
+        cycleCancellation.CancelAfter(GetAggregationTimeout());
 
         try
         {
-            await RefreshRealtimeCacheAsync(cycleCancellation.Token);
+            await FlushAggregationAsync(cycleCancellation.Token);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -116,39 +116,33 @@ public sealed class AggregationHostedService(
             LogCycleFailure(
                 LogLevel.Warning,
                 null,
-                "Network realtime aggregation cycle exceeded its timeout of {Timeout}. The next cycle will retry.",
-                GetRealtimeRefreshTimeout());
+                "Network aggregation cycle exceeded its timeout of {Timeout}. The next cycle will retry.",
+                GetAggregationTimeout());
         }
         catch (Exception exception)
         {
             LogCycleFailure(
                 LogLevel.Error,
                 exception,
-                "Network realtime aggregation cycle failed. The next cycle will retry.");
+                "Network aggregation cycle failed. The next cycle will retry.");
         }
     }
 
-    private async Task RefreshRealtimeCacheAsync(CancellationToken cancellationToken)
+    private async Task FlushAggregationAsync(CancellationToken cancellationToken)
     {
-        // GetRealtimeSnapshotAsync 会等待已入队事件处理完，因此这里也是网络链路的定期追平点。
-        var snapshot = await networkAggregator.GetRealtimeSnapshotAsync(cancellationToken);
+        // 先等待调用前已入队事件处理完，再旋转并持久化已经封口的 bucket。
+        await networkAggregator.FlushAsync(cancellationToken);
         await PersistPendingBucketsAsync(cancellationToken);
-
-        logger.LogDebug(
-            "Aggregated network snapshot at {SampleTime}, up={Upload}, down={Download}.",
-            snapshot.SampleTime,
-            snapshot.TotalUploadBytesPerSecond,
-            snapshot.TotalDownloadBytesPerSecond);
     }
 
-    private TimeSpan GetRealtimeRefreshTimeout()
+    private TimeSpan GetAggregationTimeout()
     {
-        var configuredInterval = TimeSpan.FromMilliseconds(settings.Current.NetworkRealtimeIntervalMs);
+        var configuredInterval = TimeSpan.FromMilliseconds(settings.Current.NetworkProcessingIntervalMs);
         var scaledTimeout = TimeSpan.FromTicks(configuredInterval.Ticks * 5);
-        return scaledTimeout < MinimumRealtimeRefreshTimeout
-            ? MinimumRealtimeRefreshTimeout
-            : scaledTimeout > MaximumRealtimeRefreshTimeout
-                ? MaximumRealtimeRefreshTimeout
+        return scaledTimeout < MinimumAggregationTimeout
+            ? MinimumAggregationTimeout
+            : scaledTimeout > MaximumAggregationTimeout
+                ? MaximumAggregationTimeout
                 : scaledTimeout;
     }
 

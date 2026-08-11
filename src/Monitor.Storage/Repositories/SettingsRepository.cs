@@ -41,7 +41,7 @@ public sealed class SettingsRepository(
         {
             HttpPort = reader.GetInt32(0),
             HardwareSampleIntervalMs = reader.GetInt32(1),
-            NetworkRealtimeIntervalMs = reader.GetInt32(2),
+            NetworkProcessingIntervalMs = reader.GetInt32(2),
             AggregateIntervalSeconds = reader.GetInt32(3),
             HistoryRetentionDays = reader.GetInt32(4),
             TopNDefault = reader.GetInt32(5)
@@ -63,7 +63,8 @@ public sealed class SettingsRepository(
         await connection.OpenAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
-        // 网络实时刷新间隔与历史聚合粒度分别保存，避免把页面刷新节奏和历史 bucket 粒度混为一谈。
+        // network_sample_interval_ms 是历史兼容字段，现在用于网络事件追平和持久化检查节奏。
+        // 它与历史 bucket 粒度分别保存，避免把处理频率和统计粒度混为一谈。
         command.CommandText = """
                               INSERT INTO settings (
                                   id,
@@ -80,7 +81,7 @@ public sealed class SettingsRepository(
                                   1,
                                   $httpPort,
                                   $hardwareSampleIntervalMs,
-                                  $networkRealtimeIntervalMs,
+                                  $networkProcessingIntervalMs,
                                   $aggregateIntervalSeconds,
                                   $historyRetentionDays,
                                   $topNDefault,
@@ -100,7 +101,7 @@ public sealed class SettingsRepository(
         var now = DateTimeOffset.UtcNow.ToString("O");
         command.Parameters.AddWithValue("$httpPort", settings.HttpPort);
         command.Parameters.AddWithValue("$hardwareSampleIntervalMs", settings.HardwareSampleIntervalMs);
-        command.Parameters.AddWithValue("$networkRealtimeIntervalMs", settings.NetworkRealtimeIntervalMs);
+        command.Parameters.AddWithValue("$networkProcessingIntervalMs", settings.NetworkProcessingIntervalMs);
         command.Parameters.AddWithValue("$aggregateIntervalSeconds", settings.AggregateIntervalSeconds);
         command.Parameters.AddWithValue("$historyRetentionDays", settings.HistoryRetentionDays);
         command.Parameters.AddWithValue("$topNDefault", settings.TopNDefault);
@@ -109,10 +110,10 @@ public sealed class SettingsRepository(
 
         await command.ExecuteNonQueryAsync(cancellationToken);
         logger.LogInformation(
-            "Settings persisted to SQLite. HttpPort={HttpPort}, HardwareIntervalMs={HardwareIntervalMs}, NetworkRealtimeIntervalMs={NetworkRealtimeIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}",
+            "Settings persisted to SQLite. HttpPort={HttpPort}, HardwareIntervalMs={HardwareIntervalMs}, NetworkProcessingIntervalMs={NetworkProcessingIntervalMs}, AggregateIntervalSeconds={AggregateIntervalSeconds}, HistoryRetentionDays={HistoryRetentionDays}, TopNDefault={TopNDefault}",
             settings.HttpPort,
             settings.HardwareSampleIntervalMs,
-            settings.NetworkRealtimeIntervalMs,
+            settings.NetworkProcessingIntervalMs,
             settings.AggregateIntervalSeconds,
             settings.HistoryRetentionDays,
             settings.TopNDefault);

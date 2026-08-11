@@ -5,13 +5,13 @@ import { readFile } from 'node:fs/promises';
 const aggregationServicePath = new URL('../Monitor.Service/HostedServices/AggregationHostedService.cs', import.meta.url);
 const collectorServicePath = new URL('../Monitor.Service/HostedServices/CollectorHostedService.cs', import.meta.url);
 
-test('realtime aggregation isolates persistence failures from the hosted-service loop', async () => {
+test('network aggregation isolates persistence failures from the hosted-service loop', async () => {
   const source = await readFile(aggregationServicePath, 'utf8');
 
   assert.match(
     source,
-    /RunRealtimeCycleSafeAsync/,
-    'expected the aggregation loop to execute each realtime cycle behind an exception boundary',
+    /RunAggregationCycleSafeAsync/,
+    'expected the aggregation loop to execute each cycle behind an exception boundary',
   );
 
   assert.match(

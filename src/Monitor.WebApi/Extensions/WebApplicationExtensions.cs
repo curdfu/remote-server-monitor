@@ -32,19 +32,13 @@ public static class WebApplicationExtensions
             const long networkAggregationBacklogThreshold = 100_000;
             var utcNow = DateTimeOffset.UtcNow;
             var hardware = hardwareSnapshotBuffer.GetLatest();
-            var network = networkAggregator.GetLatestRealtimeSnapshot();
             var collectorDiagnostics = networkCollectorDiagnostics.GetSnapshot();
             var currentSettings = settings.Current;
 
             var hardwareAgeSeconds = hardware is null
                 ? (double?)null
                 : (utcNow - hardware.SampleTime).TotalSeconds;
-            var networkAgeSeconds = network is null
-                ? (double?)null
-                : (utcNow - network.SampleTime).TotalSeconds;
-
             var hardwareThresholdSeconds = Math.Max(currentSettings.HardwareSampleIntervalMs / 1000d * 3d, 5d);
-            var networkThresholdSeconds = Math.Max(currentSettings.NetworkRealtimeIntervalMs / 1000d * 3d, 5d);
             var sessionObservedEvents = collectorDiagnostics.PublishedEvents + collectorDiagnostics.LostEvents;
             var sessionLossRate = sessionObservedEvents > 0
                 ? collectorDiagnostics.LostEvents * 100d / sessionObservedEvents
@@ -56,8 +50,6 @@ public static class WebApplicationExtensions
 
             var hardwareHealthy = hardwareAgeSeconds.HasValue && hardwareAgeSeconds.Value <= hardwareThresholdSeconds;
             var networkHealthy = networkCollector.IsRunning &&
-                                 networkAgeSeconds.HasValue &&
-                                 networkAgeSeconds.Value <= networkThresholdSeconds &&
                                  collectorDiagnostics.LostEvents == 0 &&
                                  networkAggregator.PendingEventCount < networkAggregationBacklogThreshold;
 
@@ -75,9 +67,6 @@ public static class WebApplicationExtensions
                 network = new
                 {
                     collectorRunning = networkCollector.IsRunning,
-                    latestSampleTime = network?.SampleTime,
-                    sampleAgeSeconds = networkAgeSeconds,
-                    thresholdSeconds = networkThresholdSeconds,
                     isHealthy = networkHealthy,
                     aggregation = new
                     {

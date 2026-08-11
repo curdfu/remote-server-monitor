@@ -1,8 +1,5 @@
 import * as signalR from '@microsoft/signalr';
-import type {
-  HardwareRealtimeDto,
-  NetworkRealtimeDto
-} from '../types/monitor';
+import type { HardwareRealtimeDto } from '../types/monitor';
 
 type Listener<T> = (payload: T) => void;
 
@@ -13,7 +10,6 @@ export type RealtimeConnectionState =
   | 'disconnected';
 
 const hardwareListeners = new Set<Listener<HardwareRealtimeDto>>();
-const networkListeners = new Set<Listener<NetworkRealtimeDto>>();
 const connectionStateListeners = new Set<Listener<RealtimeConnectionState>>();
 
 let connection: signalR.HubConnection | null = null;
@@ -57,14 +53,9 @@ async function invokeIfConnected(methodName: string) {
 }
 
 async function syncActiveTopicSubscriptions() {
-  await Promise.all([
-    hardwareListeners.size > 0
-      ? invokeIfConnected('SubscribeHardware')
-      : Promise.resolve(),
-    networkListeners.size > 0
-      ? invokeIfConnected('SubscribeNetwork')
-      : Promise.resolve()
-  ]);
+  if (hardwareListeners.size > 0) {
+    await invokeIfConnected('SubscribeHardware');
+  }
 }
 
 // SignalR 断开后兜底重连：后端 Hub 不可用时，前端每 5 秒再尝试一次
@@ -95,10 +86,6 @@ function ensureConnection() {
 
   connection.on('hardwareRealtime', (payload: HardwareRealtimeDto) => {
     emitPayload(hardwareListeners, payload);
-  });
-
-  connection.on('networkRealtime', (payload: NetworkRealtimeDto) => {
-    emitPayload(networkListeners, payload);
   });
 
   connection.onreconnecting(() => {
@@ -194,15 +181,6 @@ export function subscribeHardwareRealtime(listener: Listener<HardwareRealtimeDto
     listener,
     'SubscribeHardware',
     'UnsubscribeHardware'
-  );
-}
-
-export function subscribeNetworkRealtime(listener: Listener<NetworkRealtimeDto>) {
-  return subscribeTopic(
-    networkListeners,
-    listener,
-    'SubscribeNetwork',
-    'UnsubscribeNetwork'
   );
 }
 

@@ -4,7 +4,7 @@
       iconName="settings"
       kicker="设置"
       title="设置"
-      description="调整端口、硬件与网络实时刷新间隔、统计粒度和历史保留时间。"
+      description="调整端口、硬件采样与网络处理间隔、统计粒度和历史保留时间。"
     >
       <template #actions>
         <div class="actions-row settings-actions page-tier-toolbar-inline">
@@ -25,7 +25,7 @@
         <div>
           <span class="section-overline">RUNTIME PROFILE</span>
           <h3>选择运行策略</h3>
-          <p class="section-subtitle">预设仅调整硬件与网络实时刷新频率；统计粒度、历史保留时间和排行数量保持不变。</p>
+          <p class="section-subtitle">预设仅调整硬件采样与网络处理频率；统计粒度、历史保留时间和排行数量保持不变。</p>
         </div>
         <span class="section-tag">{{ activeProfileLabel }}</span>
       </div>
@@ -56,8 +56,8 @@
           <strong>{{ hardwareSamplesPerDay }}/天</strong>
         </div>
         <div class="settings-impact-item">
-          <span>网络实时刷新</span>
-          <strong>{{ networkRefreshesPerMinute }}/分钟</strong>
+          <span>网络处理检查</span>
+          <strong>{{ networkProcessingChecksPerMinute }}/分钟</strong>
         </div>
         <div class="settings-impact-item">
           <span>资源倾向</span>
@@ -83,9 +83,9 @@
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
         <div class="metric-top">
-          <span class="metric-label metric-label-inline"><AppIcon name="network" :size="14" />网络实时刷新间隔</span>
+          <span class="metric-label metric-label-inline"><AppIcon name="network" :size="14" />网络处理间隔</span>
         </div>
-        <strong class="metric-value">{{ form.networkRealtimeIntervalMs }} ms</strong>
+        <strong class="metric-value">{{ form.networkProcessingIntervalMs }} ms</strong>
         <span class="metric-hint">保存后会实时生效</span>
       </div>
       <div class="card metric-card metric-card-compact settings-stat-card">
@@ -143,10 +143,10 @@
           </label>
 
           <label class="field">
-            <span>网络实时刷新间隔 (ms)</span>
-            <input v-model.number="form.networkRealtimeIntervalMs" type="number" min="500" max="60000" />
-            <small class="field-help">控制实时速率聚合、持久化检查和推送节奏；ETW 原始事件仍会持续采集。</small>
-            <small v-if="validation.networkRealtimeIntervalMs" class="field-error">{{ validation.networkRealtimeIntervalMs }}</small>
+            <span>网络处理间隔 (ms)</span>
+            <input v-model.number="form.networkProcessingIntervalMs" type="number" min="500" max="60000" />
+            <small class="field-help">控制网络事件追平、完成时间桶轮转和持久化检查；ETW 原始事件仍会持续采集。</small>
+            <small v-if="validation.networkProcessingIntervalMs" class="field-error">{{ validation.networkProcessingIntervalMs }}</small>
           </label>
 
           <label class="field">
@@ -244,7 +244,7 @@ import type { AppSettingsDto } from '../types/monitor';
 const defaultForm: AppSettingsDto = {
   httpPort: 5188,
   hardwareSampleIntervalMs: 1000,
-  networkRealtimeIntervalMs: 1000,
+  networkProcessingIntervalMs: 1000,
   aggregateIntervalSeconds: 10,
   historyRetentionDays: 30,
   topNDefault: 10
@@ -259,7 +259,7 @@ interface PerformanceProfile {
   description: string;
   values: Pick<
     AppSettingsDto,
-    'hardwareSampleIntervalMs' | 'networkRealtimeIntervalMs'
+    'hardwareSampleIntervalMs' | 'networkProcessingIntervalMs'
   >;
 }
 
@@ -271,7 +271,7 @@ const performanceProfiles: readonly PerformanceProfile[] = [
     description: '适合长期后台运行，优先降低采样与聚合开销。',
     values: {
       hardwareSampleIntervalMs: 5000,
-      networkRealtimeIntervalMs: 5000
+      networkProcessingIntervalMs: 5000
     }
   },
   {
@@ -281,7 +281,7 @@ const performanceProfiles: readonly PerformanceProfile[] = [
     description: '兼顾监控响应、图表细节和日常服务器开销。',
     values: {
       hardwareSampleIntervalMs: 2000,
-      networkRealtimeIntervalMs: 2000
+      networkProcessingIntervalMs: 2000
     }
   },
   {
@@ -291,7 +291,7 @@ const performanceProfiles: readonly PerformanceProfile[] = [
     description: '更快响应与更细网络粒度，适合短期排障观察。',
     values: {
       hardwareSampleIntervalMs: 1000,
-      networkRealtimeIntervalMs: 1000
+      networkProcessingIntervalMs: 1000
     }
   }
 ] as const;
@@ -315,8 +315,8 @@ const validation = computed<Record<string, string>>(() => {
     errors.hardwareSampleIntervalMs = '硬件采样间隔必须在 500 ~ 60000 ms 之间。';
   }
 
-  if (!isIntegerInRange(form.networkRealtimeIntervalMs, 500, 60000)) {
-    errors.networkRealtimeIntervalMs = '网络实时刷新间隔必须在 500 ~ 60000 ms 之间。';
+  if (!isIntegerInRange(form.networkProcessingIntervalMs, 500, 60000)) {
+    errors.networkProcessingIntervalMs = '网络处理间隔必须在 500 ~ 60000 ms 之间。';
   }
 
   if (!isIntegerInRange(form.aggregateIntervalSeconds, 1, 3600)) {
@@ -360,17 +360,17 @@ const hardwareSamplesPerDay = computed(() =>
   formatCompactNumber(safeDivide(86_400_000, form.hardwareSampleIntervalMs))
 );
 
-const networkRefreshesPerMinute = computed(() =>
-  formatCompactNumber(safeDivide(60_000, form.networkRealtimeIntervalMs))
+const networkProcessingChecksPerMinute = computed(() =>
+  formatCompactNumber(safeDivide(60_000, form.networkProcessingIntervalMs))
 );
 
 const resourceImpactLabel = computed(() => {
-  if (form.hardwareSampleIntervalMs >= 5000 && form.networkRealtimeIntervalMs >= 5000) {
+  if (form.hardwareSampleIntervalMs >= 5000 && form.networkProcessingIntervalMs >= 5000) {
     return '低占用';
   }
 
-  if (form.hardwareSampleIntervalMs <= 1000 || form.networkRealtimeIntervalMs <= 1000) {
-    return '高实时';
+  if (form.hardwareSampleIntervalMs <= 1000 || form.networkProcessingIntervalMs <= 1000) {
+    return '高频';
   }
 
   return '均衡';

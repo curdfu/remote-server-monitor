@@ -134,30 +134,7 @@ MVP 不直接存每条网络事件，而是存聚合结果，明显降低数据�
 
 ---
 
-## 五、network_realtime_cache（可选）
-
-如果希望支持异常恢复后的瞬时追踪，可增加轻量实时表；否则只放内存即可。
-
-```sql
-CREATE TABLE network_realtime_cache (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sample_time TEXT NOT NULL,
-    app_id INTEGER NOT NULL,
-    upload_bps REAL,
-    download_bps REAL,
-    wan_upload_bps REAL,
-    wan_download_bps REAL,
-    lan_upload_bps REAL,
-    lan_download_bps REAL,
-    FOREIGN KEY(app_id) REFERENCES app_registry(id)
-);
-```
-
-MVP 阶段也可以不建，直接用内存缓存。
-
----
-
-## 六、推荐查询示例
+## 五、推荐查询示例
 
 ## 1. 查询某时间区间 Top App 下载量
 

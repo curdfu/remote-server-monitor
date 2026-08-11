@@ -29,16 +29,6 @@ export interface DiskSpaceDto {
   freeBytes?: number | null;
 }
 
-export interface NetworkRealtimeDto {
-  sampleTime: string;
-  totalUploadBytesPerSecond: number;
-  totalDownloadBytesPerSecond: number;
-  wanUploadBytesPerSecond: number;
-  wanDownloadBytesPerSecond: number;
-  lanUploadBytesPerSecond: number;
-  lanDownloadBytesPerSecond: number;
-}
-
 export interface AppTrafficSummaryDto {
   appKey: string;
   processName: string;
@@ -96,13 +86,12 @@ export interface NetworkDashboardDto {
   ignoredApps: IgnoredNetworkAppDto[];
   overview: NetworkPeriodSummaryDto;
   totals: NetworkPeriodSummaryDto;
-  realtime?: NetworkRealtimeDto | null;
 }
 
 export interface AppSettingsDto {
   httpPort: number;
   hardwareSampleIntervalMs: number;
-  networkRealtimeIntervalMs: number;
+  networkProcessingIntervalMs: number;
   aggregateIntervalSeconds: number;
   historyRetentionDays: number;
   topNDefault: number;
@@ -110,5 +99,4 @@ export interface AppSettingsDto {
 
 export interface RealtimeOverviewDto {
   hardware: HardwareRealtimeDto;
-  network: NetworkRealtimeDto;
 }

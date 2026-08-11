@@ -188,7 +188,7 @@ public sealed class RetentionService(
                 return totalDeleted;
             }
 
-            // 每批提交后显式让出时间片，让硬件和网络实时写入有机会获得写锁。
+            // 每批提交后显式让出时间片，让硬件与网络聚合写入有机会获得写锁。
             await Task.Delay(BatchYieldDelay, cancellationToken);
         }
 
