@@ -8,11 +8,11 @@
     >
       <template #actions>
         <div class="actions-row settings-actions page-tier-toolbar-inline">
-          <button class="chip-button settings-action-button" :disabled="isLoading || isSaving" @click="loadSettings">
+          <button class="chip-button settings-action-button" :disabled="isBusy" @click="refreshSettings()">
             <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
             刷新
           </button>
-          <button class="ghost-button settings-action-button" :disabled="!isDirty || isSaving" @click="save">
+          <button class="ghost-button settings-action-button" :disabled="!canSave || !isDirty" @click="save">
             <span class="button-inline-icon"><AppIcon name="settings" :size="14" /></span>
             {{ isSaving ? '保存中...' : '保存' }}
           </button>
@@ -38,6 +38,7 @@
           class="settings-profile-button"
           :class="{ 'settings-profile-button-active': activeProfileId === profile.id }"
           :aria-pressed="activeProfileId === profile.id"
+          :disabled="isBusy"
           @click="applyPerformanceProfile(profile)"
         >
           <span class="settings-profile-kicker">{{ profile.kicker }}</span>
@@ -66,37 +67,6 @@
       </div>
     </section>
 
-    <div class="grid page-tier-stats">
-      <div class="card metric-card metric-card-compact settings-stat-card">
-        <div class="metric-top">
-          <span class="metric-label metric-label-inline"><AppIcon name="settings" :size="14" />当前访问端口</span>
-        </div>
-        <strong class="metric-value">{{ form.httpPort }}</strong>
-        <span class="metric-hint">保存后会持久化，端口变更仍需重启</span>
-      </div>
-      <div class="card metric-card metric-card-compact settings-stat-card">
-        <div class="metric-top">
-          <span class="metric-label metric-label-inline"><AppIcon name="cpu" :size="14" />硬件采样间隔</span>
-        </div>
-        <strong class="metric-value">{{ form.hardwareSampleIntervalMs }} ms</strong>
-        <span class="metric-hint">保存后会实时生效</span>
-      </div>
-      <div class="card metric-card metric-card-compact settings-stat-card">
-        <div class="metric-top">
-          <span class="metric-label metric-label-inline"><AppIcon name="network" :size="14" />网络处理间隔</span>
-        </div>
-        <strong class="metric-value">{{ form.networkProcessingIntervalMs }} ms</strong>
-        <span class="metric-hint">保存后会实时生效</span>
-      </div>
-      <div class="card metric-card metric-card-compact settings-stat-card">
-        <div class="metric-top">
-          <span class="metric-label metric-label-inline"><AppIcon name="disk" :size="14" />历史保留天数</span>
-        </div>
-        <strong class="metric-value">{{ form.historyRetentionDays }} 天</strong>
-        <span class="metric-hint">到期后会自动清理旧数据</span>
-      </div>
-    </div>
-
     <div v-if="errorMessage" class="card state-card error-state" role="alert">
       {{ errorMessage }}
     </div>
@@ -115,11 +85,11 @@
             <span class="section-tag">HTTP 端口配置</span>
           </div>
 
-          <label class="field">
+          <label class="field" for="settings-http-port">
             <span>HTTP 端口</span>
-            <input v-model.number="form.httpPort" type="number" min="1" max="65535" />
-            <small class="field-help">本地页面访问端口，例如 `http://127.0.0.1:5188`。</small>
-            <small v-if="validation.httpPort" class="field-error">{{ validation.httpPort }}</small>
+            <input id="settings-http-port" v-model.number="form.httpPort" type="number" min="1" max="65535" :disabled="isBusy" :aria-invalid="Boolean(validation.httpPort)" :aria-describedby="validation.httpPort ? 'settings-http-port-help settings-http-port-error' : 'settings-http-port-help'" />
+            <small id="settings-http-port-help" class="field-help">本地页面访问端口，例如 http://127.0.0.1:5188。保存后需要重启服务。</small>
+            <small v-if="validation.httpPort" id="settings-http-port-error" class="field-error">{{ validation.httpPort }}</small>
           </label>
         </div>
 
@@ -135,25 +105,25 @@
             <span class="section-tag">采样与聚合</span>
           </div>
 
-          <label class="field">
+          <label class="field" for="settings-hardware-interval">
             <span>硬件采样间隔 (ms)</span>
-            <input v-model.number="form.hardwareSampleIntervalMs" type="number" min="500" max="60000" />
-            <small class="field-help">建议 1000ms 左右，兼顾刷新速度和资源占用。</small>
-            <small v-if="validation.hardwareSampleIntervalMs" class="field-error">{{ validation.hardwareSampleIntervalMs }}</small>
+            <input id="settings-hardware-interval" v-model.number="form.hardwareSampleIntervalMs" type="number" min="500" max="60000" :disabled="isBusy" :aria-invalid="Boolean(validation.hardwareSampleIntervalMs)" :aria-describedby="validation.hardwareSampleIntervalMs ? 'settings-hardware-interval-help settings-hardware-interval-error' : 'settings-hardware-interval-help'" />
+            <small id="settings-hardware-interval-help" class="field-help">建议 1000ms 左右，兼顾刷新速度和资源占用。</small>
+            <small v-if="validation.hardwareSampleIntervalMs" id="settings-hardware-interval-error" class="field-error">{{ validation.hardwareSampleIntervalMs }}</small>
           </label>
 
-          <label class="field">
+          <label class="field" for="settings-network-interval">
             <span>网络处理间隔 (ms)</span>
-            <input v-model.number="form.networkProcessingIntervalMs" type="number" min="500" max="60000" />
-            <small class="field-help">控制网络事件追平、完成时间桶轮转和持久化检查；ETW 原始事件仍会持续采集。</small>
-            <small v-if="validation.networkProcessingIntervalMs" class="field-error">{{ validation.networkProcessingIntervalMs }}</small>
+            <input id="settings-network-interval" v-model.number="form.networkProcessingIntervalMs" type="number" min="500" max="60000" :disabled="isBusy" :aria-invalid="Boolean(validation.networkProcessingIntervalMs)" :aria-describedby="validation.networkProcessingIntervalMs ? 'settings-network-interval-help settings-network-interval-error' : 'settings-network-interval-help'" />
+            <small id="settings-network-interval-help" class="field-help">控制网络事件追平、完成时间桶轮转和持久化检查；ETW 原始事件仍会持续采集。</small>
+            <small v-if="validation.networkProcessingIntervalMs" id="settings-network-interval-error" class="field-error">{{ validation.networkProcessingIntervalMs }}</small>
           </label>
 
-          <label class="field">
+          <label class="field" for="settings-aggregate-interval">
             <span>默认统计粒度 (秒)</span>
-            <input v-model.number="form.aggregateIntervalSeconds" type="number" min="1" max="3600" />
-            <small class="field-help">对应后端 `AggregateIntervalSeconds`，用于网络历史数据聚合。</small>
-            <small v-if="validation.aggregateIntervalSeconds" class="field-error">{{ validation.aggregateIntervalSeconds }}</small>
+            <input id="settings-aggregate-interval" v-model.number="form.aggregateIntervalSeconds" type="number" min="1" max="3600" :disabled="isBusy" :aria-invalid="Boolean(validation.aggregateIntervalSeconds)" :aria-describedby="validation.aggregateIntervalSeconds ? 'settings-aggregate-interval-help settings-aggregate-interval-error' : 'settings-aggregate-interval-help'" />
+            <small id="settings-aggregate-interval-help" class="field-help">用于网络历史数据聚合，较小数值会带来更细的趋势。</small>
+            <small v-if="validation.aggregateIntervalSeconds" id="settings-aggregate-interval-error" class="field-error">{{ validation.aggregateIntervalSeconds }}</small>
           </label>
         </div>
 
@@ -169,18 +139,18 @@
             <span class="section-tag">存储与默认展示</span>
           </div>
 
-          <label class="field">
+          <label class="field" for="settings-retention-days">
             <span>历史保留天数</span>
-            <input v-model.number="form.historyRetentionDays" type="number" min="1" max="3650" />
-            <small class="field-help">超过这个天数的历史数据会被清理。</small>
-            <small v-if="validation.historyRetentionDays" class="field-error">{{ validation.historyRetentionDays }}</small>
+            <input id="settings-retention-days" v-model.number="form.historyRetentionDays" type="number" min="1" max="3650" :disabled="isBusy" :aria-invalid="Boolean(validation.historyRetentionDays)" :aria-describedby="validation.historyRetentionDays ? 'settings-retention-days-help settings-retention-days-error' : 'settings-retention-days-help'" />
+            <small id="settings-retention-days-help" class="field-help">超过这个天数的历史数据会被清理。</small>
+            <small v-if="validation.historyRetentionDays" id="settings-retention-days-error" class="field-error">{{ validation.historyRetentionDays }}</small>
           </label>
 
-          <label class="field">
+          <label class="field" for="settings-top-n">
             <span>默认排行数量</span>
-            <input v-model.number="form.topNDefault" type="number" min="1" max="100" />
-            <small class="field-help">影响网络页面默认显示的排行数量。</small>
-            <small v-if="validation.topNDefault" class="field-error">{{ validation.topNDefault }}</small>
+            <input id="settings-top-n" v-model.number="form.topNDefault" type="number" min="1" max="100" :disabled="isBusy" :aria-invalid="Boolean(validation.topNDefault)" :aria-describedby="validation.topNDefault ? 'settings-top-n-help settings-top-n-error' : 'settings-top-n-help'" />
+            <small id="settings-top-n-help" class="field-help">影响网络页面默认显示的排行数量。</small>
+            <small v-if="validation.topNDefault" id="settings-top-n-error" class="field-error">{{ validation.topNDefault }}</small>
           </label>
         </div>
       </form>
@@ -191,26 +161,22 @@
             <span class="panel-icon"><AppIcon name="status" :size="16" /></span>
             <div>
               <h3>保存说明</h3>
-              <p class="panel-subtitle">保存逻辑保持不变，仅强化信息层级。</p>
+              <p class="panel-subtitle">先修改草稿，再一次性保存；保存成功后会明确提示生效范围。</p>
             </div>
           </div>
           <span class="section-tag">{{ isDirty ? '有未保存修改' : '已同步' }}</span>
         </div>
 
         <ul class="simple-list compact">
-          <li>所有设置都会先写入 SQLite 持久化保存。</li>
-          <li>除访问端口外，其余采样、聚合和展示配置会在运行中实时生效。</li>
-          <li>如果输入超出合法范围，前端会先拦截，再阻止提交。</li>
+          <li>端口变更保存后需要重启服务，其余配置会在运行中逐步生效。</li>
+          <li>刷新会重新读取服务端已保存的配置，并可能放弃当前草稿。</li>
+          <li>输入超出合法范围时，保存按钮会保持禁用。</li>
         </ul>
 
         <div class="settings-side-actions">
-          <button class="chip-button" :disabled="!isDirty || isSaving" @click="resetForm">
+          <button class="chip-button" :disabled="!isDirty || isBusy" @click="resetForm">
             <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
-            重置
-          </button>
-          <button class="ghost-button" :disabled="isSaving || !canSave || !isDirty" @click="save">
-            <span class="button-inline-icon"><AppIcon name="settings" :size="14" /></span>
-            {{ isSaving ? '保存中...' : '保存' }}
+            放弃修改
           </button>
         </div>
       </aside>
@@ -240,6 +206,7 @@ import AppIcon from '../components/AppIcon.vue';
 import PageHeader from '../components/PageHeader.vue';
 import { getSettings, saveSettings } from '../services/api';
 import type { AppSettingsDto } from '../types/monitor';
+import { validateSettings } from '../utils/settingsValidation';
 
 const defaultForm: AppSettingsDto = {
   httpPort: 5188,
@@ -300,41 +267,20 @@ const form = reactive<AppSettingsDto>({ ...defaultForm });
 const original = ref<AppSettingsDto>({ ...defaultForm });
 const isLoading = ref(false);
 const isSaving = ref(false);
+const hasLoaded = ref(false);
 const errorMessage = ref('');
 const successMessage = ref('');
 let successMessageTimer: number | null = null;
+let settingsRequestVersion = 0;
+let isPageActive = false;
 
-const validation = computed<Record<string, string>>(() => {
-  const errors: Record<string, string> = {};
+const validation = computed(() => validateSettings(form));
 
-  if (!isIntegerInRange(form.httpPort, 1, 65535)) {
-    errors.httpPort = 'HTTP 端口必须在 1 ~ 65535 之间。';
-  }
+const isBusy = computed(() => isLoading.value || isSaving.value);
 
-  if (!isIntegerInRange(form.hardwareSampleIntervalMs, 500, 60000)) {
-    errors.hardwareSampleIntervalMs = '硬件采样间隔必须在 500 ~ 60000 ms 之间。';
-  }
-
-  if (!isIntegerInRange(form.networkProcessingIntervalMs, 500, 60000)) {
-    errors.networkProcessingIntervalMs = '网络处理间隔必须在 500 ~ 60000 ms 之间。';
-  }
-
-  if (!isIntegerInRange(form.aggregateIntervalSeconds, 1, 3600)) {
-    errors.aggregateIntervalSeconds = '默认统计粒度必须在 1 ~ 3600 秒之间。';
-  }
-
-  if (!isIntegerInRange(form.historyRetentionDays, 1, 3650)) {
-    errors.historyRetentionDays = '历史保留天数必须在 1 ~ 3650 天之间。';
-  }
-
-  if (!isIntegerInRange(form.topNDefault, 1, 100)) {
-    errors.topNDefault = '默认排行数量必须在 1 ~ 100 之间。';
-  }
-
-  return errors;
-});
-
-const canSave = computed(() => Object.keys(validation.value).length === 0);
+const canSave = computed(() =>
+  hasLoaded.value && !isBusy.value && Object.keys(validation.value).length === 0
+);
 
 const isDirty = computed(() =>
   JSON.stringify(form) !== JSON.stringify(original.value)
@@ -377,22 +323,26 @@ const resourceImpactLabel = computed(() => {
 });
 
 onMounted(() => {
+  isPageActive = true;
   window.addEventListener('beforeunload', handleBeforeUnload);
-  void loadSettings(true);
+  void loadInitialSettings();
 });
 
 onBeforeUnmount(() => {
+  isPageActive = false;
+  settingsRequestVersion++;
   window.removeEventListener('beforeunload', handleBeforeUnload);
   clearSuccessMessageTimer();
 });
 
 onBeforeRouteLeave(() => confirmDiscardChanges());
 
-async function loadSettings(skipDiscardConfirmation = false) {
-  if (!skipDiscardConfirmation && !confirmDiscardChanges()) {
+async function loadSettings(options: { confirmDiscard: boolean }) {
+  if (options.confirmDiscard && !confirmDiscardChanges()) {
     return;
   }
 
+  const requestVersion = ++settingsRequestVersion;
   isLoading.value = true;
   errorMessage.value = '';
   successMessage.value = '';
@@ -400,13 +350,25 @@ async function loadSettings(skipDiscardConfirmation = false) {
   try {
     // 调用后端 /api/settings：加载设置页初始配置
     const loaded = await getSettings();
+    if (!isPageActive || requestVersion !== settingsRequestVersion) return;
     Object.assign(form, loaded);
     original.value = { ...loaded };
+    hasLoaded.value = true;
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '加载设置失败。';
+    if (isPageActive && requestVersion === settingsRequestVersion) {
+      errorMessage.value = error instanceof Error ? error.message : '加载设置失败。';
+    }
   } finally {
-    isLoading.value = false;
+    if (requestVersion === settingsRequestVersion) isLoading.value = false;
   }
+}
+
+function loadInitialSettings() {
+  void loadSettings({ confirmDiscard: false });
+}
+
+function refreshSettings() {
+  void loadSettings({ confirmDiscard: true });
 }
 
 function resetForm() {
@@ -422,7 +384,17 @@ function applyPerformanceProfile(profile: PerformanceProfile) {
 }
 
 async function save() {
-  if (!canSave.value) {
+  if (!hasLoaded.value || isBusy.value) {
+    return;
+  }
+
+  if (!isDirty.value) {
+    errorMessage.value = '当前没有待保存的修改。';
+    successMessage.value = '';
+    return;
+  }
+
+  if (Object.keys(validation.value).length > 0) {
     errorMessage.value = '请先修正表单中的非法配置。';
     successMessage.value = '';
     return;
@@ -431,17 +403,27 @@ async function save() {
   isSaving.value = true;
   errorMessage.value = '';
   successMessage.value = '';
+  const requestVersion = ++settingsRequestVersion;
+  const payload = { ...form };
 
   try {
     // 调用后端 /api/settings：把当前表单保存到服务端，并用返回值回填页面
-    const saved = await saveSettings({ ...form });
+    const saved = await saveSettings(payload);
+    if (!isPageActive || requestVersion !== settingsRequestVersion) return;
+    const portChanged = saved.httpPort !== original.value.httpPort;
     Object.assign(form, saved);
     original.value = { ...saved };
-    showSuccessMessage('除访问端口外，其余配置已实时生效；端口变更仍需重启服务。');
+    showSuccessMessage(
+      portChanged
+        ? '采样、聚合和展示配置已实时生效；HTTP 端口变更需要重启服务。'
+        : '采样、聚合和展示配置已实时生效。'
+    );
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '保存设置失败。';
+    if (isPageActive && requestVersion === settingsRequestVersion) {
+      errorMessage.value = error instanceof Error ? error.message : '保存设置失败。';
+    }
   } finally {
-    isSaving.value = false;
+    if (requestVersion === settingsRequestVersion) isSaving.value = false;
   }
 }
 
@@ -463,22 +445,21 @@ function clearSuccessMessageTimer() {
 }
 
 function confirmDiscardChanges() {
-  return !isDirty.value ||
-    isSaving.value ||
-    window.confirm('当前设置尚未保存，确定要放弃这些修改吗？');
+  if (isSaving.value) {
+    errorMessage.value = '正在保存，请稍候再离开此页面。';
+    return false;
+  }
+
+  return !isDirty.value || window.confirm('当前设置尚未保存，确定要放弃这些修改吗？');
 }
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {
-  if (!isDirty.value || isSaving.value) {
+  if (!isDirty.value && !isSaving.value) {
     return;
   }
 
   event.preventDefault();
   event.returnValue = '';
-}
-
-function isIntegerInRange(value: number, minimum: number, maximum: number) {
-  return Number.isInteger(value) && value >= minimum && value <= maximum;
 }
 
 function safeDivide(dividend: number, divisor: number) {

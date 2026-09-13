@@ -14,6 +14,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IHardwareCollector>(sp => sp.GetRequiredService<LibreHardwareCollector>());
         services.AddSingleton<IDiskUsageProvider>(sp => sp.GetRequiredService<LibreHardwareCollector>());
         services.AddSingleton<IHardwareSnapshotBuffer, HardwareSnapshotBuffer>();
+        services.AddSingleton<IProcessCpuCollector, ProcessCpuCollector>();
+        services.AddSingleton<IProcessCpuSnapshotBuffer, ProcessCpuSnapshotBuffer>();
         return services;
     }
 }

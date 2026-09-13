@@ -114,11 +114,14 @@
       </button>
     </article>
 
-    <div v-if="errorMessage" class="card state-card error-state">
+    <div v-if="errorMessage" class="card state-card error-state" role="alert">
       {{ errorMessage }}
     </div>
+    <div v-if="settingsDefaultWarning" class="card state-card warning-state" role="status">
+      {{ settingsDefaultWarning }}
+    </div>
 
-    <section class="panel-grid network-section network-section-analytics">
+    <section class="panel-grid network-section network-section-analytics" :aria-busy="isLoading">
       <div class="network-section network-section-column network-section-column-analytics">
         <article class="card dashboard-panel-card network-section network-section-upload-download">
           <div class="panel-header">
@@ -139,7 +142,7 @@
                 <span class="ratio-summary-badge">发送</span>
               </div>
               <strong>{{ formatBytes(totalUploadBytes) }}</strong>
-              <small>{{ uploadPercent.toFixed(1) }}%</small>
+              <small>{{ formatRatioPercent(uploadDownloadTotalBytes, uploadPercent) }}</small>
             </div>
 
             <div class="ratio-summary-card ratio-summary-card-lan">
@@ -148,7 +151,7 @@
                 <span class="ratio-summary-badge">接收</span>
               </div>
               <strong>{{ formatBytes(totalDownloadBytes) }}</strong>
-              <small>{{ downloadPercent.toFixed(1) }}%</small>
+              <small>{{ formatRatioPercent(uploadDownloadTotalBytes, downloadPercent) }}</small>
             </div>
 
             <div class="ratio-summary-card ratio-summary-card-neutral">
@@ -174,7 +177,7 @@
             <div class="ratio-item">
               <div class="ratio-header">
                 <strong>上传</strong>
-                <span>{{ uploadPercent.toFixed(1) }}%</span>
+                <span>{{ formatRatioPercent(uploadDownloadTotalBytes, uploadPercent) }}</span>
               </div>
               <div class="ratio-track">
                 <div class="ratio-bar ratio-bar-wan" :style="{ width: `${uploadPercent}%` }"></div>
@@ -185,7 +188,7 @@
             <div class="ratio-item">
               <div class="ratio-header">
                 <strong>下载</strong>
-                <span>{{ downloadPercent.toFixed(1) }}%</span>
+                <span>{{ formatRatioPercent(uploadDownloadTotalBytes, downloadPercent) }}</span>
               </div>
               <div class="ratio-track">
                 <div class="ratio-bar ratio-bar-lan" :style="{ width: `${downloadPercent}%` }"></div>
@@ -202,7 +205,7 @@
               <span class="panel-icon"><AppIcon name="traffic" :size="16" /></span>
               <div>
                 <h3>WAN / LAN 占比</h3>
-                <p class="panel-subtitle">按当前筛选结果汇总的累计流量分布。</p>
+                <p class="panel-subtitle">按当前筛选结果汇总的累计流量分布，包含其他未分类流量。</p>
               </div>
             </div>
             <span class="section-tag">按当前筛选结果汇总</span>
@@ -215,7 +218,7 @@
                 <span class="ratio-summary-badge">外网</span>
               </div>
               <strong>{{ formatBytes(wanTotalBytes) }}</strong>
-              <small>{{ wanPercent.toFixed(1) }}%</small>
+              <small>{{ formatRatioPercent(overviewTotalBytes, wanPercent) }}</small>
             </div>
 
             <div class="ratio-summary-card ratio-summary-card-lan">
@@ -224,7 +227,7 @@
                 <span class="ratio-summary-badge">内网</span>
               </div>
               <strong>{{ formatBytes(lanTotalBytes) }}</strong>
-              <small>{{ lanPercent.toFixed(1) }}%</small>
+              <small>{{ formatRatioPercent(overviewTotalBytes, lanPercent) }}</small>
             </div>
 
             <div class="ratio-summary-card ratio-summary-card-loopback">
@@ -233,7 +236,16 @@
                 <span class="ratio-summary-badge">本地</span>
               </div>
               <strong>{{ formatBytes(loopbackTotalBytes) }}</strong>
-              <small>{{ loopbackPercent.toFixed(1) }}%</small>
+              <small>{{ formatRatioPercent(overviewTotalBytes, loopbackPercent) }}</small>
+            </div>
+
+            <div class="ratio-summary-card ratio-summary-card-other">
+              <div class="ratio-summary-top">
+                <span class="ratio-summary-label">其他流量</span>
+                <span class="ratio-summary-badge">未分类</span>
+              </div>
+              <strong>{{ formatBytes(otherTotalBytes) }}</strong>
+              <small>{{ formatRatioPercent(overviewTotalBytes, otherPercent) }}</small>
             </div>
 
             <div class="ratio-summary-card ratio-summary-card-neutral">
@@ -250,7 +262,7 @@
             <div class="ratio-item">
               <div class="ratio-header">
                 <strong>WAN</strong>
-                <span>{{ wanPercent.toFixed(1) }}%</span>
+                <span>{{ formatRatioPercent(overviewTotalBytes, wanPercent) }}</span>
               </div>
               <div class="ratio-track">
                 <div class="ratio-bar ratio-bar-wan" :style="{ width: `${wanPercent}%` }"></div>
@@ -261,7 +273,7 @@
             <div class="ratio-item">
               <div class="ratio-header">
                 <strong>LAN</strong>
-                <span>{{ lanPercent.toFixed(1) }}%</span>
+                <span>{{ formatRatioPercent(overviewTotalBytes, lanPercent) }}</span>
               </div>
               <div class="ratio-track">
                 <div class="ratio-bar ratio-bar-lan" :style="{ width: `${lanPercent}%` }"></div>
@@ -272,12 +284,23 @@
             <div class="ratio-item">
               <div class="ratio-header">
                 <strong>Loopback</strong>
-                <span>{{ loopbackPercent.toFixed(1) }}%</span>
+                <span>{{ formatRatioPercent(overviewTotalBytes, loopbackPercent) }}</span>
               </div>
               <div class="ratio-track">
                 <div class="ratio-bar ratio-bar-loopback" :style="{ width: `${loopbackPercent}%` }"></div>
               </div>
               <small class="muted">{{ formatBytes(loopbackTotalBytes) }}</small>
+            </div>
+
+            <div class="ratio-item">
+              <div class="ratio-header">
+                <strong>其他</strong>
+                <span>{{ formatRatioPercent(overviewTotalBytes, otherPercent) }}</span>
+              </div>
+              <div class="ratio-track">
+                <div class="ratio-bar ratio-bar-other" :style="{ width: `${otherPercent}%` }"></div>
+              </div>
+              <small class="muted">{{ formatBytes(otherTotalBytes) }}</small>
             </div>
           </div>
         </article>
@@ -307,6 +330,10 @@
               </button>
               <span class="section-tag">{{ rankingDescription }}</span>
             </div>
+          </div>
+
+          <div v-if="hasPendingFilterChanges" class="network-pending-state" role="status">
+            筛选条件已修改，正在等待最新结果；当前排行仍对应 {{ rankingDescription }}。
           </div>
 
           <div class="ranking-meta">
@@ -407,7 +434,15 @@
                 <AppIcon name="eye-off" :size="17" />
               </button>
             </li>
-            <li v-if="!topRanking.length" class="muted">当前还没有可展示的排行数据。</li>
+            <li v-if="!topRanking.length" class="network-empty-state">
+              <strong>当前条件没有可展示的排行数据</strong>
+              <small>{{ appliedFilters ? `查询范围：${rankingDescription}，${formatRangeLabel()}` : '等待第一次成功查询。' }}</small>
+              <div class="network-empty-actions">
+                <button v-if="selectedPresetHours !== 24" type="button" class="chip-button" @click="applyPreset(24)">切换最近 24 小时</button>
+                <button type="button" class="chip-button" @click="focusNetworkFilters">调整筛选</button>
+                <button v-if="ignoredApps.length" type="button" class="chip-button" @click="scrollToIgnoredApps">查看已忽略</button>
+              </div>
+            </li>
           </ol>
 
           <section
@@ -482,9 +517,20 @@
       </Transition>
     </Teleport>
 
-    <Teleport to="body">
-      <div v-if="selectedApp" class="app-segments-overlay" @click.self="closeAppSegmentsPanel">
-        <section class="app-segments-panel" role="dialog" aria-modal="true" aria-live="polite">
+    <AccessibleModal
+      v-if="selectedApp"
+      class="app-segments-overlay"
+      role="dialog"
+      :open="Boolean(selectedApp)"
+      title="应用流量明细"
+      description="以下明细按当前时间、范围和方向筛选条件查询。"
+      :return-focus="dialogTrigger"
+      @close="closeAppSegmentsPanel"
+    >
+        <section
+          class="app-segments-panel"
+          @click.self="closeAppSegmentsPanel"
+        >
           <button type="button" class="app-segments-close" aria-label="关闭应用流量明细" @click="closeAppSegmentsPanel">
             <AppIcon name="close" :size="16" />
           </button>
@@ -493,7 +539,7 @@
             <div class="app-segments-title">
               <span class="panel-icon"><AppIcon name="network" :size="16" /></span>
               <div>
-                <h4>{{ selectedApp.displayName || selectedApp.processName }}</h4>
+                <h4 id="app-segments-title">{{ selectedApp.displayName || selectedApp.processName }}</h4>
                 <p class="panel-subtitle">{{ selectedApp.executablePath || selectedApp.processName }}</p>
               </div>
             </div>
@@ -505,8 +551,8 @@
             </div>
           </div>
 
-          <p v-if="selectedAppOutsideRanking" class="app-segments-note">
-            该应用不在当前排行范围内，详情仍按当前筛选条件查询。
+          <p class="app-segments-note" :class="{ 'app-segments-note-empty': !selectedAppOutsideRanking }">
+            {{ selectedAppOutsideRanking ? '该应用不在当前排行范围内，详情仍按当前筛选条件查询。' : '以下明细按当前时间、范围和方向筛选条件查询。' }}
           </p>
 
           <div v-if="segmentsErrorMessage" class="app-segments-state app-segments-error">
@@ -520,6 +566,11 @@
           </div>
           <div v-else class="app-segments-chart" aria-label="应用分段流量柱状图">
             <div class="app-segments-chart-grid" aria-hidden="true"></div>
+            <div class="app-segments-scale" aria-hidden="true">
+              <span>{{ formatBytes(segmentMaxValue) }}</span>
+              <span>{{ formatBytes(segmentMaxValue / 2) }}</span>
+              <span>0 B</span>
+            </div>
             <ol class="app-segments-bars">
               <li
                 v-for="(segment, segmentIndex) in appSegments"
@@ -531,7 +582,11 @@
                   class="app-segment-bar"
                   :style="{ height: `${getSegmentPercent(segment)}%` }"
                   tabindex="0"
+                  role="button"
+                  :aria-pressed="selectedSegmentIndex === segmentIndex"
                   :aria-label="getSegmentTooltip(segment)"
+                  @click="selectSegment(segmentIndex)"
+                  @keydown="handleSegmentKeydown($event, segmentIndex)"
                 >
                   <span class="app-segment-tooltip">{{ getSegmentTooltip(segment) }}</span>
                 </div>
@@ -539,19 +594,56 @@
               </li>
             </ol>
           </div>
+
+          <div v-if="selectedSegment" class="app-segments-selected-readout" role="status" aria-live="polite">
+            <strong>已选分段</strong>
+            <span>{{ formatSegmentRange(selectedSegment) }}</span>
+            <span>当前统计 {{ formatBytes(getSegmentValue(selectedSegment)) }}</span>
+            <span>上传 {{ formatBytes(getSegmentUploadBytes(selectedSegment)) }}</span>
+            <span>下载 {{ formatBytes(getSegmentDownloadBytes(selectedSegment)) }}</span>
+          </div>
+
+          <details v-if="appSegments.length" class="app-segments-table-details">
+            <summary>展开分段明细表</summary>
+            <div class="table-shell">
+              <table class="data-table app-segments-table">
+                <thead>
+                  <tr>
+                    <th>时间段</th>
+                    <th class="align-right">上传</th>
+                    <th class="align-right">下载</th>
+                    <th class="align-right">当前统计</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(segment, segmentIndex) in appSegments" :key="`detail-${segment.from}-${segment.to}`">
+                    <td>{{ formatSegmentRange(segment) }}</td>
+                    <td class="align-right">{{ formatBytes(getSegmentUploadBytes(segment)) }}</td>
+                    <td class="align-right">{{ formatBytes(getSegmentDownloadBytes(segment)) }}</td>
+                    <td class="align-right">
+                      <button type="button" class="table-inline-action" @click="selectSegment(segmentIndex)">
+                        {{ formatBytes(getSegmentValue(segment)) }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
         </section>
-      </div>
-    </Teleport>
+    </AccessibleModal>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
+import AccessibleModal from '../components/AccessibleModal.vue';
 import PageHeader from '../components/PageHeader.vue';
 import {
   getNetworkAppSegments,
   getNetworkDashboard,
+  getSettings,
   ignoreNetworkApp,
   restoreNetworkApp
 } from '../services/api';
@@ -583,6 +675,7 @@ const isIgnoredAppsExpanded = ref(true);
 const ignoredAppsPanel = ref<HTMLElement | null>(null);
 const selectedApp = ref<AppTrafficSummaryDto | null>(null);
 const appSegments = ref<AppTrafficSegmentDto[]>([]);
+const selectedSegmentIndex = ref<number | null>(null);
 const overviewSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const totalsSummary = ref<NetworkPeriodSummaryDto | null>(null);
 const isLoading = ref(false);
@@ -590,9 +683,12 @@ const isSegmentsLoading = ref(false);
 const isIgnoreMutationPending = ref(false);
 const loadingSource = ref<'filter' | 'manual'>('filter');
 const errorMessage = ref('');
+const settingsDefaultWarning = ref('');
 const segmentsErrorMessage = ref('');
 const isMobileViewport = ref(false);
 const isMobileFiltersExpanded = ref(false);
+const appliedFilters = ref<NetworkFilters | null>(null);
+const dialogTrigger = ref<HTMLElement | null>(null);
 let autoRefreshTimer: number | null = null;
 let mobileViewportQuery: MediaQueryList | null = null;
 let dashboardAbortController: AbortController | null = null;
@@ -600,6 +696,16 @@ let pendingReloadSource: 'filter' | 'manual' = 'filter';
 let ignoreUndoTimer: number | null = null;
 // 应用明细请求可能被切换筛选条件、关闭弹层或重新选择应用打断；版本号用于丢弃过期响应。
 let segmentsRequestVersion = 0;
+let dashboardRequestVersion = 0;
+let isViewActive = false;
+
+interface NetworkFilters {
+  from: string;
+  to: string;
+  topN: number;
+  scope: 'all' | 'wan' | 'lan' | 'loopback';
+  direction: 'total' | 'upload' | 'download';
+}
 
 // 查询条件：分别驱动筛选区、占比面板和应用排行
 const filters = reactive({
@@ -609,6 +715,10 @@ const filters = reactive({
   scope: 'wan' as 'all' | 'wan' | 'lan' | 'loopback',
   direction: 'upload' as 'total' | 'upload' | 'download'
 });
+const selectedPresetHours = ref<number | null>(24);
+let presetSignature = '';
+let applyingDefaultTopN = false;
+let topNUserTouched = false;
 
 // 累计上传/下载 - 使用 totalsSummary（保持当前 scope，但不受 direction 筛选影响）
 const totalUploadBytes = computed(() =>
@@ -655,8 +765,12 @@ const overviewLoopbackTotalBytes = computed(() =>
   (overviewSummary.value?.loopbackUploadBytes ?? 0) + (overviewSummary.value?.loopbackDownloadBytes ?? 0)
 );
 
+const overviewOtherTotalBytes = computed(() =>
+  (overviewSummary.value?.otherUploadBytes ?? 0) + (overviewSummary.value?.otherDownloadBytes ?? 0)
+);
+
 const overviewTotalBytes = computed(() =>
-  overviewWanTotalBytes.value + overviewLanTotalBytes.value + overviewLoopbackTotalBytes.value
+  overviewWanTotalBytes.value + overviewLanTotalBytes.value + overviewLoopbackTotalBytes.value + overviewOtherTotalBytes.value
 );
 
 const wanPercent = computed(() =>
@@ -671,17 +785,28 @@ const loopbackPercent = computed(() =>
   overviewTotalBytes.value === 0 ? 0 : (overviewLoopbackTotalBytes.value / overviewTotalBytes.value) * 100
 );
 
+const otherPercent = computed(() =>
+  overviewTotalBytes.value === 0 ? 0 : (overviewOtherTotalBytes.value / overviewTotalBytes.value) * 100
+);
+
 // 兼容旧代码，使用 overview 数据
 const wanTotalBytes = overviewWanTotalBytes;
 const lanTotalBytes = overviewLanTotalBytes;
 const loopbackTotalBytes = overviewLoopbackTotalBytes;
+const otherTotalBytes = overviewOtherTotalBytes;
 
 const ignoredAppKeys = computed(() => new Set(ignoredApps.value.map((item) => item.appKey)));
-const topRanking = computed(() =>
-  items.value
+const topRanking = computed(() => {
+  if (!appliedFilters.value) {
+    return items.value
+      .filter((item) => !ignoredAppKeys.value.has(item.appKey))
+      .slice(0, filters.topN);
+  }
+
+  return items.value
     .filter((item) => !ignoredAppKeys.value.has(item.appKey))
-    .slice(0, filters.topN)
-);
+    .slice(0, appliedFilters.value.topN);
+});
 const ignoredAppRows = computed(() =>
   ignoredApps.value.map((record) => ({
     record,
@@ -696,49 +821,68 @@ const rankingMaxValue = computed(() =>
 const segmentMaxValue = computed(() =>
   appSegments.value.reduce((max, segment) => Math.max(max, getSegmentValue(segment)), 0)
 );
+const selectedSegment = computed(() =>
+  selectedSegmentIndex.value == null ? null : appSegments.value[selectedSegmentIndex.value] ?? null
+);
 
 const rankingDescription = computed(() => {
-  const scopeLabel = filters.scope === 'wan' ? 'WAN' : filters.scope === 'lan' ? 'LAN' : filters.scope === 'loopback' ? 'Loopback' : '全部';
+  const activeFilters = appliedFilters.value ?? filters;
+  const scopeLabel = activeFilters.scope === 'wan' ? 'WAN' : activeFilters.scope === 'lan' ? 'LAN' : activeFilters.scope === 'loopback' ? 'Loopback' : '全部';
   const directionLabel =
-    filters.direction === 'upload' ? '上传' : filters.direction === 'download' ? '下载' : '总流量';
+    activeFilters.direction === 'upload' ? '上传' : activeFilters.direction === 'download' ? '下载' : '总流量';
   return `${scopeLabel} / ${directionLabel}`;
 });
 
+const hasPendingFilterChanges = computed(() => {
+  if (!appliedFilters.value) return false;
+  const snapshot = createFilterSnapshot();
+  if ('error' in snapshot) return true;
+  return JSON.stringify(snapshot) !== JSON.stringify(appliedFilters.value);
+});
+
 const segmentDurationLabel = computed(() => {
-  const from = filters.from ? new Date(filters.from) : null;
-  const to = filters.to ? new Date(filters.to) : null;
+  const activeFilters = appliedFilters.value ?? filters;
+  const from = activeFilters.from ? new Date(activeFilters.from) : null;
+  const to = activeFilters.to ? new Date(activeFilters.to) : null;
   if (!from || !to || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     return '--';
   }
 
-  return to.getTime() - from.getTime() <= 24 * 60 * 60 * 1000 ? '1 小时' : '12 小时';
+  const durationHours = (to.getTime() - from.getTime()) / (60 * 60 * 1000);
+  if (durationHours <= 1.5) return '约 1 小时';
+  if (durationHours <= 12.5) return '约 12 小时';
+  if (durationHours <= 36) return '约 1 天';
+  return `约 ${Math.round(durationHours / 24)} 天`;
 });
 
 const selectedAppOutsideRanking = computed(() =>
   selectedApp.value !== null && !topRanking.value.some((item) => item.appKey === selectedApp.value?.appKey)
 );
 
-const activePresetHours = computed(() => getMatchedPresetHours(filters.from, filters.to));
+const activePresetHours = computed(() => selectedPresetHours.value);
 const showAdvancedFilters = computed(() => !isMobileViewport.value || isMobileFiltersExpanded.value);
 
 const rangeParts = computed(() => formatRangeParts());
 
 const dominantScopeLabel = computed(() => {
   if (overviewTotalBytes.value === 0) return '--';
-  const max = Math.max(wanPercent.value, lanPercent.value, loopbackPercent.value);
-  if (max === loopbackPercent.value && loopbackPercent.value > 50) return 'Loopback 为主';
-  if (Math.abs(wanPercent.value - lanPercent.value) < 5) return '基本均衡';
-  return wanPercent.value >= lanPercent.value ? 'WAN 为主' : 'LAN 为主';
+  const entries = [
+    ['WAN', wanPercent.value],
+    ['LAN', lanPercent.value],
+    ['Loopback', loopbackPercent.value],
+    ['其他', otherPercent.value]
+  ] as const;
+  const [label, percent] = entries.reduce((winner, entry) => entry[1] > winner[1] ? entry : winner);
+  return percent > 50 ? `${label} 为主` : '分布较均衡';
 });
 
 const dominantScopeHint = computed(() => {
   if (overviewTotalBytes.value === 0) return '当前没有流量数据';
-  const max = Math.max(wanPercent.value, lanPercent.value, loopbackPercent.value);
-  if (max === loopbackPercent.value && loopbackPercent.value > 50) return `本地回环占 ${loopbackPercent.value.toFixed(1)}%`;
-  return `差值 ${Math.abs(wanPercent.value - lanPercent.value).toFixed(1)}%`;
+  return `最高占比 ${Math.max(wanPercent.value, lanPercent.value, loopbackPercent.value, otherPercent.value).toFixed(1)}%`;
 });
 
 onMounted(() => {
+  isViewActive = true;
   if (typeof window !== 'undefined' && 'matchMedia' in window) {
     mobileViewportQuery = window.matchMedia('(max-width: 720px)');
     syncMobileViewportState(mobileViewportQuery.matches);
@@ -749,6 +893,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  isViewActive = false;
   segmentsRequestVersion++;
   dashboardAbortController?.abort();
 
@@ -766,11 +911,22 @@ onUnmounted(() => {
     mobileViewportQuery.removeEventListener('change', handleMobileViewportChange);
     mobileViewportQuery = null;
   }
+
 });
 
 watch(
   () => [filters.from, filters.to, filters.topN, filters.scope, filters.direction],
   () => {
+    if (presetSignature === `${filters.from}|${filters.to}`) {
+      presetSignature = '';
+    } else {
+      selectedPresetHours.value = null;
+    }
+
+    if (!applyingDefaultTopN) {
+      topNUserTouched = true;
+    }
+
     // 多个筛选控件可能连续变化，统一 debounce 后再请求，减少无效接口调用和骨架屏闪烁。
     if (autoRefreshTimer !== null) {
       window.clearTimeout(autoRefreshTimer);
@@ -788,27 +944,39 @@ watch(
 async function loadApps(source: 'filter' | 'manual' = 'filter') {
   dashboardAbortController?.abort();
   const requestController = new AbortController();
+  const requestVersion = ++dashboardRequestVersion;
   dashboardAbortController = requestController;
   loadingSource.value = source;
   isLoading.value = true;
   errorMessage.value = '';
 
+  const snapshot = createFilterSnapshot();
+  if ('error' in snapshot) {
+    errorMessage.value = snapshot.error;
+    isLoading.value = false;
+    dashboardAbortController = null;
+    return;
+  }
+
   try {
-    const from = toIsoString(filters.from);
-    const to = toIsoString(filters.to);
     const dashboard = await getNetworkDashboard({
-      from,
-      to,
+      from: snapshot.from,
+      to: snapshot.to,
       topN: filters.topN,
       scope: filters.scope,
       direction: filters.direction,
       signal: requestController.signal
     });
 
+    if (!isViewActive || requestVersion !== dashboardRequestVersion) {
+      return;
+    }
+
     items.value = dashboard.apps;
     ignoredApps.value = dashboard.ignoredApps ?? [];
     overviewSummary.value = dashboard.overview;
     totalsSummary.value = dashboard.totals;
+    appliedFilters.value = snapshot;
     syncSelectedAppAfterRankingLoad(dashboard.apps);
     if (selectedApp.value) {
       void loadSelectedAppSegments();
@@ -817,7 +985,13 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
     if (error instanceof DOMException && error.name === 'AbortError') {
       return;
     }
-    errorMessage.value = error instanceof Error ? error.message : '加载网络汇总失败。';
+    if (!isViewActive || requestVersion !== dashboardRequestVersion) {
+      return;
+    }
+    const detail = error instanceof Error ? error.message : '加载网络汇总失败。';
+    errorMessage.value = appliedFilters.value
+      ? `本次加载失败，仍显示上次成功结果：${detail}`
+      : detail;
   } finally {
     if (dashboardAbortController === requestController) {
       dashboardAbortController = null;
@@ -827,6 +1001,11 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
 }
 
 function refreshApps() {
+  if (autoRefreshTimer !== null) {
+    window.clearTimeout(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+
   // 当前时间范围命中预设时，手动刷新会先重算“到当前时间”的范围，再由 watcher 触发加载。
   const presetHours = activePresetHours.value;
   if (presetHours) {
@@ -839,6 +1018,9 @@ function refreshApps() {
 }
 
 function selectApp(item: AppTrafficSummaryDto) {
+  if (!selectedApp.value) {
+    dialogTrigger.value = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
   selectedApp.value = item;
   void loadSelectedAppSegments();
 }
@@ -928,7 +1110,23 @@ async function initializeNetworkPage() {
     migrationError = error instanceof Error ? error.message : '迁移旧版忽略列表失败。';
   }
 
-  await loadApps('filter');
+  try {
+    const settings = await getSettings();
+    if (isViewActive && !topNUserTouched) {
+      applyingDefaultTopN = true;
+      filters.topN = settings.topNDefault;
+      applyingDefaultTopN = false;
+      settingsDefaultWarning.value = '';
+    }
+  } catch {
+    if (isViewActive) {
+      settingsDefaultWarning.value = '未读取到默认排行数量，已使用 10 条；可在设置页调整。';
+    }
+  }
+
+  if (isViewActive) {
+    await loadApps('filter');
+  }
   if (migrationError && !errorMessage.value) {
     errorMessage.value = `${migrationError}；旧数据已保留，可刷新后重试。`;
   }
@@ -1009,9 +1207,11 @@ function clearIgnoreUndo() {
 function closeAppSegmentsPanel() {
   selectedApp.value = null;
   appSegments.value = [];
+  selectedSegmentIndex.value = null;
   segmentsErrorMessage.value = '';
   isSegmentsLoading.value = false;
   segmentsRequestVersion++;
+  restoreDialogFocus();
 }
 
 async function loadSelectedAppSegments() {
@@ -1026,13 +1226,14 @@ async function loadSelectedAppSegments() {
   const requestVersion = ++segmentsRequestVersion;
   isSegmentsLoading.value = true;
   segmentsErrorMessage.value = '';
+  selectedSegmentIndex.value = null;
 
   try {
     const segments = await getNetworkAppSegments(app.appKey, {
-      from: toIsoString(filters.from),
-      to: toIsoString(filters.to),
-      scope: filters.scope,
-      direction: filters.direction
+      from: toIsoString((appliedFilters.value ?? filters).from),
+      to: toIsoString((appliedFilters.value ?? filters).to),
+      scope: (appliedFilters.value ?? filters).scope,
+      direction: (appliedFilters.value ?? filters).direction
     });
 
     if (requestVersion !== segmentsRequestVersion) {
@@ -1040,6 +1241,7 @@ async function loadSelectedAppSegments() {
     }
 
     appSegments.value = segments;
+    selectedSegmentIndex.value = null;
   } catch (error) {
     if (requestVersion !== segmentsRequestVersion) {
       return;
@@ -1084,20 +1286,43 @@ function syncMobileViewportState(matches: boolean) {
 
 function applyPreset(hours: number) {
   const now = new Date();
-  filters.to = toLocalInputValue(now);
-  filters.from = toLocalInputValue(new Date(now.getTime() - hours * 60 * 60 * 1000));
+  const to = toLocalInputValue(now);
+  const from = toLocalInputValue(new Date(now.getTime() - hours * 60 * 60 * 1000));
+  presetSignature = `${from}|${to}`;
+  selectedPresetHours.value = hours;
+  filters.to = to;
+  filters.from = from;
+}
+
+function focusNetworkFilters() {
+  const firstFilter = document.querySelector<HTMLElement>('#network-filters-toolbar input, #network-filters-toolbar select');
+  if (isMobileViewport.value && !isMobileFiltersExpanded.value) {
+    isMobileFiltersExpanded.value = true;
+  }
+  void nextTick(() => firstFilter?.focus());
+}
+
+function formatRangeLabel() {
+  const parts = rangeParts.value;
+  return parts ? `${parts.from} ~ ${parts.to}` : '时间范围无效';
 }
 
 function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value < 0) return '--';
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB`;
   return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+function formatRatioPercent(total: number, percent: number) {
+  return total > 0 && Number.isFinite(percent) ? `${percent.toFixed(1)}%` : '--';
+}
+
 function formatRangeParts() {
-  const from = filters.from ? new Date(filters.from) : null;
-  const to = filters.to ? new Date(filters.to) : null;
+  const activeFilters = appliedFilters.value ?? filters;
+  const from = activeFilters.from ? new Date(activeFilters.from) : null;
+  const to = activeFilters.to ? new Date(activeFilters.to) : null;
 
   if (!from || !to || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
     return null;
@@ -1118,6 +1343,31 @@ function toIsoString(value: string) {
   return value ? new Date(value).toISOString() : undefined;
 }
 
+function createFilterSnapshot(): NetworkFilters | { error: string } {
+  const fromDate = filters.from ? new Date(filters.from) : null;
+  const toDate = filters.to ? new Date(filters.to) : null;
+
+  if (!fromDate || Number.isNaN(fromDate.getTime()) || !toDate || Number.isNaN(toDate.getTime())) {
+    return { error: '请选择有效的开始时间和结束时间。' };
+  }
+
+  if (toDate.getTime() <= fromDate.getTime()) {
+    return { error: '结束时间必须晚于开始时间。' };
+  }
+
+  if (!Number.isInteger(filters.topN) || filters.topN < 1 || filters.topN > 100) {
+    return { error: '排行数量必须是 1 ~ 100 之间的整数。' };
+  }
+
+  return {
+    from: fromDate.toISOString(),
+    to: toDate.toISOString(),
+    topN: filters.topN,
+    scope: filters.scope,
+    direction: filters.direction
+  };
+}
+
 function getMatchedPresetHours(fromValue: string, toValue: string) {
   const from = fromValue ? new Date(fromValue) : null;
   const to = toValue ? new Date(toValue) : null;
@@ -1132,40 +1382,43 @@ function getMatchedPresetHours(fromValue: string, toValue: string) {
 }
 
 function getRankingValue(item: AppTrafficSummaryDto) {
-  if (filters.scope === 'wan') {
-    if (filters.direction === 'upload') return item.wanUploadBytes;
-    if (filters.direction === 'download') return item.wanDownloadBytes;
+  const activeFilters = appliedFilters.value ?? filters;
+  if (activeFilters.scope === 'wan') {
+    if (activeFilters.direction === 'upload') return item.wanUploadBytes;
+    if (activeFilters.direction === 'download') return item.wanDownloadBytes;
     return item.wanUploadBytes + item.wanDownloadBytes;
   }
 
-  if (filters.scope === 'lan') {
-    if (filters.direction === 'upload') return item.lanUploadBytes;
-    if (filters.direction === 'download') return item.lanDownloadBytes;
+  if (activeFilters.scope === 'lan') {
+    if (activeFilters.direction === 'upload') return item.lanUploadBytes;
+    if (activeFilters.direction === 'download') return item.lanDownloadBytes;
     return item.lanUploadBytes + item.lanDownloadBytes;
   }
 
-  if (filters.scope === 'loopback') {
-    if (filters.direction === 'upload') return item.loopbackUploadBytes;
-    if (filters.direction === 'download') return item.loopbackDownloadBytes;
+  if (activeFilters.scope === 'loopback') {
+    if (activeFilters.direction === 'upload') return item.loopbackUploadBytes;
+    if (activeFilters.direction === 'download') return item.loopbackDownloadBytes;
     return item.loopbackUploadBytes + item.loopbackDownloadBytes;
   }
 
-  if (filters.direction === 'upload') return item.totalUploadBytes;
-  if (filters.direction === 'download') return item.totalDownloadBytes;
+  if (activeFilters.direction === 'upload') return item.totalUploadBytes;
+  if (activeFilters.direction === 'download') return item.totalDownloadBytes;
   return item.totalUploadBytes + item.totalDownloadBytes;
 }
 
 function getScopedUploadBytes(item: AppTrafficSummaryDto) {
-  if (filters.scope === 'wan') return item.wanUploadBytes;
-  if (filters.scope === 'lan') return item.lanUploadBytes;
-  if (filters.scope === 'loopback') return item.loopbackUploadBytes;
+  const activeFilters = appliedFilters.value ?? filters;
+  if (activeFilters.scope === 'wan') return item.wanUploadBytes;
+  if (activeFilters.scope === 'lan') return item.lanUploadBytes;
+  if (activeFilters.scope === 'loopback') return item.loopbackUploadBytes;
   return item.totalUploadBytes;
 }
 
 function getScopedDownloadBytes(item: AppTrafficSummaryDto) {
-  if (filters.scope === 'wan') return item.wanDownloadBytes;
-  if (filters.scope === 'lan') return item.lanDownloadBytes;
-  if (filters.scope === 'loopback') return item.loopbackDownloadBytes;
+  const activeFilters = appliedFilters.value ?? filters;
+  if (activeFilters.scope === 'wan') return item.wanDownloadBytes;
+  if (activeFilters.scope === 'lan') return item.lanDownloadBytes;
+  if (activeFilters.scope === 'loopback') return item.loopbackDownloadBytes;
   return item.totalDownloadBytes;
 }
 
@@ -1179,44 +1432,47 @@ function getRankingPercent(item: AppTrafficSummaryDto) {
     return 0;
   }
 
-  return Math.max(6, (value / rankingMaxValue.value) * 100);
+  return Math.min(100, (value / rankingMaxValue.value) * 100);
 }
 
 function getSegmentValue(segment: AppTrafficSegmentDto) {
-  if (filters.scope === 'wan') {
-    if (filters.direction === 'upload') return segment.wanUploadBytes;
-    if (filters.direction === 'download') return segment.wanDownloadBytes;
+  const activeFilters = appliedFilters.value ?? filters;
+  if (activeFilters.scope === 'wan') {
+    if (activeFilters.direction === 'upload') return segment.wanUploadBytes;
+    if (activeFilters.direction === 'download') return segment.wanDownloadBytes;
     return segment.wanUploadBytes + segment.wanDownloadBytes;
   }
 
-  if (filters.scope === 'lan') {
-    if (filters.direction === 'upload') return segment.lanUploadBytes;
-    if (filters.direction === 'download') return segment.lanDownloadBytes;
+  if (activeFilters.scope === 'lan') {
+    if (activeFilters.direction === 'upload') return segment.lanUploadBytes;
+    if (activeFilters.direction === 'download') return segment.lanDownloadBytes;
     return segment.lanUploadBytes + segment.lanDownloadBytes;
   }
 
-  if (filters.scope === 'loopback') {
-    if (filters.direction === 'upload') return segment.loopbackUploadBytes;
-    if (filters.direction === 'download') return segment.loopbackDownloadBytes;
+  if (activeFilters.scope === 'loopback') {
+    if (activeFilters.direction === 'upload') return segment.loopbackUploadBytes;
+    if (activeFilters.direction === 'download') return segment.loopbackDownloadBytes;
     return segment.loopbackUploadBytes + segment.loopbackDownloadBytes;
   }
 
-  if (filters.direction === 'upload') return segment.totalUploadBytes;
-  if (filters.direction === 'download') return segment.totalDownloadBytes;
+  if (activeFilters.direction === 'upload') return segment.totalUploadBytes;
+  if (activeFilters.direction === 'download') return segment.totalDownloadBytes;
   return segment.totalUploadBytes + segment.totalDownloadBytes;
 }
 
 function getSegmentUploadBytes(segment: AppTrafficSegmentDto) {
-  if (filters.scope === 'wan') return segment.wanUploadBytes;
-  if (filters.scope === 'lan') return segment.lanUploadBytes;
-  if (filters.scope === 'loopback') return segment.loopbackUploadBytes;
+  const activeFilters = appliedFilters.value ?? filters;
+  if (activeFilters.scope === 'wan') return segment.wanUploadBytes;
+  if (activeFilters.scope === 'lan') return segment.lanUploadBytes;
+  if (activeFilters.scope === 'loopback') return segment.loopbackUploadBytes;
   return segment.totalUploadBytes;
 }
 
 function getSegmentDownloadBytes(segment: AppTrafficSegmentDto) {
-  if (filters.scope === 'wan') return segment.wanDownloadBytes;
-  if (filters.scope === 'lan') return segment.lanDownloadBytes;
-  if (filters.scope === 'loopback') return segment.loopbackDownloadBytes;
+  const activeFilters = appliedFilters.value ?? filters;
+  if (activeFilters.scope === 'wan') return segment.wanDownloadBytes;
+  if (activeFilters.scope === 'lan') return segment.lanDownloadBytes;
+  if (activeFilters.scope === 'loopback') return segment.loopbackDownloadBytes;
   return segment.totalDownloadBytes;
 }
 
@@ -1226,7 +1482,18 @@ function getSegmentPercent(segment: AppTrafficSegmentDto) {
     return 0;
   }
 
-  return Math.max(6, (value / segmentMaxValue.value) * 100);
+  return Math.min(100, (value / segmentMaxValue.value) * 100);
+}
+
+function selectSegment(index: number) {
+  if (index < 0 || index >= appSegments.value.length) return;
+  selectedSegmentIndex.value = index;
+}
+
+function handleSegmentKeydown(event: KeyboardEvent, index: number) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  selectSegment(index);
 }
 
 function formatSegmentRange(segment: AppTrafficSegmentDto) {

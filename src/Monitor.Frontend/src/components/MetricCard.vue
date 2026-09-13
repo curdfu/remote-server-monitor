@@ -60,7 +60,7 @@ const props = defineProps<{
 
 const toneClass = computed(() => `metric-tone-${props.tone ?? 'default'}`);
 const normalizedMeterPercent = computed(() => {
-  if (props.meterPercent == null || Number.isNaN(props.meterPercent)) {
+  if (props.meterPercent == null || !Number.isFinite(props.meterPercent)) {
     return null;
   }
 

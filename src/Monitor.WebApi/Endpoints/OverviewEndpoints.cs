@@ -10,6 +10,7 @@ public static class OverviewEndpoints
     {
         app.MapGet("/api/overview", (
             IHardwareSnapshotBuffer hardwareSnapshotBuffer,
+            IProcessCpuSnapshotBuffer processCpuSnapshotBuffer,
             DiskUsageSnapshotCache diskUsageSnapshotCache) =>
         {
             var hardware = hardwareSnapshotBuffer.GetLatest();
@@ -27,43 +28,67 @@ public static class OverviewEndpoints
 
             return Results.Ok(new RealtimeOverviewDto
             {
-                Hardware = new HardwareRealtimeDto
-                {
-                    SampleTime = hardware.SampleTime,
-                    CpuName = hardware.Cpu.Name,
-                    CpuUsagePercent = hardware.Cpu.UsagePercent,
-                    CpuTemperatureC = hardware.Cpu.TemperatureC,
-                    CpuFrequencyMhz = hardware.Cpu.FrequencyMhz,
-                    CpuPowerWatts = hardware.Cpu.PowerWatts,
-                    MemoryTotalMb = hardware.Memory.TotalMb,
-                    MemoryUsedMb = hardware.Memory.UsedMb,
-                    MemoryUsagePercent = hardware.Memory.UsagePercent,
-                    DiskTemperatureC = hardware.Disk.TemperatureC,
-                    Disks = hardware.Disk.Drives.Select(drive => new DiskTemperatureDto
-                    {
-                        Name = drive.Name,
-                        SizeBytes = drive.SizeBytes,
-                        UsedBytes = drive.DiskNumber.HasValue &&
-                                    diskUsageSnapshot.UsedBytesByDiskNumber.TryGetValue(
-                                        drive.DiskNumber.Value,
-                                        out var usedBytes)
-                            ? usedBytes
-                            : null,
-                        TemperatureC = drive.TemperatureC,
-                        TemperatureSource = drive.TemperatureSource
-                    }).ToArray(),
-                    DiskSpaces = diskUsageSnapshot.DiskSpaces.Select(space => new DiskSpaceDto
-                    {
-                        Name = space.Name,
-                        TotalBytes = space.TotalBytes,
-                        UsedBytes = space.UsedBytes,
-                        FreeBytes = space.FreeBytes
-                    }).ToArray(),
-                    UptimeSeconds = hardware.System.UptimeSeconds
-                }
+                Hardware = ToHardwareDto(hardware, diskUsageSnapshot),
+                ProcessCpu = ToProcessCpuDto(processCpuSnapshotBuffer.GetLatest())
             });
         });
 
         return app;
+    }
+
+    private static HardwareRealtimeDto ToHardwareDto(
+        Monitor.Hardware.Models.HardwareSnapshot hardware,
+        DiskUsageSnapshot diskUsageSnapshot)
+    {
+        return new HardwareRealtimeDto
+        {
+            SampleTime = hardware.SampleTime,
+            CpuName = hardware.Cpu.Name,
+            CpuUsagePercent = hardware.Cpu.UsagePercent,
+            CpuTemperatureC = hardware.Cpu.TemperatureC,
+            CpuFrequencyMhz = hardware.Cpu.FrequencyMhz,
+            CpuPowerWatts = hardware.Cpu.PowerWatts,
+            MemoryTotalMb = hardware.Memory.TotalMb,
+            MemoryUsedMb = hardware.Memory.UsedMb,
+            MemoryUsagePercent = hardware.Memory.UsagePercent,
+            DiskTemperatureC = hardware.Disk.TemperatureC,
+            Disks = hardware.Disk.Drives.Select(drive => new DiskTemperatureDto
+            {
+                Name = drive.Name,
+                SizeBytes = drive.SizeBytes,
+                UsedBytes = drive.DiskNumber.HasValue &&
+                            diskUsageSnapshot.UsedBytesByDiskNumber.TryGetValue(
+                                drive.DiskNumber.Value,
+                                out var usedBytes)
+                    ? usedBytes
+                    : null,
+                TemperatureC = drive.TemperatureC,
+                TemperatureSource = drive.TemperatureSource
+            }).ToArray(),
+            DiskSpaces = diskUsageSnapshot.DiskSpaces.Select(space => new DiskSpaceDto
+            {
+                Name = space.Name,
+                TotalBytes = space.TotalBytes,
+                UsedBytes = space.UsedBytes,
+                FreeBytes = space.FreeBytes
+            }).ToArray(),
+            UptimeSeconds = hardware.System.UptimeSeconds
+        };
+    }
+
+    private static ProcessCpuRealtimeDto ToProcessCpuDto(
+        Monitor.Hardware.Models.ProcessCpuSnapshot? snapshot)
+    {
+        return new ProcessCpuRealtimeDto
+        {
+            SampleTime = snapshot?.SampleTime,
+            IsReady = snapshot?.IsReady == true,
+            Processes = snapshot?.Processes.Select(process => new ProcessCpuUsageDto
+            {
+                ProcessId = process.ProcessId,
+                ProcessName = process.ProcessName,
+                CpuUsagePercent = process.CpuUsagePercent
+            }).ToArray() ?? Array.Empty<ProcessCpuUsageDto>()
+        };
     }
 }

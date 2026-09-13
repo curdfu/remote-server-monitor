@@ -2,7 +2,7 @@
   <section class="page dashboard-page">
     <PageHeader
       title="概览"
-      description="查看 CPU、内存、磁盘等关键硬件状态。"
+      description="查看 CPU、内存、进程与磁盘等关键运行状态。"
     >
       <template #actions>
         <button class="ghost-button" :disabled="isLoading" @click="refreshDashboard">
@@ -58,14 +58,6 @@
         <div class="dashboard-core-metrics-panel-body">
           <div class="dashboard-hero-grid page-tier-stats">
             <MetricCard
-              label="CPU 当前频率"
-              :value="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
-              :hint="formatCpuNameHint(hardware?.cpuName)"
-              badge="频率"
-              tone="info"
-              icon-name="cpu"
-            />
-            <MetricCard
               label="CPU 占用"
               :value="formatPercent(hardware?.cpuUsagePercent)"
               :hint="formatCpuNameHint(hardware?.cpuName)"
@@ -73,24 +65,6 @@
               :tone="usageTone(hardware?.cpuUsagePercent)"
               icon-name="dashboard"
               :meter-percent="hardware?.cpuUsagePercent"
-            />
-            <MetricCard
-              label="CPU 当前温度"
-              :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
-              :hint="formatTemperatureHint(hardware?.cpuTemperatureC)"
-              :badge="temperatureBadge(hardware?.cpuTemperatureC)"
-              :tone="temperatureTone(hardware?.cpuTemperatureC)"
-              icon-name="temperature"
-              :meter-percent="temperaturePercent(hardware?.cpuTemperatureC)"
-            />
-            <MetricCard
-              label="CPU 当前功耗"
-              :value="formatNullable(hardware?.cpuPowerWatts, 'W')"
-              :hint="formatPowerHint(hardware?.cpuPowerWatts)"
-              badge="功耗"
-              tone="info"
-              icon-name="power"
-              :meter-percent="powerPercent(hardware?.cpuPowerWatts)"
             />
             <MetricCard
               label="内存已使用"
@@ -102,24 +76,66 @@
               :meter-percent="getMemoryUsagePercent(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
             />
             <MetricCard
-              label="最热磁盘温度"
-              :value="formatNullable(hardware?.diskTemperatureC, '°C')"
+              label="最高磁盘温度"
+              :value="formatNullable(hottestDisk?.temperatureC, '°C')"
               :hint="hottestDiskName"
-              :badge="temperatureBadge(hardware?.diskTemperatureC)"
-              :tone="temperatureTone(hardware?.diskTemperatureC)"
-              icon-name="disk"
-              :meter-percent="temperaturePercent(hardware?.diskTemperatureC)"
+              :badge="temperatureBadge(hottestDisk?.temperatureC)"
+              :tone="temperatureTone(hottestDisk?.temperatureC)"
+              icon-name="temperature"
             />
           </div>
         </div>
       </article>
     </section>
 
+    <CpuProcessPanel
+      :process-cpu="processCpu"
+      :state="processCpuState"
+      :status-text="processCpuStatusText"
+      :state-message="processCpuStateMessage"
+      :sample-text="processCpuSampleText"
+    />
+
+    <section class="card page-tier-panel dashboard-sensor-panel">
+      <div class="section-header section-header-rich">
+        <div>
+          <h3>辅助传感器</h3>
+          <p class="section-subtitle">频率、温度和功耗用于进一步排查，不作为容量百分比。</p>
+        </div>
+      </div>
+      <div class="dashboard-sensor-grid">
+        <MetricCard
+          label="CPU 当前频率"
+          :value="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
+          :hint="formatCpuNameHint(hardware?.cpuName)"
+          badge="频率"
+          tone="info"
+          icon-name="cpu"
+        />
+        <MetricCard
+          label="CPU 当前温度"
+          :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
+          :hint="formatTemperatureHint(hardware?.cpuTemperatureC)"
+          :badge="temperatureBadge(hardware?.cpuTemperatureC)"
+          :tone="temperatureTone(hardware?.cpuTemperatureC)"
+          icon-name="temperature"
+        />
+        <MetricCard
+          label="CPU 当前功耗"
+          :value="formatNullable(hardware?.cpuPowerWatts, 'W')"
+          :hint="formatPowerHint(hardware?.cpuPowerWatts)"
+          badge="功耗"
+          tone="info"
+          icon-name="power"
+        />
+      </div>
+    </section>
+
     <section class="card page-tier-panel dashboard-trends-panel">
       <div class="section-header section-header-rich">
         <div>
           <h3>最近一小时趋势</h3>
-          <p class="section-subtitle">历史查询与实时样本共同组成，仅在当前页面内绘制。</p>
+          <p class="section-subtitle">展示最近一小时的变化；缺失区间保留空白。</p>
         </div>
         <span class="section-tag">最近 1 小时</span>
       </div>
@@ -130,6 +146,7 @@
           eyebrow=""
           :points="cpuTrend"
           unit="%"
+          :window-end-ms="currentTimeMs"
           tone="signal"
         />
         <MetricTrend
@@ -137,6 +154,7 @@
           eyebrow=""
           :points="memoryTrend"
           unit="%"
+          :window-end-ms="currentTimeMs"
           tone="info"
         />
         <MetricTrend
@@ -144,6 +162,8 @@
           eyebrow=""
           :points="temperatureTrend"
           unit="°C"
+          scale-kind="temperature"
+          :window-end-ms="currentTimeMs"
           tone="warning"
         />
       </div>
@@ -251,26 +271,45 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
+import CpuProcessPanel from '../components/CpuProcessPanel.vue';
 import MetricCard from '../components/MetricCard.vue';
 import MetricTrend from '../components/MetricTrend.vue';
 import PageHeader from '../components/PageHeader.vue';
-import { getHardwareHistory, getOverview } from '../services/api';
-import { startRealtimeConnection, subscribeHardwareRealtime } from '../services/realtime';
+import { useTelemetryClock, useTelemetryFreshness } from '../composables/useTelemetryFreshness';
+import { getHardwareHistory, getOverview, getSettings } from '../services/api';
+import { startRealtimeConnection, subscribeHardwareRealtime, subscribeProcessCpuRealtime } from '../services/realtime';
+import { getResourcePressure, shouldAcceptSnapshot } from '../utils/telemetryState';
 import type {
   DiskSpaceDto,
   DiskTemperatureDto,
   HardwareRealtimeDto,
+  ProcessCpuRealtimeDto,
   RealtimeOverviewDto
 } from '../types/monitor';
 
 const hardware = ref<RealtimeOverviewDto['hardware'] | null>(null);
+const processCpu = ref<ProcessCpuRealtimeDto | null>(null);
 const isLoading = ref(false);
-const errorMessage = ref('');
+const overviewErrorMessage = ref('');
+const realtimeErrorMessage = ref('');
+const settingsMetadataErrorMessage = ref('');
+const errorMessage = computed(() => [
+  overviewErrorMessage.value,
+  realtimeErrorMessage.value,
+  settingsMetadataErrorMessage.value
+].filter(Boolean).join('；'));
 const historyErrorMessage = ref('');
 const history = ref<HardwareRealtimeDto[]>([]);
 const diskSortField = ref<'temperatureC'>('temperatureC');
 const diskSortDescending = ref(true);
 let unsubscribeHardware: (() => void) | null = null;
+let unsubscribeProcessCpu: (() => void) | null = null;
+let isViewActive = false;
+let overviewRequestVersion = 0;
+let historyRequestVersion = 0;
+const hardwareSampleIntervalMs = ref(1000);
+const telemetryClock = useTelemetryClock();
+const currentTimeMs = telemetryClock.nowMs;
 
 const sortedDisks = computed(() => {
   const disks = [...(hardware.value?.disks ?? [])];
@@ -282,27 +321,83 @@ const sortedDiskSpaces = computed(() => {
   return diskSpaces.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'));
 });
 
+const hottestDisk = computed(() => {
+  return sortedDisks.value.find((disk) => Number.isFinite(disk.temperatureC)) ?? null;
+});
+
 const hottestDiskName = computed(() => {
-  const hottestDisk = sortedDisks.value.find((disk) => disk.temperatureC != null);
-  return hottestDisk?.name.trim() || '磁盘名称不可用';
+  return hottestDisk.value?.name.trim() || '磁盘名称不可用';
 });
 
 const bootTimeText = computed(() => {
   const uptimeSeconds = hardware.value?.uptimeSeconds;
-  if (uptimeSeconds == null) {
+  const sampleTime = hardware.value?.sampleTime;
+  if (uptimeSeconds == null || !sampleTime || !Number.isFinite(Date.parse(sampleTime))) {
     return null;
   }
 
-  return new Date(Date.now() - uptimeSeconds * 1000).toISOString();
+  return new Date(Date.parse(sampleTime) - uptimeSeconds * 1000).toISOString();
 });
 
 const cpuTrend = computed(() => toTrendPoints((sample) => sample.cpuUsagePercent));
 const memoryTrend = computed(() => toTrendPoints((sample) => sample.memoryUsagePercent));
 const temperatureTrend = computed(() => toTrendPoints((sample) => sample.cpuTemperatureC));
 
+const hardwareSampleTime = computed(() => hardware.value?.sampleTime);
+const processCpuSampleTime = computed(() => processCpu.value?.sampleTime);
+const hardwareFreshness = useTelemetryFreshness(
+  hardwareSampleTime,
+  hardwareSampleIntervalMs,
+  telemetryClock.nowMs
+);
+const processCpuFreshness = useTelemetryFreshness(
+  processCpuSampleTime,
+  hardwareSampleIntervalMs,
+  telemetryClock.nowMs
+);
+
+const processCpuState = computed<'waiting' | 'baseline' | 'empty' | 'fresh' | 'stale' | 'error'>(() => {
+  if (!processCpu.value) return 'waiting';
+  if (processCpuFreshness.value.state === 'stale') return 'stale';
+  if (processCpuFreshness.value.state === 'invalid-time') return 'error';
+  if (!processCpu.value.isReady) return 'baseline';
+  return processCpu.value.processes.length > 0 ? 'fresh' : 'empty';
+});
+
+const processCpuStatusText = computed(() => {
+  switch (processCpuState.value) {
+    case 'fresh': return '新鲜样本';
+    case 'stale': return '样本已过期';
+    case 'baseline': return '建立基线';
+    case 'empty': return '暂无数据';
+    case 'error': return '时间异常';
+    default: return '等待采样';
+  }
+});
+
+const processCpuStateMessage = computed(() => {
+  switch (processCpuState.value) {
+    case 'waiting': return '等待进程 CPU 采样结果。';
+    case 'baseline': return '正在建立进程 CPU 采样基线，约一个采样周期后显示。';
+    case 'empty': return '当前没有可展示的进程 CPU 数据，可能是权限或进程瞬时退出。';
+    case 'stale': return '样本已过期，保留最近一次排行；请检查实时通道或采集服务。';
+    case 'error': return '样本时间异常，暂不判断排行是否为当前状态。';
+    default: return '';
+  }
+});
+
+const processCpuSampleText = computed(() => {
+  if (!processCpu.value?.sampleTime) return '样本时间：--';
+  if (processCpuFreshness.value.state === 'invalid-time') return '样本时间异常';
+  return `样本时间：${formatDateTime(processCpu.value.sampleTime)}`;
+});
+
 const latestSampleText = computed(() => {
   if (!hardware.value?.sampleTime) return '等待数据';
-  const ageSeconds = Math.max(0, Math.round((Date.now() - new Date(hardware.value.sampleTime).getTime()) / 1000));
+  const freshness = hardwareFreshness.value;
+  if (freshness.state === 'invalid-time') return '样本时间异常';
+  if (freshness.state === 'stale') return `已过期 · ${formatDateTime(hardware.value.sampleTime)}`;
+  const ageSeconds = Math.max(0, Math.round((freshness.ageMs ?? 0) / 1000));
   if (ageSeconds < 5) return '刚刚更新';
   if (ageSeconds < 60) return `${ageSeconds} 秒前`;
   return formatDateTime(hardware.value.sampleTime);
@@ -332,16 +427,36 @@ const healthState = computed(() => {
     };
   }
 
+  const freshness = hardwareFreshness.value;
+  if (freshness.state === 'stale') {
+    return {
+      tone: 'warning',
+      title: '监控数据已过期',
+      description: '实时通道可能仍已连接，请以最后样本时间为准。'
+    };
+  }
+  if (freshness.state === 'invalid-time') {
+    return {
+      tone: 'warning',
+      title: '样本时间异常',
+      description: '无法确认当前数据的新鲜度，请检查主机时间与采集服务。'
+    };
+  }
+
   const dangerReasons: string[] = [];
   const warningReasons: string[] = [];
-  if ((hardware.value.cpuUsagePercent ?? 0) >= 90) dangerReasons.push('CPU 负载过高');
-  if ((hardware.value.cpuTemperatureC ?? 0) >= 80) dangerReasons.push('CPU 温度过高');
-  if ((hardware.value.memoryUsagePercent ?? 0) >= 90) dangerReasons.push('内存空间紧张');
-  if ((maximumDiskUsagePercent.value ?? 0) >= 90) dangerReasons.push('磁盘空间紧张');
-  if ((hardware.value.cpuUsagePercent ?? 0) >= 70) warningReasons.push('CPU 负载偏高');
-  if ((hardware.value.cpuTemperatureC ?? 0) >= 65) warningReasons.push('CPU 温度偏高');
-  if ((hardware.value.memoryUsagePercent ?? 0) >= 75) warningReasons.push('内存使用偏高');
-  if ((maximumDiskUsagePercent.value ?? 0) >= 75) warningReasons.push('磁盘余量下降');
+  if (getResourcePressure(hardware.value.cpuUsagePercent, 70, 90) === 'danger') dangerReasons.push('CPU 负载过高');
+  if (getResourcePressure(hardware.value.cpuTemperatureC, 65, 80) === 'danger') dangerReasons.push('CPU 温度较高（参考）');
+  if (getResourcePressure(hardware.value.memoryUsagePercent, 75, 90) === 'danger') dangerReasons.push('内存空间紧张');
+  if (getResourcePressure(maximumDiskUsagePercent.value, 75, 90) === 'danger') dangerReasons.push('磁盘空间紧张');
+  if (getResourcePressure(hardware.value.cpuUsagePercent, 70, 90) === 'warning') warningReasons.push('CPU 负载偏高');
+  if (getResourcePressure(hardware.value.cpuTemperatureC, 65, 80) === 'warning') warningReasons.push('CPU 温度偏高（参考）');
+  if (getResourcePressure(hardware.value.memoryUsagePercent, 75, 90) === 'warning') warningReasons.push('内存使用偏高');
+  if (getResourcePressure(maximumDiskUsagePercent.value, 75, 90) === 'warning') warningReasons.push('磁盘余量下降');
+
+  const hasUnknownCoreMetric = hardware.value.cpuUsagePercent == null ||
+    hardware.value.memoryUsagePercent == null ||
+    maximumDiskUsagePercent.value == null;
 
   if (dangerReasons.length) {
     return {
@@ -359,6 +474,14 @@ const healthState = computed(() => {
     };
   }
 
+  if (hasUnknownCoreMetric) {
+    return {
+      tone: 'neutral',
+      title: '部分指标不可用',
+      description: '已获取的数据暂无明显资源压力，但不能据此判断全部资源健康。'
+    };
+  }
+
   return {
     tone: 'success',
     title: '系统运行平稳',
@@ -367,50 +490,88 @@ const healthState = computed(() => {
 });
 
 onMounted(() => {
+  isViewActive = true;
   // 进入首页时先调用后端 /api/overview，保证首屏有完整概览数据
   void loadOverview();
   void loadHistory();
+  void loadHardwareSampleInterval();
   // 再连接后端 /hubs/monitor，后续通过 SignalR 增量刷新硬件实时数据
   void startRealtimeConnection().catch(() => {
-    errorMessage.value = 'SignalR 实时通道连接失败，将继续保留当前页面数据。';
+    realtimeErrorMessage.value = 'SignalR 实时通道连接失败，将继续保留当前页面数据。';
   });
 
   // 订阅后端 hardwareRealtime 推送：首页卡片收到新数据后直接更新本地状态
   unsubscribeHardware = subscribeHardwareRealtime((hardware) => {
-    errorMessage.value = '';
+    if (!shouldAcceptSnapshot(windowHardwareSampleTime(), hardware.sampleTime)) return;
+    realtimeErrorMessage.value = '';
     updateHardwareState(mergeHardwarePayload(hardware, hardwareState()));
     appendHistorySample(hardware);
+  });
+  unsubscribeProcessCpu = subscribeProcessCpuRealtime((snapshot) => {
+    if (!shouldAcceptSnapshot(processCpu.value?.sampleTime, snapshot.sampleTime)) return;
+    realtimeErrorMessage.value = '';
+    processCpu.value = snapshot;
   });
 });
 
 onUnmounted(() => {
+  isViewActive = false;
   unsubscribeHardware?.();
+  unsubscribeProcessCpu?.();
 });
 
 async function loadOverview() {
+  const requestVersion = ++overviewRequestVersion;
   isLoading.value = true;
-  errorMessage.value = '';
+  overviewErrorMessage.value = '';
 
   try {
     // 调用后端 /api/overview：获取首页概览所需的硬件与网络快照
     const overview = await getOverview();
-    updateHardwareState(mergeHardwarePayload(overview.hardware, hardwareState()));
+    if (!isViewActive || requestVersion !== overviewRequestVersion) return;
+    if (shouldAcceptSnapshot(windowHardwareSampleTime(), overview.hardware.sampleTime)) {
+      updateHardwareState(mergeHardwarePayload(overview.hardware, hardwareState()));
+    }
+    if (overview.processCpu && shouldAcceptSnapshot(processCpu.value?.sampleTime, overview.processCpu.sampleTime)) {
+      processCpu.value = overview.processCpu;
+    }
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '加载总览数据失败。';
+    if (isViewActive && requestVersion === overviewRequestVersion) {
+      overviewErrorMessage.value = error instanceof Error ? error.message : '加载总览数据失败。';
+    }
   } finally {
-    isLoading.value = false;
+    if (requestVersion === overviewRequestVersion) isLoading.value = false;
+  }
+}
+
+async function loadHardwareSampleInterval() {
+  try {
+    const settings = await getSettings();
+    if (isViewActive) {
+      hardwareSampleIntervalMs.value = settings.hardwareSampleIntervalMs;
+      settingsMetadataErrorMessage.value = '';
+    }
+  } catch {
+    if (isViewActive) {
+      settingsMetadataErrorMessage.value = '未读取到硬件采样间隔，已使用 180 秒的保守过期阈值。';
+    }
   }
 }
 
 async function loadHistory() {
+  const requestVersion = ++historyRequestVersion;
   historyErrorMessage.value = '';
   const to = new Date();
   const from = new Date(to.getTime() - 60 * 60 * 1000);
 
   try {
-    history.value = await getHardwareHistory(from.toISOString(), to.toISOString());
+    const incoming = await getHardwareHistory(from.toISOString(), to.toISOString());
+    if (!isViewActive || requestVersion !== historyRequestVersion) return;
+    history.value = mergeHistorySamples(history.value, incoming, from.getTime(), to.getTime());
   } catch {
-    historyErrorMessage.value = '历史趋势暂时不可用，实时指标仍会继续更新。';
+    if (isViewActive && requestVersion === historyRequestVersion) {
+      historyErrorMessage.value = '历史趋势暂时不可用，实时指标仍会继续更新。';
+    }
   }
 }
 
@@ -419,33 +580,60 @@ async function refreshDashboard() {
 }
 
 function appendHistorySample(sample: HardwareRealtimeDto) {
-  const lastSample = history.value.at(-1);
-  if (lastSample?.sampleTime === sample.sampleTime) return;
-  history.value.push(sample);
-  if (history.value.length > 240) {
-    history.value.splice(0, history.value.length - 240);
-  }
+  const to = Date.parse(sample.sampleTime);
+  if (!Number.isFinite(to)) return;
+  history.value = mergeHistorySamples(history.value, [sample], to - 60 * 60 * 1000, to);
 }
 
 function toTrendPoints(selector: (sample: HardwareRealtimeDto) => number | null) {
-  return history.value.map((sample) => ({
-    time: sample.sampleTime,
-    value: selector(sample)
-  }));
+  const fromMs = currentTimeMs.value - 60 * 60 * 1000;
+  return history.value
+    .filter((sample) => {
+      const sampleMs = Date.parse(sample.sampleTime);
+      return Number.isFinite(sampleMs) && sampleMs >= fromMs && sampleMs <= currentTimeMs.value;
+    })
+    .map((sample) => ({
+      time: sample.sampleTime,
+      value: selector(sample)
+    }));
+}
+
+function mergeHistorySamples(
+  current: HardwareRealtimeDto[],
+  incoming: HardwareRealtimeDto[],
+  fromMs: number,
+  toMs: number
+) {
+  const byTime = new Map<string, HardwareRealtimeDto>();
+  for (const sample of current) byTime.set(sample.sampleTime, sample);
+  for (const sample of incoming) {
+    const time = Date.parse(sample.sampleTime);
+    if (Number.isFinite(time) && time >= fromMs && time <= toMs) byTime.set(sample.sampleTime, sample);
+  }
+  return [...byTime.values()]
+    .filter((sample) => {
+      const time = Date.parse(sample.sampleTime);
+      return Number.isFinite(time) && time >= fromMs && time <= toMs;
+    })
+    .sort((left, right) => Date.parse(left.sampleTime) - Date.parse(right.sampleTime));
+}
+
+function windowHardwareSampleTime() {
+  return hardware.value?.sampleTime ?? null;
 }
 
 function formatPercent(value?: number | null) {
-  return value == null ? '--' : `${value.toFixed(1)}%`;
+  return value == null || !Number.isFinite(value) ? '--' : `${value.toFixed(1)}%`;
 }
 
 function formatNullable(value: number | null | undefined, unit: string) {
-  return value == null ? '--' : `${value.toFixed(1)} ${unit}`;
+  return value == null || !Number.isFinite(value) ? '--' : `${value.toFixed(1)} ${unit}`;
 }
 
 function formatMemoryUsage(value?: number | null, total?: number | null) {
-  if (value == null) return '--';
+  if (value == null || !Number.isFinite(value)) return '--';
 
-  if (total != null && total < 512) {
+  if (total != null && Number.isFinite(total) && total < 512) {
     return `${value.toFixed(1)} GB`;
   }
 
@@ -454,7 +642,7 @@ function formatMemoryUsage(value?: number | null, total?: number | null) {
 }
 
 function formatMemoryHint(total?: number | null) {
-  if (total == null) {
+  if (total == null || !Number.isFinite(total)) {
     return '总容量 --';
   }
 
@@ -480,7 +668,7 @@ function formatPowerHint(power?: number | null) {
 }
 
 function formatDiskSize(value?: number | null) {
-  if (value == null || value <= 0) return '--';
+  if (value == null || !Number.isFinite(value) || value <= 0) return '--';
 
   const tebibyte = 1024 ** 4;
   const gibibyte = 1024 ** 3;
@@ -498,7 +686,7 @@ function formatCapacityPercent(usedBytes?: number | null, totalBytes?: number | 
 }
 
 function formatUptime(value?: number | null) {
-  if (value == null) return '--';
+  if (value == null || !Number.isFinite(value) || value < 0) return '--';
 
   const days = Math.floor(value / 86400);
   const hours = Math.floor((value % 86400) / 3600);
@@ -519,23 +707,19 @@ function formatDateTime(value?: string | null) {
 }
 
 function getCapacityPercent(usedBytes?: number | null, totalBytes?: number | null) {
-  if (usedBytes == null || totalBytes == null || totalBytes <= 0) return null;
+  if (
+    usedBytes == null || totalBytes == null ||
+    !Number.isFinite(usedBytes) || !Number.isFinite(totalBytes) || totalBytes <= 0
+  ) return null;
   return Math.max(0, Math.min(100, (usedBytes / totalBytes) * 100));
 }
 
 function getMemoryUsagePercent(usedMb?: number | null, totalMb?: number | null) {
-  if (usedMb == null || totalMb == null || totalMb <= 0) return null;
+  if (
+    usedMb == null || totalMb == null ||
+    !Number.isFinite(usedMb) || !Number.isFinite(totalMb) || totalMb <= 0
+  ) return null;
   return Math.max(0, Math.min(100, (usedMb / totalMb) * 100));
-}
-
-function temperaturePercent(value?: number | null) {
-  if (value == null) return null;
-  return Math.max(0, Math.min(100, value));
-}
-
-function powerPercent(value?: number | null) {
-  if (value == null) return null;
-  return Math.max(0, Math.min(100, (value / 65) * 100));
 }
 
 function temperatureTone(value?: number | null): 'default' | 'success' | 'warning' | 'danger' {
@@ -554,15 +738,15 @@ function temperatureBadge(value?: number | null) {
 
 function usageTone(value?: number | null): 'default' | 'info' | 'warning' | 'danger' {
   if (value == null) return 'default';
-  if (value >= 85) return 'danger';
-  if (value >= 65) return 'warning';
+  if (value >= 90) return 'danger';
+  if (value >= 70) return 'warning';
   return 'info';
 }
 
 function usageBadge(value?: number | null) {
   if (value == null) return '未知';
-  if (value >= 85) return '繁忙';
-  if (value >= 65) return '较高';
+  if (value >= 90) return '繁忙';
+  if (value >= 70) return '较高';
   return '平稳';
 }
 

@@ -1,5 +1,5 @@
 import * as signalR from '@microsoft/signalr';
-import type { HardwareRealtimeDto } from '../types/monitor';
+import type { HardwareRealtimeDto, ProcessCpuRealtimeDto } from '../types/monitor';
 
 type Listener<T> = (payload: T) => void;
 
@@ -10,12 +10,15 @@ export type RealtimeConnectionState =
   | 'disconnected';
 
 const hardwareListeners = new Set<Listener<HardwareRealtimeDto>>();
+const processCpuListeners = new Set<Listener<ProcessCpuRealtimeDto>>();
 const connectionStateListeners = new Set<Listener<RealtimeConnectionState>>();
 
 let connection: signalR.HubConnection | null = null;
 let startPromise: Promise<void> | null = null;
 let reconnectTimer: number | null = null;
 let currentConnectionState: RealtimeConnectionState = 'disconnected';
+let hardwareTopicSubscribed = false;
+let topicSyncPromise: Promise<void> | null = null;
 
 // 向页面广播实时连接状态，供首页等页面展示“已连接/重连中”等状态
 function emitConnectionState(state: RealtimeConnectionState) {
@@ -53,8 +56,31 @@ async function invokeIfConnected(methodName: string) {
 }
 
 async function syncActiveTopicSubscriptions() {
-  if (hardwareListeners.size > 0) {
-    await invokeIfConnected('SubscribeHardware');
+  if (topicSyncPromise) {
+    await topicSyncPromise;
+  }
+
+  const shouldSubscribe = hardwareListeners.size + processCpuListeners.size > 0;
+  if (shouldSubscribe === hardwareTopicSubscribed || connection?.state !== signalR.HubConnectionState.Connected) {
+    return;
+  }
+
+  topicSyncPromise = (async () => {
+    if (shouldSubscribe) {
+      await invokeIfConnected('SubscribeHardware');
+      hardwareTopicSubscribed = true;
+    } else {
+      await invokeIfConnected('UnsubscribeHardware');
+      hardwareTopicSubscribed = false;
+    }
+  })().finally(() => {
+    topicSyncPromise = null;
+  });
+
+  await topicSyncPromise;
+  const shouldStillSubscribe = hardwareListeners.size + processCpuListeners.size > 0;
+  if (shouldSubscribe !== shouldStillSubscribe) {
+    await syncActiveTopicSubscriptions();
   }
 }
 
@@ -88,17 +114,23 @@ function ensureConnection() {
     emitPayload(hardwareListeners, payload);
   });
 
+  connection.on('processCpuRealtime', (payload: ProcessCpuRealtimeDto) => {
+    emitPayload(processCpuListeners, payload);
+  });
+
   connection.onreconnecting(() => {
     emitConnectionState('reconnecting');
   });
 
   connection.onreconnected(() => {
+    hardwareTopicSubscribed = false;
     clearReconnectTimer();
     emitConnectionState('connected');
     void syncActiveTopicSubscriptions();
   });
 
   connection.onclose(() => {
+    hardwareTopicSubscribed = false;
     emitConnectionState('disconnected');
     scheduleReconnect();
   });
@@ -153,35 +185,23 @@ function subscribe<T>(listeners: Set<Listener<T>>, listener: Listener<T>) {
   };
 }
 
-function subscribeTopic<T>(
-  listeners: Set<Listener<T>>,
-  listener: Listener<T>,
-  subscribeMethod: string,
-  unsubscribeMethod: string
-) {
-  const wasEmpty = listeners.size === 0;
+function subscribeHardwareTopic<T>(listeners: Set<Listener<T>>, listener: Listener<T>) {
   listeners.add(listener);
-
-  if (wasEmpty) {
-    void invokeIfConnected(subscribeMethod);
-  }
+  void syncActiveTopicSubscriptions();
 
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) {
-      void invokeIfConnected(unsubscribeMethod);
-    }
+    void syncActiveTopicSubscriptions();
   };
 }
 
 // 首页使用：订阅后端推送的 hardwareRealtime 事件
 export function subscribeHardwareRealtime(listener: Listener<HardwareRealtimeDto>) {
-  return subscribeTopic(
-    hardwareListeners,
-    listener,
-    'SubscribeHardware',
-    'UnsubscribeHardware'
-  );
+  return subscribeHardwareTopic(hardwareListeners, listener);
+}
+
+export function subscribeProcessCpuRealtime(listener: Listener<ProcessCpuRealtimeDto>) {
+  return subscribeHardwareTopic(processCpuListeners, listener);
 }
 
 // 页面可通过这个订阅连接状态变化，用于提示当前实时通道是否正常

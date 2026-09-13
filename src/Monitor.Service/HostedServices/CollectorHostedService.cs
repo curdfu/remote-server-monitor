@@ -13,6 +13,8 @@ public sealed class CollectorHostedService(
     ILogger<CollectorHostedService> logger,
     IHardwareCollector hardwareCollector,
     IHardwareSnapshotBuffer hardwareSnapshotBuffer,
+    IProcessCpuCollector processCpuCollector,
+    IProcessCpuSnapshotBuffer processCpuSnapshotBuffer,
     IHardwareMonitoringDemand hardwareMonitoringDemand,
     HardwareRepository hardwareRepository,
     INetworkCollector networkCollector,
@@ -23,6 +25,7 @@ public sealed class CollectorHostedService(
     private static readonly TimeSpan PersistenceFailureLogInterval = TimeSpan.FromMinutes(1);
     private const int PersistenceBatchSize = 10;
     private DateTimeOffset _lastPersistenceFailureLogAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastProcessCpuFailureLogAt = DateTimeOffset.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -191,9 +194,35 @@ public sealed class CollectorHostedService(
         var snapshot = await hardwareCollector.GetCurrentSnapshotAsync(cancellationToken);
         hardwareSnapshotBuffer.Add(snapshot);
 
+        try
+        {
+            var processCpuSnapshot = await processCpuCollector.CaptureAsync(cancellationToken);
+            processCpuSnapshotBuffer.Set(processCpuSnapshot);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogProcessCpuFailure(exception);
+        }
+
         logger.LogDebug(
             "Collected hardware snapshot at {SampleTime}. Pending hardware samples: {PendingCount}.",
             snapshot.SampleTime,
             hardwareSnapshotBuffer.PendingCount);
+    }
+
+    private void LogProcessCpuFailure(Exception exception)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastProcessCpuFailureLogAt < TimeSpan.FromMinutes(1))
+        {
+            return;
+        }
+
+        _lastProcessCpuFailureLogAt = now;
+        logger.LogDebug(exception, "Process CPU sampling failed; preserving the last valid process snapshot.");
     }
 }

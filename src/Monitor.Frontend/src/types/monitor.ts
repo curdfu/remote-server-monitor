@@ -99,4 +99,17 @@ export interface AppSettingsDto {
 
 export interface RealtimeOverviewDto {
   hardware: HardwareRealtimeDto;
+  processCpu: ProcessCpuRealtimeDto;
+}
+
+export interface ProcessCpuUsageDto {
+  processId: number;
+  processName: string;
+  cpuUsagePercent: number;
+}
+
+export interface ProcessCpuRealtimeDto {
+  sampleTime: string | null;
+  isReady: boolean;
+  processes: ProcessCpuUsageDto[];
 }

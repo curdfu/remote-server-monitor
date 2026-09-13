@@ -34,6 +34,20 @@ test('dashboard core metrics panel styles do not rewrite the hero grid columns',
   );
 });
 
+test('dashboard core metrics highlights the hottest disk with its temperature and name', async () => {
+  const source = await readFile(viewPath, 'utf8');
+
+  assert.match(source, /label="最高磁盘温度"/);
+  assert.match(source, /:value="formatNullable\(hottestDisk\?\.temperatureC, '°C'\)"/);
+  assert.match(source, /:hint="hottestDiskName"/);
+  assert.match(source, /:badge="temperatureBadge\(hottestDisk\?\.temperatureC\)"/);
+  assert.match(
+    source,
+    /const hottestDisk = computed\(\(\) => \{[\s\S]*?Number\.isFinite\(disk\.temperatureC\)/,
+    'expected the card to select a finite temperature from the sorted disk list',
+  );
+});
+
 test('dashboard system status owns the uptime details without a duplicate metric card', async () => {
   const [viewSource, styleSource] = await Promise.all([
     readFile(viewPath, 'utf8'),

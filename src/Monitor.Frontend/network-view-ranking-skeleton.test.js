@@ -45,7 +45,7 @@ test('ranking panel shows skeleton rows for initial and filter-triggered loading
 
   assert.match(
     source,
-    /<li v-if="!topRanking\.length" class="muted">当前还没有可展示的排行数据。<\/li>/,
-    'expected empty state to remain after loading completes',
+    /<li v-if="!topRanking\.length" class="network-empty-state">[\s\S]*?当前条件没有可展示的排行数据[\s\S]*?调整筛选[\s\S]*?<\/li>/,
+    'expected empty state and recovery actions to remain after loading completes',
   );
 });

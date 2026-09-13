@@ -9,6 +9,7 @@ namespace Monitor.WebApi.Services;
 // 广播器只消费采集服务已经写入内存的最新硬件快照，不触发额外采样。
 public sealed class MonitorRealtimeBroadcaster(
     IHardwareSnapshotBuffer hardwareSnapshotBuffer,
+    IProcessCpuSnapshotBuffer processCpuSnapshotBuffer,
     IHardwareMonitoringDemand hardwareMonitoringDemand,
     DiskUsageSnapshotCache diskUsageSnapshotCache,
     IHubContext<MonitorHub> hubContext,
@@ -16,17 +17,59 @@ public sealed class MonitorRealtimeBroadcaster(
 {
     private readonly object _syncRoot = new();
     private DateTimeOffset _lastHardwareSampleTime = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastProcessCpuSampleTime = DateTimeOffset.MinValue;
 
     public async Task BroadcastOnceAsync(CancellationToken cancellationToken = default)
     {
         var hardware = hardwareSnapshotBuffer.GetLatest();
 
-        if (hardwareMonitoringDemand.HasHardwareSubscribers &&
-            hardware is not null &&
-            ShouldBroadcastHardware(hardware.SampleTime))
+        if (!hardwareMonitoringDemand.HasHardwareSubscribers)
+        {
+            return;
+        }
+
+        if (hardware is not null && ShouldBroadcastHardware(hardware.SampleTime))
         {
             await BroadcastHardwareAsync(hardware, cancellationToken);
         }
+
+        var processCpu = processCpuSnapshotBuffer.GetLatest();
+        if (processCpu is not null && ShouldBroadcastProcessCpu(processCpu.SampleTime))
+        {
+            await BroadcastProcessCpuAsync(processCpu, cancellationToken);
+        }
+    }
+
+    private async Task BroadcastProcessCpuAsync(
+        ProcessCpuSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        var processCpuDto = new ProcessCpuRealtimeDto
+        {
+            SampleTime = snapshot.SampleTime,
+            IsReady = snapshot.IsReady,
+            Processes = snapshot.Processes.Select(process => new ProcessCpuUsageDto
+            {
+                ProcessId = process.ProcessId,
+                ProcessName = process.ProcessName,
+                CpuUsagePercent = process.CpuUsagePercent
+            }).ToArray()
+        };
+
+        await hubContext.Clients
+            .Group(MonitorHub.HardwareGroup)
+            .SendAsync(MonitorHubEvents.ProcessCpuRealtime, processCpuDto, cancellationToken);
+
+        lock (_syncRoot)
+        {
+            _lastProcessCpuSampleTime = snapshot.SampleTime;
+        }
+
+        logger.LogDebug(
+            "Broadcasted process CPU realtime payload. sampleTime={SampleTime}, isReady={IsReady}, processCount={ProcessCount}.",
+            snapshot.SampleTime,
+            snapshot.IsReady,
+            snapshot.Processes.Count);
     }
 
     private async Task BroadcastHardwareAsync(
@@ -92,6 +135,14 @@ public sealed class MonitorRealtimeBroadcaster(
         lock (_syncRoot)
         {
             return sampleTime > _lastHardwareSampleTime;
+        }
+    }
+
+    private bool ShouldBroadcastProcessCpu(DateTimeOffset sampleTime)
+    {
+        lock (_syncRoot)
+        {
+            return sampleTime > _lastProcessCpuSampleTime;
         }
     }
 
