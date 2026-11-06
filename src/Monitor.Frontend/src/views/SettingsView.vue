@@ -1,28 +1,22 @@
 ﻿<template>
-  <section class="page settings-page">
-    <PageHeader
-      title="设置"
-      description="调整端口、硬件采样与网络处理间隔、统计粒度和历史保留时间"
-    >
-      <template #actions>
-        <div class="settings-actions">
-          <button type="button" class="ghost-button settings-action-button" :disabled="isBusy" @click="refreshSettings()">
-            刷新
-          </button>
-          <button type="submit" form="settings-form" class="settings-save-button" :disabled="!canSave || !isDirty">
-            {{ isSaving ? '保存中...' : '保存' }}
-          </button>
-        </div>
-      </template>
-    </PageHeader>
-
+  <section class="page settings-page" aria-label="设置">
     <section class="card settings-profile-panel" aria-labelledby="settings-profile-title">
       <div class="section-header settings-profile-header">
         <div>
           <h3 id="settings-profile-title">运行策略</h3>
           <p class="settings-section-description">预设仅调整硬件采样与网络处理频率；统计粒度、历史保留时间和排行数量保持不变。</p>
         </div>
-        <p class="settings-profile-current">当前策略 <strong>{{ activeProfileLabel }}</strong></p>
+        <div class="settings-profile-tools">
+          <p class="settings-profile-current">当前策略 <strong>{{ activeProfileLabel }}</strong></p>
+          <div class="settings-actions">
+            <button type="button" class="ghost-button settings-action-button" :disabled="isBusy" @click="refreshSettings()">
+              刷新
+            </button>
+            <button type="submit" form="settings-form" class="settings-save-button" :disabled="!canSave || !isDirty">
+              {{ isSaving ? '保存中...' : '保存' }}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="settings-profile-options" role="group" aria-label="选择运行策略">
@@ -181,7 +175,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
-import PageHeader from '../components/PageHeader.vue';
 import { getSettings, saveSettings } from '../services/api';
 import type { AppSettingsDto } from '../types/monitor';
 import { validateSettings } from '../utils/settingsValidation';

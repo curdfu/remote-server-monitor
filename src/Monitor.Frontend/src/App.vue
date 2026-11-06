@@ -5,7 +5,16 @@
       <div class="sidebar-brand">
         <div class="sidebar-brand-copy">
           <h1>服务器远程监控</h1>
-          <p class="sidebar-description">硬件状态与网络流量</p>
+          <dl class="sidebar-runtime" aria-label="系统运行时间">
+            <div>
+              <dt>开机时间</dt>
+              <dd>{{ formatBootTime(runtimeSnapshot?.sampleTime, runtimeSnapshot?.uptimeSeconds) }}</dd>
+            </div>
+            <div>
+              <dt>运行时间</dt>
+              <dd>{{ formatUptime(runtimeSnapshot?.uptimeSeconds) }}</dd>
+            </div>
+          </dl>
         </div>
 
         <div class="sidebar-mobile-tools">
@@ -140,8 +149,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import AppIcon from './components/AppIcon.vue';
-import { getHealth } from './services/api';
+import { getHardwareRealtime, getHealth } from './services/api';
 import type { HealthDto } from './types/monitor';
+import { formatBootTime, formatUptime, isRuntimeSnapshotNewer, type RuntimeSnapshot } from './utils/systemRuntime';
 import {
   type RealtimeConnectionState,
   startRealtimeConnection,
@@ -161,6 +171,7 @@ const themeButtonRef = ref<HTMLElement | null>(null);
 const themeMenuRef = ref<HTMLElement | null>(null);
 let unsubscribeConnectionState: (() => void) | null = null;
 const health = ref<HealthDto | null>(null);
+const runtimeSnapshot = ref<RuntimeSnapshot | null>(null);
 const healthUnavailable = ref(false);
 let healthTimer: number | null = null;
 let healthRequest: AbortController | null = null;
@@ -190,7 +201,16 @@ async function pollHealth() {
   const controller = new AbortController();
   healthRequest = controller;
   try {
-    const response = await getHealth(controller.signal);
+    const [response] = await Promise.all([
+      getHealth(controller.signal),
+      getHardwareRealtime(controller.signal).then((snapshot) => {
+        if (!controller.signal.aborted && healthPollingActive && isRuntimeSnapshotNewer(runtimeSnapshot.value, snapshot)) {
+          runtimeSnapshot.value = { sampleTime: snapshot.sampleTime, uptimeSeconds: snapshot.uptimeSeconds };
+        }
+      }).catch(() => {
+        // 读取运行时间失败时保留最近一次服务端快照，不推算不存在的新样本。
+      })
+    ]);
     if (!controller.signal.aborted && healthPollingActive) {
       health.value = response;
       healthUnavailable.value = false;

@@ -1,4 +1,12 @@
 /* Settings: compact controls, measured impact and a quiet editing surface. */
+.settings-profile-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
 .settings-actions {
   display: flex;
   flex-wrap: wrap;

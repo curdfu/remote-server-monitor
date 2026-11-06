@@ -1,23 +1,15 @@
 ﻿<template>
-  <section class="page network-page">
-    <PageHeader
-      title="网络"
-      description="查看指定时间内的网络流量和应用排行"
-    >
-      <template #actions>
-        <button type="button" class="ghost-button network-refresh" :disabled="isLoading" @click="refreshApps">
-          <AppIcon name="refresh" :size="16" />
-          {{ isLoading ? '刷新中…' : '刷新' }}
-        </button>
-      </template>
-    </PageHeader>
-
+  <section class="page network-page" aria-label="网络">
     <article class="card filters-card network-section network-section-filters" aria-labelledby="network-filters-title">
       <div class="panel-header network-filter-heading">
         <div>
           <h3 id="network-filters-title">筛选条件</h3>
           <p class="panel-subtitle">设置时间、网络范围和排行方式</p>
         </div>
+        <button type="button" class="ghost-button network-refresh" :disabled="isLoading" @click="refreshApps">
+          <AppIcon name="refresh" :size="16" />
+          {{ isLoading ? '刷新中…' : '刷新' }}
+        </button>
       </div>
 
       <div class="preset-toolbar">
@@ -494,7 +486,6 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import AppIcon from '../components/AppIcon.vue';
 import AccessibleModal from '../components/AccessibleModal.vue';
-import PageHeader from '../components/PageHeader.vue';
 import { formatSegmentAxisTime, isDirectionIncluded } from '../utils/networkPresentation';
 import { createNetworkReloadController } from '../utils/networkReload';
 import {

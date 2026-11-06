@@ -90,30 +90,15 @@ test('mobile core metrics keep memory context and allow complete model names to 
   assert.match(mobile, /\.metric-model-details\s*\{[^}]*display:\s*block/);
 });
 
-test('overview header keeps only boot time and uptime instead of a separate status panel', async () => {
-  const [view, styles, header] = await Promise.all([
-    readFile(viewPath, 'utf8'),
-    readFile(observatoryStylesPath, 'utf8'),
-    readFile(new URL('./src/components/PageHeader.vue', import.meta.url), 'utf8'),
+test('dashboard starts with content and keeps refresh and freshness feedback without a banner', async () => {
+  const [view, styles] = await Promise.all([
+    readFile(viewPath, 'utf8'), readFile(observatoryStylesPath, 'utf8')
   ]);
-  assert.match(view, /<PageHeader title="概览">/);
-  assert.doesNotMatch(view, /CPU、内存与磁盘的当前状态及最近一小时记录/);
-  assert.match(header, /description\?: string;/);
-  assert.match(header, /<p v-if="description" class="page-description">/);
-  const meta = view.match(/<template #meta>([\s\S]*?)<\/template>/)?.[1] ?? '';
-  assert.equal((meta.match(/<dt>/g) ?? []).length, 2);
-  assert.match(meta, /<dt>开机时间<\/dt>\s*<dd>{{ formatDateTime\(bootTimeText\) }}<\/dd>/);
-  assert.match(meta, /<dt>运行时间<\/dt>\s*<dd>{{ formatUptime\(hardware\?\.uptimeSeconds\) }}<\/dd>/);
-  assert.match(header, /<slot name="meta"\s*\/>/);
-  assert.match(styles, /\.page-header\s*\{[^}]*padding:\s*16px 20px;[^}]*border:\s*1px solid var\(--line-strong\);[^}]*background:\s*var\(--surface-1\);/);
-  assert.doesNotMatch(header, /page-header-footer|name="footer"/);
-  assert.doesNotMatch(styles, /dashboard-banner|page-header-footer/);
-  const mobile = styles.slice(styles.indexOf('@media (max-width: 720px)'));
-  assert.match(mobile, /\.page-header\s*\{[^}]*padding:\s*16px;/);
+  assert.doesNotMatch(view, /PageHeader|dashboard-overview-facts|bootTimeText|<dt>开机时间|<dt>运行时间/);
+  assert.match(view, /dashboard-core-metrics-header[\s\S]*?<h3>核心运行指标<\/h3>[\s\S]*?@click="refreshDashboard"/);
+  assert.doesNotMatch(styles, /\.page-header|dashboard-overview-facts|dashboard-banner/);
   assert.doesNotMatch(view, /system-status-card|latestSampleText|storageStatusText|系统运行平稳|<dt>最新样本|<dt>存储状态|label="已开机"/);
   assert.doesNotMatch(styles, /system-status-/);
-  assert.match(styles, /\.dashboard-overview-facts\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/);
-  assert.match(styles, /\.dashboard-overview-facts dd\s*\{[^}]*font-variant-numeric:\s*tabular-nums;/);
   assert.match(view, /const errorMessage = computed\([\s\S]*?hardwareFreshnessNotice\.value/);
   assert.match(view, /hardwareFreshness\.value\.state === 'stale'/);
   assert.match(view, /hardwareFreshness\.value\.state === 'invalid-time'/);

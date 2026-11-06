@@ -1,26 +1,5 @@
 <template>
-  <section class="page dashboard-page">
-    <PageHeader title="概览">
-      <template #meta>
-        <dl class="dashboard-overview-facts">
-          <div>
-            <dt>开机时间</dt>
-            <dd>{{ formatDateTime(bootTimeText) }}</dd>
-          </div>
-          <div>
-            <dt>运行时间</dt>
-            <dd>{{ formatUptime(hardware?.uptimeSeconds) }}</dd>
-          </div>
-        </dl>
-      </template>
-      <template #actions>
-        <button class="ghost-button" :disabled="isLoading" @click="refreshDashboard">
-          <span class="button-inline-icon"><AppIcon name="refresh" :size="16" /></span>
-          {{ isLoading ? '刷新中...' : '立即刷新' }}
-        </button>
-      </template>
-    </PageHeader>
-
+  <section class="page dashboard-page" aria-label="概览">
     <div v-if="errorMessage" class="card state-card error-state" role="alert">
       {{ errorMessage }}
     </div>
@@ -31,6 +10,10 @@
           <div>
             <h3>核心运行指标</h3>
           </div>
+          <button class="ghost-button" :disabled="isLoading" @click="refreshDashboard">
+            <span class="button-inline-icon"><AppIcon name="refresh" :size="16" /></span>
+            {{ isLoading ? '刷新中...' : '立即刷新' }}
+          </button>
         </div>
 
         <div class="dashboard-core-metrics-panel-body">
@@ -236,7 +219,6 @@ import AppIcon from '../components/AppIcon.vue';
 import CpuProcessPanel from '../components/CpuProcessPanel.vue';
 import MetricCard from '../components/MetricCard.vue';
 import MetricTrend from '../components/MetricTrend.vue';
-import PageHeader from '../components/PageHeader.vue';
 import { useTelemetryClock, useTelemetryFreshness } from '../composables/useTelemetryFreshness';
 import { getHardwareHistory, getOverview, getSettings } from '../services/api';
 import { startRealtimeConnection, subscribeHardwareRealtime, subscribeHardwareTopicReady, subscribeProcessCpuRealtime, subscribeRealtimeConnectionState } from '../services/realtime';
@@ -297,16 +279,6 @@ const hottestDiskName = computed(() => {
 const coreMetricDetails = computed(() =>
   `CPU：${formatCpuNameHint(hardware.value?.cpuName)}；最高温磁盘：${hottestDiskName.value}`
 );
-
-const bootTimeText = computed(() => {
-  const uptimeSeconds = hardware.value?.uptimeSeconds;
-  const sampleTime = hardware.value?.sampleTime;
-  if (uptimeSeconds == null || !sampleTime || !Number.isFinite(Date.parse(sampleTime))) {
-    return null;
-  }
-
-  return new Date(Date.parse(sampleTime) - uptimeSeconds * 1000).toISOString();
-});
 
 const cpuTrend = computed(() => toTrendPoints((sample) => sample.cpuUsagePercent));
 const memoryTrend = computed(() => toTrendPoints((sample) => sample.memoryUsagePercent));
@@ -555,20 +527,6 @@ function formatDiskSize(value?: number | null) {
 function formatCapacityPercent(usedBytes?: number | null, totalBytes?: number | null) {
   const percent = getCapacityPercent(usedBytes, totalBytes);
   return percent == null ? '--' : `${percent.toFixed(1)}%`;
-}
-
-function formatUptime(value?: number | null) {
-  if (value == null || !Number.isFinite(value) || value < 0) return '--';
-
-  const days = Math.floor(value / 86400);
-  const hours = Math.floor((value % 86400) / 3600);
-  const minutes = Math.floor((value % 3600) / 60);
-
-  if (days > 0) {
-    return `${days}天 ${hours}小时 ${minutes}分`;
-  }
-
-  return `${hours}小时 ${minutes}分`;
 }
 
 function formatDateTime(value?: string | null) {

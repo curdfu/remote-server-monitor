@@ -80,6 +80,11 @@ export function getHealth(signal?: AbortSignal) {
   return request<HealthDto>('/health', { signal });
 }
 
+// 全局运行信息仅读取缓存快照，不触发硬件采集或订阅。
+export function getHardwareRealtime(signal?: AbortSignal) {
+  return request<HardwareRealtimeDto>('/api/hardware/realtime', { signal });
+}
+
 // 调用后端 /api/overview：获取首页概览数据
 export function getOverview() {
   return request<RealtimeOverviewDto>('/api/overview');

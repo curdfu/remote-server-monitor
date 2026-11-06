@@ -84,6 +84,8 @@ This file gives coding agents repository-specific guidance for working in
 - Frontend: `npm test` in `src/Monitor.Frontend` uses Node's built-in test runner.
   Tests include behavior checks and a small number of source-structure guards;
   source matching is not a substitute for browser interaction testing.
+  `system-runtime.test.js` covers shared runtime formatting, snapshot ordering,
+  banner removal, and preservation of page actions.
 - Deployment rollback tests (mock services and temporary directories only):
   - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-deployment.ps1`
 - SQLite maintenance tests (temporary databases only; never production):
