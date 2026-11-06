@@ -123,7 +123,7 @@
 
 .network-page .filters-toolbar {
   display: grid;
-  grid-template-columns: minmax(400px, 2fr) minmax(120px, .7fr) minmax(120px, .7fr) minmax(100px, .55fr);
+  grid-template-columns: minmax(480px, 2fr) minmax(120px, .7fr) minmax(120px, .7fr) minmax(100px, .55fr);
   align-items: end;
   gap: 16px;
   padding-top: 16px;
@@ -160,6 +160,26 @@
   background: var(--surface-0);
   color: var(--ink);
   font: 400 14px/20px var(--font-body);
+}
+
+/* WebKit date controls must fit their grid cell rather than their native intrinsic width. */
+.network-page .filter-field input[type='datetime-local'] {
+  display: block;
+  width: 0;
+  min-width: 100%;
+  max-width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.network-page .filter-field input[type='datetime-local']::-webkit-date-and-time-value {
+  min-width: 0;
+  text-align: left;
+}
+
+.network-page .filter-field input[type='datetime-local']::-webkit-datetime-edit {
+  min-width: 0;
+  padding: 0;
 }
 
 .network-page .network-mobile-toggle {
@@ -1161,6 +1181,14 @@ dialog.app-segments-overlay::backdrop {
 }
 
 @media (max-width: 960px) {
+  .network-page .filter-group-fields-time {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .network-page .filter-field input[type='datetime-local'] {
+    font-size: 16px;
+  }
+
   .network-page .ranking-table-head {
     display: none;
   }

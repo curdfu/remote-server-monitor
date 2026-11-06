@@ -31,3 +31,20 @@ test('network summary panels stack before ranking and stretch on mobile and tabl
   assert.match(mobile, /\.network-page \.preset-row \.chip-button,[\s\S]*?\{[^}]*min-height:\s*44px;/);
   assert.match(mobile, /\.network-page \.ranking-ignore-button,[\s\S]*?\{[^}]*width:\s*44px;[^}]*height:\s*44px;/);
 });
+
+test('tablet date fields fit their cells without clipping the native WebKit control', async () => {
+  const [styles, view] = await Promise.all([readFile(stylesPath, 'utf8'), readFile(viewPath, 'utf8')]);
+  assert.equal((view.match(/type="datetime-local"/g) ?? []).length, 2);
+  const date = styles.match(/\.network-page \.filter-field input\[type='datetime-local'\]\s*\{([^}]+)\}/)?.[1] ?? '';
+  assert.match(date, /width:\s*0;/);
+  assert.match(date, /min-width:\s*100%;/);
+  assert.match(date, /max-width:\s*100%;/);
+  assert.match(date, /appearance:\s*none;/);
+  assert.doesNotMatch(date, /overflow:\s*hidden|text-overflow:\s*ellipsis/);
+  assert.match(styles, /input\[type='datetime-local'\]::-webkit-date-and-time-value\s*\{[^}]*min-width:\s*0;[^}]*text-align:\s*left/);
+  const start = styles.indexOf('@media (max-width: 960px)');
+  assert.ok(start >= 0);
+  const tablet = styles.slice(start, styles.indexOf('@media (max-width: 720px)', start));
+  assert.match(tablet, /\.filter-group-fields-time\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(tablet, /input\[type='datetime-local'\]\s*\{[^}]*font-size:\s*16px/);
+});

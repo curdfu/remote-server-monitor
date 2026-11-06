@@ -60,6 +60,19 @@ test('core metrics include all six readings without a separate sensor panel', as
   assert.match(mobile, /\.dashboard-hero-grid \.metric-card:nth-child\(2n \+ 1\)\s*\{[^}]*border-left:\s*0/);
 });
 
+test('metric grid uses continuous dividers without doubling row spacing', async () => {
+  const styles = await readFile(observatoryStylesPath, 'utf8');
+  assert.match(styles, /\.dashboard-hero-grid\s*\{[^}]*gap:\s*0;/);
+  assert.doesNotMatch(styles, /row-gap:/);
+  assert.match(styles, /\.dashboard-hero-grid \.metric-card\s*\{[^}]*padding:\s*0 24px 16px/);
+  assert.match(styles, /\.dashboard-hero-grid \.metric-card:nth-child\(n \+ 4\)\s*\{[^}]*padding-top:\s*16px;[^}]*padding-bottom:\s*0;[^}]*border-top:\s*1px solid var\(--line\)/);
+  const mobile = styles.slice(styles.indexOf('@media (max-width: 720px)'));
+  assert.match(mobile, /\.metric-card:nth-child\(n\)\s*\{[^}]*padding:\s*12px;/);
+  assert.match(mobile, /\.metric-card:nth-child\(-n \+ 2\)\s*\{[^}]*padding-top:\s*0/);
+  assert.match(mobile, /\.metric-card:nth-child\(n \+ 3\)\s*\{[^}]*border-top:/);
+  assert.match(mobile, /\.metric-card:nth-child\(n \+ 5\)\s*\{[^}]*padding-bottom:\s*0/);
+});
+
 test('dashboard core metrics highlights the hottest disk with its temperature and name', async () => {
   const source = await readFile(viewPath, 'utf8');
 

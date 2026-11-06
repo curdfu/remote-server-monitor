@@ -86,6 +86,8 @@ This file gives coding agents repository-specific guidance for working in
   source matching is not a substitute for browser interaction testing.
   `system-runtime.test.js` covers shared runtime formatting, snapshot ordering,
   banner removal, and preservation of page actions.
+  Tablet layout guards cover navigation, date controls, and metric dividers;
+  native iPad date controls also require a WebKit or real-device check.
 - Deployment rollback tests (mock services and temporary directories only):
   - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-deployment.ps1`
 - SQLite maintenance tests (temporary databases only; never production):
