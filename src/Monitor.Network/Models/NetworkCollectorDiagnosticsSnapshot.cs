@@ -11,4 +11,9 @@ public sealed class NetworkCollectorDiagnosticsSnapshot
     public long TotalPublishedEvents { get; init; }
     public long TotalLostEvents { get; init; }
     public int AdaptiveRestartCount { get; init; }
+    public bool IsRecovering { get; init; }
+    public bool IsStopping { get; init; }
+    public int ConsecutiveFailures { get; init; }
+    public DateTimeOffset? LastFailureAt { get; init; }
+    public DateTimeOffset? LastRecoveryAt { get; init; }
 }

@@ -48,7 +48,7 @@ watch(() => props.open, (open) => {
 async function openDialog() {
   await nextTick();
   const dialog = dialogElement.value;
-  if (!dialog || dialog.open) return;
+  if (!dialog || !props.open || dialog.open) return;
 
   closeEventEmitted = false;
   previousBodyOverflow = document.body.style.overflow;

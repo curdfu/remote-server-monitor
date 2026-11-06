@@ -1,6 +1,3 @@
-﻿using Monitor.Contracts.Options;
-using Monitor.Hardware.Abstractions;
-using Monitor.Network.Abstractions;
 using Monitor.WebApi.Endpoints;
 using Monitor.WebApi.Hubs;
 using Monitor.WebApi.Middleware;
@@ -11,85 +8,19 @@ public static class WebApplicationExtensions
 {
     public static WebApplication MapMonitorWebApi(this WebApplication app)
     {
+        app.UseMonitorHttpDelivery();
+        var staticFileOptions = HttpDeliveryExtensions.CreateMonitorStaticFileOptions();
         var indexFilePath = Path.Combine(app.Environment.WebRootPath ?? string.Empty, "index.html");
         if (File.Exists(indexFilePath))
         {
             app.UseDefaultFiles();
-            app.UseStaticFiles();
+            app.UseStaticFiles(staticFileOptions);
         }
 
         app.UseCors();
-
         app.UseMiddleware<GlobalExceptionMiddleware>();
 
-        app.MapGet("/health", (
-            IHardwareSnapshotBuffer hardwareSnapshotBuffer,
-            INetworkAggregator networkAggregator,
-            INetworkCollector networkCollector,
-            INetworkCollectorDiagnostics networkCollectorDiagnostics,
-            IMonitorSettingsProvider settings) =>
-        {
-            const long networkAggregationBacklogThreshold = 100_000;
-            var utcNow = DateTimeOffset.UtcNow;
-            var hardware = hardwareSnapshotBuffer.GetLatest();
-            var collectorDiagnostics = networkCollectorDiagnostics.GetSnapshot();
-            var currentSettings = settings.Current;
-
-            var hardwareAgeSeconds = hardware is null
-                ? (double?)null
-                : (utcNow - hardware.SampleTime).TotalSeconds;
-            var hardwareThresholdSeconds = Math.Max(currentSettings.HardwareSampleIntervalMs / 1000d * 3d, 5d);
-            var sessionObservedEvents = collectorDiagnostics.PublishedEvents + collectorDiagnostics.LostEvents;
-            var sessionLossRate = sessionObservedEvents > 0
-                ? collectorDiagnostics.LostEvents * 100d / sessionObservedEvents
-                : 0d;
-            var totalObservedEvents = collectorDiagnostics.TotalPublishedEvents + collectorDiagnostics.TotalLostEvents;
-            var totalLossRate = totalObservedEvents > 0
-                ? collectorDiagnostics.TotalLostEvents * 100d / totalObservedEvents
-                : 0d;
-
-            var hardwareHealthy = hardwareAgeSeconds.HasValue && hardwareAgeSeconds.Value <= hardwareThresholdSeconds;
-            var networkHealthy = networkCollector.IsRunning &&
-                                 collectorDiagnostics.LostEvents == 0 &&
-                                 networkAggregator.PendingEventCount < networkAggregationBacklogThreshold;
-
-            return Results.Ok(new
-            {
-                status = hardwareHealthy && networkHealthy ? "ok" : "degraded",
-                utcNow,
-                hardware = new
-                {
-                    latestSampleTime = hardware?.SampleTime,
-                    sampleAgeSeconds = hardwareAgeSeconds,
-                    thresholdSeconds = hardwareThresholdSeconds,
-                    isHealthy = hardwareHealthy
-                },
-                network = new
-                {
-                    collectorRunning = networkCollector.IsRunning,
-                    isHealthy = networkHealthy,
-                    aggregation = new
-                    {
-                        pendingEventCount = networkAggregator.PendingEventCount,
-                        backlogThreshold = networkAggregationBacklogThreshold
-                    },
-                    etw = new
-                    {
-                        collectorDiagnostics.SessionName,
-                        collectorDiagnostics.StartedAt,
-                        collectorDiagnostics.BufferSizeMb,
-                        collectorDiagnostics.AdaptiveRestartCount,
-                        sessionPublishedEvents = collectorDiagnostics.PublishedEvents,
-                        sessionLostEvents = collectorDiagnostics.LostEvents,
-                        sessionLossRate,
-                        totalPublishedEvents = collectorDiagnostics.TotalPublishedEvents,
-                        totalLostEvents = collectorDiagnostics.TotalLostEvents,
-                        totalLossRate
-                    }
-                }
-            });
-        });
-
+        app.MapHealthEndpoints();
         app.MapOverviewEndpoints();
         app.MapHardwareEndpoints();
         app.MapNetworkEndpoints();
@@ -98,7 +29,7 @@ public static class WebApplicationExtensions
 
         if (File.Exists(indexFilePath))
         {
-            app.MapFallbackToFile("index.html");
+            app.MapFallbackToFile("index.html", staticFileOptions);
         }
 
         return app;

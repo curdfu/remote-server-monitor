@@ -10,7 +10,7 @@ namespace Monitor.Network.Services;
 
 // ProcessResolver 把 ETW 里的 PID 转成稳定的应用身份。
 // 进程可能快速退出或权限不足导致路径不可读，所以所有进程访问都必须可失败，并提供 pid-* 兜底名称。
-public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessResolver
+public sealed class ProcessResolver(ILogger<ProcessResolver> logger, TimeProvider? timeProvider = null) : IProcessResolver
 {
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DisplayNameCacheLifetime = TimeSpan.FromHours(6);
@@ -23,8 +23,8 @@ public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessR
 
     public ResolvedProcessInfo Resolve(int pid)
     {
-        var now = DateTimeOffset.UtcNow;
-        if (_cache.TryGetValue(pid, out var cached) && now - cached.StoredAt <= CacheLifetime)
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        if (_cache.TryGetValue(pid, out var cached) && now - cached.StoredAt < CacheLifetime)
         {
             return cached.Value;
         }
@@ -122,7 +122,7 @@ public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessR
         {
             if (now - pair.Value.StoredAt > CacheLifetime)
             {
-                _cache.TryRemove(pair.Key, out _);
+                _cache.TryRemove(pair);
             }
         }
 
@@ -130,7 +130,7 @@ public sealed class ProcessResolver(ILogger<ProcessResolver> logger) : IProcessR
         {
             if (now - pair.Value.StoredAt > DisplayNameCacheLifetime)
             {
-                _displayNameCache.TryRemove(pair.Key, out _);
+                _displayNameCache.TryRemove(pair);
             }
         }
     }

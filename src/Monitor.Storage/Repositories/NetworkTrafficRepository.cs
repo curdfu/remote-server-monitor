@@ -1,6 +1,7 @@
 ﻿using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
+using Monitor.Contracts.Dtos;
 using Monitor.Network.Abstractions;
 using Monitor.Network.Enums;
 using Monitor.Network.Models;
@@ -17,7 +18,6 @@ public sealed class NetworkTrafficRepository(
     ILogger<NetworkTrafficRepository> logger)
 {
     private const int AppIdLookupBatchSize = 200;
-    private const int SqlParameterBatchSize = 400;
     public const int RollupWindowDurationSeconds = 12 * 60 * 60;
     private static readonly TimeSpan RollupWindowDuration = TimeSpan.FromSeconds(RollupWindowDurationSeconds);
 
@@ -53,8 +53,7 @@ public sealed class NetworkTrafficRepository(
         IReadOnlyList<TrafficBucket> buckets,
         CancellationToken cancellationToken)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
         await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);
         var transaction = (SqliteTransaction)transactionHandle;
 
@@ -106,6 +105,19 @@ public sealed class NetworkTrafficRepository(
             await command.ExecuteNonQueryAsync(cancellationToken);
 
             var bucketRollupWindowStart = AlignDownToRollupWindow(bucketStartTime);
+            // A late bucket in an unmarked historical window must be discovered again.
+            if (bucketRollupWindowStart < currentRollupWindowStart)
+            {
+                await using var rewind = connection.CreateCommand();
+                rewind.Transaction = transaction;
+                rewind.CommandText = """
+                    UPDATE storage_progress SET value = MIN(value, $start)
+                    WHERE name = 'network_rollup_cursor'
+                      AND NOT EXISTS (SELECT 1 FROM network_usage_rollup_12h_windows WHERE window_start_time = $start);
+                    """;
+                rewind.Parameters.AddWithValue("$start", ToDbTime(bucketRollupWindowStart));
+                await rewind.ExecuteNonQueryAsync(cancellationToken);
+            }
             // 如果迟到 bucket 属于已经 rollup 的完整窗口，需要同步增量更新 rollup，避免历史查询漏计。
             if (bucketRollupWindowStart < currentRollupWindowStart)
             {
@@ -132,8 +144,7 @@ public sealed class NetworkTrafficRepository(
         string? appKey = null,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -183,10 +194,10 @@ public sealed class NetworkTrafficRepository(
         int? topN = null,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
-
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction(deferred: true);
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         var trafficSourceSql = await BuildTrafficSourceSqlAsync(connection, command, from, to, cancellationToken);
 
         if (topN is > 0)
@@ -225,6 +236,127 @@ public sealed class NetworkTrafficRepository(
         return results;
     }
 
+    public async Task<(IReadOnlyList<AppTrafficPeriodSummary> Apps, IReadOnlyList<IgnoredNetworkAppDto> IgnoredApps,
+        AppTrafficPeriodSummary Overview, AppTrafficPeriodSummary Totals)> QueryDashboardAsync(
+        DateTimeOffset from, DateTimeOffset to, TrafficScopeFilter scopeFilter,
+        TrafficDirectionFilter directionFilter, int topN, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction(deferred: true);
+        var ignored = new List<IgnoredNetworkAppDto>();
+        await using (var ignoredCommand = connection.CreateCommand())
+        {
+            ignoredCommand.Transaction = transaction;
+            ignoredCommand.CommandText = """
+                                         SELECT app_key, process_name, display_name, executable_path
+                                         FROM ignored_network_apps
+                                         ORDER BY COALESCE(display_name, process_name) COLLATE NOCASE;
+                                         """;
+            await using var reader = await ignoredCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                ignored.Add(new IgnoredNetworkAppDto
+                {
+                    AppKey = reader.GetString(0), ProcessName = reader.GetString(1),
+                    DisplayName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    ExecutablePath = reader.IsDBNull(3) ? null : reader.GetString(3)
+                });
+            }
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        var source = await BuildTrafficSourceSqlAsync(connection, command, from, to, cancellationToken);
+        var rank = GetOrderByExpression(scopeFilter, directionFilter, "t");
+        var selectedScope = scopeFilter == TrafficScopeFilter.All ? null : MapScopeFilterToDbScope(scopeFilter);
+        var selectedDirection = directionFilter == TrafficDirectionFilter.Total ? null : MapDirectionFilterToDbDirection(directionFilter);
+        command.Parameters.AddWithValue("$scope", (object?)selectedScope ?? DBNull.Value);
+        command.Parameters.AddWithValue("$direction", (object?)selectedDirection ?? DBNull.Value);
+        command.Parameters.AddWithValue("$topN", Math.Clamp(topN, 1, 100));
+        // Materialize the same planned source once. Totals preserve the endpoint's asymmetric
+        // filters, while app rows retain their unfiltered component breakdowns.
+        command.CommandText = $"""
+            WITH traffic AS MATERIALIZED ({source}),
+            app_totals AS (
+                SELECT a.app_key, a.process_name, a.display_name, a.executable_path,
+                       SUM(CASE WHEN t.direction = 'outbound' THEN t.bytes ELSE 0 END) AS up,
+                       SUM(CASE WHEN t.direction = 'inbound' THEN t.bytes ELSE 0 END) AS down,
+                       SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wu,
+                       SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'wan' THEN t.bytes ELSE 0 END) AS wd,
+                       SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'lan' THEN t.bytes ELSE 0 END) AS lu,
+                       SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'lan' THEN t.bytes ELSE 0 END) AS ld,
+                       SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'loopback' THEN t.bytes ELSE 0 END) AS bu,
+                       SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'loopback' THEN t.bytes ELSE 0 END) AS bd,
+                       SUM(CASE WHEN t.direction = 'outbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS ou,
+                       SUM(CASE WHEN t.direction = 'inbound' AND t.scope_type = 'other' THEN t.bytes ELSE 0 END) AS od,
+                       {rank} AS rank_bytes
+                FROM traffic t JOIN app_registry a ON a.id = t.app_id
+                WHERE NOT EXISTS (SELECT 1 FROM ignored_network_apps i WHERE i.app_key = a.app_key COLLATE NOCASE)
+                GROUP BY a.id HAVING rank_bytes > 0
+                ORDER BY rank_bytes DESC, a.process_name ASC LIMIT $topN
+            ),
+            totals AS (
+                SELECT t.direction, t.scope_type,
+                       SUM(CASE WHEN $direction IS NULL OR t.direction = $direction THEN t.bytes ELSE 0 END) AS overview_bytes,
+                       SUM(CASE WHEN $scope IS NULL OR t.scope_type = $scope THEN t.bytes ELSE 0 END) AS totals_bytes
+                FROM traffic t GROUP BY t.direction, t.scope_type
+            )
+            SELECT 0, app_key, process_name, display_name, executable_path,
+                   up, down, wu, wd, lu, ld, bu, bd, ou, od FROM app_totals
+            UNION ALL
+            SELECT 1, direction, scope_type, NULL, NULL, overview_bytes, totals_bytes, 0, 0, 0, 0, 0, 0, 0, 0 FROM totals;
+            """;
+        var apps = new List<AppTrafficPeriodSummary>();
+        var overview = new long[10];
+        var totals = new long[10];
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (reader.GetInt32(0) == 0)
+                {
+                    apps.Add(new AppTrafficPeriodSummary
+                    {
+                        AppKey = reader.GetString(1), ProcessName = reader.GetString(2),
+                        DisplayName = reader.IsDBNull(3) ? null : reader.GetString(3),
+                        ExecutablePath = reader.IsDBNull(4) ? null : reader.GetString(4),
+                        TotalUploadBytes = reader.GetInt64(5), TotalDownloadBytes = reader.GetInt64(6),
+                        WanUploadBytes = reader.GetInt64(7), WanDownloadBytes = reader.GetInt64(8),
+                        LanUploadBytes = reader.GetInt64(9), LanDownloadBytes = reader.GetInt64(10),
+                        LoopbackUploadBytes = reader.GetInt64(11), LoopbackDownloadBytes = reader.GetInt64(12),
+                        OtherUploadBytes = reader.GetInt64(13), OtherDownloadBytes = reader.GetInt64(14)
+                    });
+                }
+                else
+                {
+                    var direction = reader.GetString(1);
+                    var scope = reader.GetString(2);
+                    AccumulateTotals(overview, direction, scope, reader.GetInt64(5));
+                    AccumulateTotals(totals, direction, scope, reader.GetInt64(6));
+                }
+            }
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return (apps, ignored, MakeTotals(overview), MakeTotals(totals));
+    }
+
+    private static void AccumulateTotals(long[] totals, string direction, string scope, long bytes)
+    {
+        var offset = direction == "outbound" ? 0 : 1;
+        totals[offset] += bytes;
+        var scopeIndex = scope switch { "wan" => 2, "lan" => 4, "loopback" => 6, "other" => 8, _ => -1 };
+        if (scopeIndex >= 0) totals[scopeIndex + offset] += bytes;
+    }
+
+    private static AppTrafficPeriodSummary MakeTotals(long[] values) => new()
+    {
+        TotalUploadBytes = values[0], TotalDownloadBytes = values[1],
+        WanUploadBytes = values[2], WanDownloadBytes = values[3],
+        LanUploadBytes = values[4], LanDownloadBytes = values[5],
+        LoopbackUploadBytes = values[6], LoopbackDownloadBytes = values[7],
+        OtherUploadBytes = values[8], OtherDownloadBytes = values[9]
+    };
+
     public async Task<AppTrafficPeriodSummary> QueryTotalsAsync(
         DateTimeOffset from,
         DateTimeOffset to,
@@ -232,10 +364,10 @@ public sealed class NetworkTrafficRepository(
         TrafficDirectionFilter directionFilter = TrafficDirectionFilter.Total,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
-
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction(deferred: true);
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         var trafficSourceSql = await BuildTrafficSourceSqlAsync(
             connection,
             command,
@@ -356,10 +488,10 @@ public sealed class NetworkTrafficRepository(
         var rangeFrom = from.ToUniversalTime();
         var rangeTo = to.ToUniversalTime();
 
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction(deferred: true);
 
-        var appId = await QueryAppIdAsync(connection, appKey, cancellationToken);
+        var appId = await QueryAppIdAsync(connection, transaction, appKey, cancellationToken);
         if (appId is null)
         {
             return Array.Empty<AppTrafficSegment>();
@@ -371,6 +503,7 @@ public sealed class NetworkTrafficRepository(
         {
             var summary = await QueryAppSegmentSummaryAsync(
                 connection,
+                transaction,
                 appId.Value,
                 range.From,
                 range.To,
@@ -408,45 +541,16 @@ public sealed class NetworkTrafficRepository(
             throw new ArgumentOutOfRangeException(nameof(maxWindows), maxWindows, "Rollup window count must be positive.");
         }
 
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
-
-        var earliestBucketTime = await GetEarliestBucketTimeAsync(connection, cancellationToken);
-        if (earliestBucketTime is null)
-        {
-            return 0;
-        }
-
-        // 首个可 rollup 窗口必须从完整窗口边界开始，避免把开头不完整的历史片段误聚合。
-        var firstEligibleWindowStart = AlignUpToRollupWindow(earliestBucketTime.Value);
-        var currentWindowStart = AlignDownToRollupWindow(DateTimeOffset.UtcNow);
-        if (firstEligibleWindowStart >= currentWindowStart)
-        {
-            return 0;
-        }
-
-        var existingWindowStarts = await GetRollupWindowMarkerStartsAsync(
-            connection,
-            firstEligibleWindowStart,
-            currentWindowStart,
-            cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
 
         var processed = 0;
         var firstProcessedWindowStart = (DateTimeOffset?)null;
         var lastProcessedWindowStart = (DateTimeOffset?)null;
-
-        for (var windowStart = firstEligibleWindowStart;
-             windowStart < currentWindowStart && processed < maxWindows;
-             windowStart = windowStart.Add(RollupWindowDuration))
+        while (processed < maxWindows)
         {
-            if (existingWindowStarts.Contains(windowStart))
-            {
-                continue;
-            }
-
-            await SqliteBusyRetry.ExecuteAsync(
-                token => RollupWindowAsync(connection, windowStart, token),
-                cancellationToken);
+            var windowStart = await SqliteBusyRetry.ExecuteAsync(
+                token => RollupNextWindowAsync(connection, token), cancellationToken);
+            if (windowStart is null) break;
             firstProcessedWindowStart ??= windowStart;
             lastProcessedWindowStart = windowStart;
             processed++;
@@ -483,8 +587,7 @@ public sealed class NetworkTrafficRepository(
         IReadOnlyCollection<AppRegistryEntry> entries,
         CancellationToken cancellationToken)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
         await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);
         var transaction = (SqliteTransaction)transactionHandle;
 
@@ -500,10 +603,12 @@ public sealed class NetworkTrafficRepository(
 
     private static async Task<long?> QueryAppIdAsync(
         SqliteConnection connection,
+        SqliteTransaction transaction,
         string appKey,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
                               SELECT id
                               FROM app_registry
@@ -518,6 +623,7 @@ public sealed class NetworkTrafficRepository(
 
     private static async Task<AppTrafficPeriodSummary> QueryAppSegmentSummaryAsync(
         SqliteConnection connection,
+        SqliteTransaction transaction,
         long appId,
         DateTimeOffset from,
         DateTimeOffset to,
@@ -526,6 +632,7 @@ public sealed class NetworkTrafficRepository(
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         var trafficSourceSql = await BuildTrafficSourceSqlAsync(
             connection,
             command,
@@ -715,8 +822,8 @@ public sealed class NetworkTrafficRepository(
         command.Parameters["$processName"].Value = entry.ProcessName;
         command.Parameters["$displayName"].Value = ToDbValue(entry.DisplayName);
         command.Parameters["$executablePath"].Value = ToDbValue(entry.ExecutablePath);
-        command.Parameters["$firstSeenAt"].Value = entry.FirstSeenAt.ToString("O");
-        command.Parameters["$lastSeenAt"].Value = entry.LastSeenAt.ToString("O");
+        command.Parameters["$firstSeenAt"].Value = ToDbTime(entry.FirstSeenAt);
+        command.Parameters["$lastSeenAt"].Value = ToDbTime(entry.LastSeenAt);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -782,15 +889,20 @@ public sealed class NetworkTrafficRepository(
             connection,
             from.ToUniversalTime(),
             to.ToUniversalTime(),
-            cancellationToken);
+            cancellationToken,
+            command.Transaction);
 
         var filters = sourceFilters is { Count: > 0 }
             ? sourceFilters
             : [TrafficSourceFilter.Empty];
         var sourceQueries = new List<string>();
-        if (plan.RollupWindowStarts.Count > 0)
+        for (var index = 0; index < plan.RollupRanges.Count; index++)
         {
-            var rollupParameterNames = AddRollupWindowParameters(command, plan.RollupWindowStarts);
+            var range = plan.RollupRanges[index];
+            var fromParameterName = $"$rollupFrom{index}";
+            var toParameterName = $"$rollupTo{index}";
+            command.Parameters.AddWithValue(fromParameterName, ToDbTime(range.From));
+            command.Parameters.AddWithValue(toParameterName, ToDbTime(range.To));
             foreach (var filter in filters)
             {
                 sourceQueries.Add($"""
@@ -799,7 +911,8 @@ public sealed class NetworkTrafficRepository(
                                           r.scope_type,
                                           r.bytes
                                    FROM network_usage_rollup_12h r
-                                   WHERE r.window_start_time IN ({string.Join(", ", rollupParameterNames)})
+                                   WHERE r.window_start_time >= {fromParameterName}
+                                     AND r.window_start_time < {toParameterName}
                                    {BuildTrafficSourceFilterSql(filter, "r")}
                                    """);
             }
@@ -891,7 +1004,8 @@ public sealed class NetworkTrafficRepository(
         SqliteConnection connection,
         DateTimeOffset from,
         DateTimeOffset to,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SqliteTransaction? transaction = null)
     {
         // 一个查询范围可能横跨 raw 和 rollup：边缘不完整窗口用 raw，中间完整且已标记完成的窗口用 rollup。
         if (from >= to)
@@ -900,104 +1014,49 @@ public sealed class NetworkTrafficRepository(
         }
 
         var rawRanges = new List<TimeRange>();
-        var rollupWindowStarts = new List<DateTimeOffset>();
+        var rollupRanges = new List<TimeRange>();
         var firstFullWindowStart = AlignUpToRollupWindow(from);
-        var firstPartialWindowEnd = firstFullWindowStart < to ? firstFullWindowStart : to;
         var fullWindowEnd = AlignDownToRollupWindow(to);
-
-        if (from < firstPartialWindowEnd)
-        {
-            rawRanges.Add(new TimeRange(from, firstPartialWindowEnd));
-        }
+        var cursor = from;
 
         if (firstFullWindowStart < fullWindowEnd)
         {
-            var candidateWindowStarts = EnumerateRollupWindowStarts(firstFullWindowStart, fullWindowEnd).ToArray();
-            var completedWindowStarts = await QueryCompletedRollupWindowStartsAsync(
-                connection,
-                candidateWindowStarts,
-                cancellationToken);
-
-            foreach (var windowStart in candidateWindowStarts)
+            await using var markerCommand = connection.CreateCommand();
+            markerCommand.Transaction = transaction;
+            markerCommand.CommandText = """
+                                        SELECT window_start_time
+                                        FROM network_usage_rollup_12h_windows
+                                        WHERE window_start_time >= $from AND window_start_time < $to
+                                        ORDER BY window_start_time;
+                                        """;
+            markerCommand.Parameters.AddWithValue("$from", ToDbTime(firstFullWindowStart));
+            markerCommand.Parameters.AddWithValue("$to", ToDbTime(fullWindowEnd));
+            await using var reader = await markerCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
             {
-                if (completedWindowStarts.Contains(windowStart))
+                var start = reader.GetDateTimeOffset(0).ToUniversalTime();
+                if (start < cursor || AlignDownToRollupWindow(start) != start)
                 {
-                    rollupWindowStarts.Add(windowStart);
                     continue;
                 }
 
-                rawRanges.Add(new TimeRange(windowStart, windowStart.Add(RollupWindowDuration)));
-            }
-        }
-
-        if (fullWindowEnd < to)
-        {
-            var lastPartialWindowStart = fullWindowEnd > from ? fullWindowEnd : from;
-            if (lastPartialWindowStart < to)
-            {
-                rawRanges.Add(new TimeRange(lastPartialWindowStart, to));
-            }
-        }
-
-        return new TrafficSourcePlan(rollupWindowStarts, MergeTimeRanges(rawRanges));
-    }
-
-    private static async Task<HashSet<DateTimeOffset>> QueryCompletedRollupWindowStartsAsync(
-        SqliteConnection connection,
-        IReadOnlyList<DateTimeOffset> windowStarts,
-        CancellationToken cancellationToken)
-    {
-        var completedWindowStarts = new HashSet<DateTimeOffset>();
-        if (windowStarts.Count == 0)
-        {
-            return completedWindowStarts;
-        }
-
-        for (var offset = 0; offset < windowStarts.Count; offset += SqlParameterBatchSize)
-        {
-            var count = Math.Min(SqlParameterBatchSize, windowStarts.Count - offset);
-            await using var command = connection.CreateCommand();
-            var sqlBuilder = new StringBuilder();
-            sqlBuilder.Append("SELECT window_start_time FROM network_usage_rollup_12h_windows WHERE window_start_time IN (");
-
-            for (var index = 0; index < count; index++)
-            {
-                if (index > 0)
+                if (cursor < start)
                 {
-                    sqlBuilder.Append(", ");
+                    rawRanges.Add(new TimeRange(cursor, start));
                 }
 
-                var parameterName = $"$windowStart{index}";
-                sqlBuilder.Append(parameterName);
-                command.Parameters.AddWithValue(parameterName, ToDbTime(windowStarts[offset + index]));
-            }
-
-            sqlBuilder.Append(");");
-            command.CommandText = sqlBuilder.ToString();
-
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                completedWindowStarts.Add(reader.GetDateTimeOffset(0).ToUniversalTime());
+                var end = start.Add(RollupWindowDuration);
+                rollupRanges.Add(new TimeRange(start, end));
+                cursor = end;
             }
         }
 
-        return completedWindowStarts;
-    }
-
-    private static IReadOnlyList<string> AddRollupWindowParameters(
-        SqliteCommand command,
-        IReadOnlyList<DateTimeOffset> windowStarts)
-    {
-        var parameterNames = new List<string>(windowStarts.Count);
-        for (var index = 0; index < windowStarts.Count; index++)
+        if (cursor < to)
         {
-            var parameterName = $"$rollupWindow{index}";
-            command.Parameters.AddWithValue(parameterName, ToDbTime(windowStarts[index]));
-            parameterNames.Add(parameterName);
+            rawRanges.Add(new TimeRange(cursor, to));
         }
 
-        return parameterNames;
+        return new TrafficSourcePlan(MergeTimeRanges(rollupRanges), MergeTimeRanges(rawRanges));
     }
 
     private static IReadOnlyList<TimeRange> MergeTimeRanges(IReadOnlyList<TimeRange> ranges)
@@ -1036,59 +1095,76 @@ public sealed class NetworkTrafficRepository(
         return mergedRanges;
     }
 
-    private static async Task<DateTimeOffset?> GetEarliestBucketTimeAsync(
+    private static async Task<DateTimeOffset?> RollupNextWindowAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-                              SELECT bucket_start_time
-                              FROM network_usage_agg
-                              ORDER BY bucket_start_time ASC
-                              LIMIT 1;
-                              """;
-
-        var result = await command.ExecuteScalarAsync(cancellationToken);
-        return result is null or DBNull ? null : DateTimeOffset.Parse((string)result).ToUniversalTime();
-    }
-
-    private static async Task<HashSet<DateTimeOffset>> GetRollupWindowMarkerStartsAsync(
-        SqliteConnection connection,
-        DateTimeOffset from,
-        DateTimeOffset to,
-        CancellationToken cancellationToken)
-    {
-        var windowStarts = new HashSet<DateTimeOffset>();
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-                              SELECT window_start_time
-                              FROM network_usage_rollup_12h_windows
-                              WHERE window_start_time >= $from
-                                AND window_start_time < $to;
-                              """;
-        command.Parameters.AddWithValue("$from", ToDbTime(from));
-        command.Parameters.AddWithValue("$to", ToDbTime(to));
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
+        // SQLite's immediate write transaction serializes selection with late SaveAsync
+        // and retention. Re-read the cursor for every window: a save between iterations
+        // may have rewound it, even if the new value equals an earlier observed value.
+        await using var transaction = connection.BeginTransaction(deferred: false);
+        var currentWindowStart = AlignDownToRollupWindow(DateTimeOffset.UtcNow);
+        await using var progress = connection.CreateCommand();
+        progress.Transaction = transaction;
+        progress.CommandText = "SELECT value FROM storage_progress WHERE name = 'network_rollup_cursor';";
+        var storedCursor = await progress.ExecuteScalarAsync(cancellationToken);
+        DateTimeOffset firstEligibleWindowStart;
+        if (storedCursor is string cursorText && DateTimeOffset.TryParse(cursorText, out var cursor))
         {
-            windowStarts.Add(reader.GetDateTimeOffset(0).ToUniversalTime());
+            firstEligibleWindowStart = cursor.ToUniversalTime();
+        }
+        else
+        {
+            await using var earliest = connection.CreateCommand();
+            earliest.Transaction = transaction;
+            earliest.CommandText = "SELECT bucket_start_time FROM network_usage_agg ORDER BY bucket_start_time LIMIT 1;";
+            if (await earliest.ExecuteScalarAsync(cancellationToken) is not string earliestTime) return null;
+            // Do not mark the oldest pre-existing partial window as complete.
+            firstEligibleWindowStart = AlignUpToRollupWindow(DateTimeOffset.Parse(earliestTime));
         }
 
-        return windowStarts;
-    }
+        await using var floorCommand = connection.CreateCommand();
+        floorCommand.Transaction = transaction;
+        floorCommand.CommandText = "SELECT value FROM storage_progress WHERE name = 'network_retention_cutoff';";
+        if (await floorCommand.ExecuteScalarAsync(cancellationToken) is string floorText &&
+            DateTimeOffset.TryParse(floorText, out var floor))
+        {
+            var retentionFloor = AlignUpToRollupWindow(floor);
+            if (retentionFloor > firstEligibleWindowStart) firstEligibleWindowStart = retentionFloor;
+        }
 
-    private static async Task RollupWindowAsync(
-        SqliteConnection connection,
-        DateTimeOffset windowStart,
-        CancellationToken cancellationToken)
-    {
-        // 单个窗口 rollup 是可重建的：先删除旧结果，再从 raw bucket 全量聚合并写入完成标记。
+        // Jump directly to the next indexed raw row, without enumerating empty windows.
+        await using var nextBucket = connection.CreateCommand();
+        nextBucket.Transaction = transaction;
+        nextBucket.CommandText = """
+            SELECT bucket_start_time FROM network_usage_agg
+            WHERE bucket_start_time >= $from AND bucket_start_time < $to
+            ORDER BY bucket_start_time LIMIT 1;
+            """;
+        nextBucket.Parameters.AddWithValue("$from", ToDbTime(firstEligibleWindowStart));
+        nextBucket.Parameters.AddWithValue("$to", ToDbTime(currentWindowStart));
+        if (await nextBucket.ExecuteScalarAsync(cancellationToken) is not string nextTime) return null;
+        var windowStart = AlignDownToRollupWindow(DateTimeOffset.Parse(nextTime));
         var windowEnd = windowStart.Add(RollupWindowDuration);
         var updatedAt = DateTimeOffset.UtcNow;
 
-        await using var transactionHandle = await connection.BeginTransactionAsync(cancellationToken);
-        var transaction = (SqliteTransaction)transactionHandle;
+        // Never rebuild an existing marker, or a window touched by retention. Both decisions
+        // are made after obtaining the writer lock so cleanup cannot race this transaction.
+        await using (var guard = connection.CreateCommand())
+        {
+            guard.Transaction = transaction;
+            guard.CommandText = """
+                                SELECT EXISTS(SELECT 1 FROM network_usage_rollup_12h_windows WHERE window_start_time = $start)
+                                    OR EXISTS(SELECT 1 FROM storage_progress WHERE name = 'network_retention_cutoff' AND value > $start);
+                                """;
+            guard.Parameters.AddWithValue("$start", ToDbTime(windowStart));
+            if (Convert.ToInt64(await guard.ExecuteScalarAsync(cancellationToken)) != 0)
+            {
+                await AdvanceRollupCursorAsync(connection, transaction, windowEnd, cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return windowStart;
+            }
+        }
 
         await DeleteRollupWindowAsync(connection, transaction, windowStart, cancellationToken);
 
@@ -1162,7 +1238,22 @@ public sealed class NetworkTrafficRepository(
             await markerCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        await AdvanceRollupCursorAsync(connection, transaction, windowEnd, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        return windowStart;
+    }
+
+    private static async Task AdvanceRollupCursorAsync(
+        SqliteConnection connection, SqliteTransaction transaction, DateTimeOffset next, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+                              INSERT INTO storage_progress(name, value) VALUES ('network_rollup_cursor', $next)
+                              ON CONFLICT(name) DO UPDATE SET value = MAX(value, excluded.value);
+                              """;
+        command.Parameters.AddWithValue("$next", ToDbTime(next));
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task<long> GetRollupSourceBucketCountAsync(
@@ -1423,16 +1514,6 @@ public sealed class NetworkTrafficRepository(
         return alignedValue == utcValue ? alignedValue : alignedValue.Add(RollupWindowDuration);
     }
 
-    private static IEnumerable<DateTimeOffset> EnumerateRollupWindowStarts(
-        DateTimeOffset from,
-        DateTimeOffset to)
-    {
-        for (var windowStart = from; windowStart < to; windowStart = windowStart.Add(RollupWindowDuration))
-        {
-            yield return windowStart;
-        }
-    }
-
     private static IReadOnlyList<TimeRange> BuildSegmentRanges(
         DateTimeOffset from,
         DateTimeOffset to,
@@ -1523,7 +1604,7 @@ public sealed class NetworkTrafficRepository(
 
     // 查询计划把一个时间范围拆成 rollup 窗口列表和 raw 时间段列表，最终由 UNION ALL 拼成统一流量源。
     private sealed record TrafficSourcePlan(
-        IReadOnlyList<DateTimeOffset> RollupWindowStarts,
+        IReadOnlyList<TimeRange> RollupRanges,
         IReadOnlyList<TimeRange> RawRanges);
 
     private sealed record TrafficSourceFilter(string? ScopeType, string? Direction)

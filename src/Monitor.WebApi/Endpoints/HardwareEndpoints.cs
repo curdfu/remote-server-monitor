@@ -30,10 +30,9 @@ public static class HardwareEndpoints
             HardwareRepository hardwareRepository,
             CancellationToken cancellationToken) =>
         {
-            var (rangeFrom, rangeTo) = NormalizeRange(from, to, TimeSpan.FromHours(1));
-            if (rangeFrom >= rangeTo)
+            if (!HistoryRange.TryNormalize(from, to, TimeSpan.FromHours(1), out var rangeFrom, out var rangeTo, out var error))
             {
-                return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
+                return Results.BadRequest(new { message = error });
             }
 
             var snapshots = await hardwareRepository.QueryRangeAsync(
@@ -73,13 +72,4 @@ public static class HardwareEndpoints
         };
     }
 
-    private static (DateTimeOffset From, DateTimeOffset To) NormalizeRange(
-        DateTimeOffset? from,
-        DateTimeOffset? to,
-        TimeSpan defaultWindow)
-    {
-        var rangeTo = to ?? DateTimeOffset.UtcNow;
-        var rangeFrom = from ?? rangeTo.Subtract(defaultWindow);
-        return (rangeFrom, rangeTo);
-    }
 }

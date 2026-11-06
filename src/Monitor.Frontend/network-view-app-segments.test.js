@@ -4,11 +4,11 @@ import { readFile } from 'node:fs/promises';
 
 const apiPath = new URL('./src/services/api.ts', import.meta.url);
 const viewPath = new URL('./src/views/NetworkView.vue', import.meta.url);
-const stylesPath = new URL('./src/styles.css', import.meta.url);
-const observatoryStylesPath = new URL('./src/styles/observatory.css', import.meta.url);
+const stylesPath = new URL('./src/styles/network.css', import.meta.url);
 const networkEndpointsPath = new URL('../Monitor.WebApi/Endpoints/NetworkEndpoints.cs', import.meta.url);
 const databaseInitializerPath = new URL('../Monitor.Storage/Services/DatabaseInitializer.cs', import.meta.url);
 const ignoredAppsRepositoryPath = new URL('../Monitor.Storage/Repositories/IgnoredNetworkAppRepository.cs', import.meta.url);
+const trafficRepositoryPath = new URL('../Monitor.Storage/Repositories/NetworkTrafficRepository.cs', import.meta.url);
 
 test('network app segments API encodes app keys in the route', async () => {
   const source = await readFile(apiPath, 'utf8');
@@ -151,7 +151,7 @@ test('network view renders clickable app traffic segment details', async () => {
 
   assert.match(
     source,
-    /当前筛选范围内没有该应用的分段流量。/,
+    /当前筛选范围内没有该应用的分段流量/,
     'expected segment empty state',
   );
 });
@@ -161,9 +161,22 @@ test('network app segment tooltip rises above sibling bars while active', async 
 
   assert.match(
     source,
-    /\.app-segment-bar-item:hover,\s*\.app-segment-bar-item:focus-within\s*\{\s*z-index:\s*4;/,
+    /\.app-segment-bar-item:hover,\s*\.app-segment-bar-item:focus-within\s*\{\s*z-index:\s*[1-9]\d*;/,
     'expected hovered or focused segment items to rise above later sibling bars',
   );
+});
+
+test('segment tooltip remains focusable, edge-aware and inside the locally scrolling chart', async () => {
+  const [view, styles] = await Promise.all([readFile(viewPath, 'utf8'), readFile(stylesPath, 'utf8')]);
+  assert.match(view, /class="app-segments-chart-scroll"[^>]*tabindex="0"/);
+  assert.match(view, /class="app-segment-bar-target"[\s\S]*?tabindex="0"[\s\S]*?:aria-label="getSegmentTooltip\(segment\)"[\s\S]*?<div class="app-segment-bar"[^>]*><\/div>\s*<span class="app-segment-tooltip"/);
+  assert.match(styles, /\.app-segments-chart-scroll\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(styles, /\.app-segment-bar-item\s*\{[^}]*min-width:\s*44px/);
+  assert.match(styles, /\.app-segment-bar-target\s*\{[^}]*position:\s*relative;[^}]*min-height:\s*44px/);
+  assert.match(styles, /\.app-segment-tooltip\s*\{[^}]*position:\s*absolute;[^}]*top:\s*\d+px/);
+  assert.match(styles, /\.app-segment-bar-target:hover \.app-segment-tooltip,\s*\.app-segment-bar-target:focus-visible \.app-segment-tooltip\s*\{[^}]*visibility:\s*visible;[^}]*opacity:\s*1/);
+  assert.match(styles, /\.app-segment-bar-item-left-edge \.app-segment-tooltip\s*\{[^}]*left:\s*0/);
+  assert.match(styles, /\.app-segment-bar-item-right-edge \.app-segment-tooltip\s*\{[^}]*right:\s*0/);
 });
 
 test('network ranking supports globally persisted ignore, undo, and restore actions', async () => {
@@ -252,10 +265,11 @@ test('network ranking supports globally persisted ignore, undo, and restore acti
 });
 
 test('global network ignore storage is cached and isolated from traffic history', async () => {
-  const [endpointSource, databaseSource, repositorySource] = await Promise.all([
+  const [endpointSource, databaseSource, repositorySource, trafficSource] = await Promise.all([
     readFile(networkEndpointsPath, 'utf8'),
     readFile(databaseInitializerPath, 'utf8'),
     readFile(ignoredAppsRepositoryPath, 'utf8'),
+    readFile(trafficRepositoryPath, 'utf8'),
   ]);
 
   assert.match(
@@ -271,30 +285,36 @@ test('global network ignore storage is cached and isolated from traffic history'
   );
 
   assert.match(
-    endpointSource,
-    /requestedLimit \+ ignoredApps\.Count/,
-    'expected the server to over-fetch enough candidates to refill the visible ranking',
+    trafficSource,
+    /WHERE NOT EXISTS \(SELECT 1 FROM ignored_network_apps/,
+    'expected ignored apps to be excluded by the ranking query before applying its limit',
   );
 
   assert.match(
     endpointSource,
-    /IgnoredApps = \[\.\. ignoredApps\]/,
+    /IgnoredApps = \[\.\. dashboard\.IgnoredApps\]/,
     'expected dashboard responses to carry the authoritative global ignore list',
   );
 });
 
 test('network ranking ignore controls remain usable on mobile', async () => {
-  const source = await readFile(observatoryStylesPath, 'utf8');
+  const source = await readFile(stylesPath, 'utf8');
+  const mobile = source.slice(source.indexOf('@media (max-width: 720px)'));
 
   assert.match(
-    source,
-    /@media \(max-width: 720px\)[\s\S]*?\.network-page \.ranking-ignore-button\s*\{[^}]*position:\s*absolute;[^}]*min-width:\s*44px;[^}]*min-height:\s*44px;/,
-    'expected a fixed 44px mobile ignore target that does not overlap text',
+    mobile,
+    /\.network-page \.ranking-list \.ranking-item\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+44px;/,
+    'expected a separate 44px grid column for the mobile ignore target',
   );
-
   assert.match(
-    source,
-    /@media \(max-width: 720px\)[\s\S]*?\.ranking-ignored-item\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/,
-    'expected ignored rows to stack into one column on mobile',
+    mobile,
+    /\.network-page \.ranking-ignore-button,[\s\S]*?\{[^}]*width:\s*44px;[^}]*height:\s*44px;/,
+    'expected a 44px mobile ignore target',
   );
+  assert.match(
+    mobile,
+    /\.network-page \.ranking-ignored-item\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/,
+    'expected ignored rows to fit a flexible text column and restore action on mobile',
+  );
+  assert.match(mobile, /\.network-page \.ranking-ignored-app\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;/);
 });

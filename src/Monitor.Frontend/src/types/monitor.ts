@@ -1,3 +1,28 @@
+export interface HealthDto {
+  status?: 'ok' | 'degraded';
+  network?: {
+    collectorRunning?: boolean;
+    isHealthy?: boolean;
+    statisticsComplete?: boolean;
+    isRecovering?: boolean;
+    aggregation?: {
+      isAccepting?: boolean;
+      isProcessorRunning?: boolean;
+      pendingEventCount?: number;
+      eventQueueCapacity?: number;
+      activeBucketCount?: number;
+      pendingBucketCount?: number;
+      bucketCapacity?: number;
+      rejectedEvents?: number;
+      rejectedBytes?: number;
+      processingFailures?: number;
+      persistenceFailures?: number;
+      lastPersistenceFailureAt?: string | null;
+      lastPersistenceSuccessAt?: string | null;
+    };
+  };
+}
+
 export interface HardwareRealtimeDto {
   sampleTime: string;
   cpuName?: string | null;

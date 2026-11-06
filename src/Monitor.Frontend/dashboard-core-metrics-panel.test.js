@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const viewPath = new URL('./src/views/DashboardView.vue', import.meta.url);
+const metricCardPath = new URL('./src/components/MetricCard.vue', import.meta.url);
 const stylesPath = new URL('./src/styles.css', import.meta.url);
 const observatoryStylesPath = new URL('./src/styles/observatory.css', import.meta.url);
 
@@ -22,16 +23,41 @@ test('dashboard core metrics are wrapped in a single outer panel shell', async (
   );
 });
 
-test('dashboard core metrics panel styles do not rewrite the hero grid columns', async () => {
-  const source = await readFile(stylesPath, 'utf8');
+test('dashboard core metrics use the shared panel surface and retain a responsive hero grid', async () => {
+  const [sharedStyles, dashboardStyles] = await Promise.all([
+    readFile(stylesPath, 'utf8'),
+    readFile(observatoryStylesPath, 'utf8'),
+  ]);
 
-  assert.match(source, /\.dashboard-core-metrics-panel \{[\s\S]*?\}/, 'expected a dedicated outer panel style');
-  assert.match(source, /\.dashboard-core-metrics-panel-body \{[\s\S]*?\}/, 'expected a dedicated panel body style');
+  assert.match(sharedStyles, /\.card\s*\{[^}]*border:\s*1px solid var\(--line\);[^}]*background:\s*var\(--surface-1\)/);
+  assert.match(dashboardStyles, /\.dashboard-core-metrics-panel-body\s*\{[^}]*min-width:\s*0/);
+  assert.match(dashboardStyles, /\.dashboard-hero-grid[^{}]*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
   assert.doesNotMatch(
-    source,
+    dashboardStyles,
     /\.dashboard-core-metrics-panel(?:-body)? [^{]*\{[^}]*grid-template-columns:/,
-    'expected the outer panel styles to avoid redefining hero grid column counts',
+    'expected the outer panel styles not to redefine the hero grid columns',
   );
+});
+
+test('core metrics include all six readings without a separate sensor panel', async () => {
+  const [view, styles] = await Promise.all([
+    readFile(viewPath, 'utf8'), readFile(observatoryStylesPath, 'utf8')
+  ]);
+  const core = view.slice(view.indexOf('dashboard-core-metrics-panel-body'), view.indexOf('<details class="metric-model-details">'));
+  const cards = [...core.matchAll(/<MetricCard\b[\s\S]*?\/>/g)].map(([card]) => card);
+  assert.equal(cards.length, 6);
+  for (const label of ['CPU 占用', '内存已使用', '最高磁盘温度', 'CPU 当前频率', 'CPU 当前温度', 'CPU 当前功耗']) {
+    assert.equal(cards.filter((card) => card.includes(`label="${label}"`)).length, 1);
+  }
+  assert.match(core, /:value="formatNullable\(hardware\?\.cpuFrequencyMhz, 'MHz'\)"/);
+  assert.match(core, /:value="formatNullable\(hardware\?\.cpuTemperatureC, '°C'\)"/);
+  assert.match(core, /:value="formatNullable\(hardware\?\.cpuPowerWatts, 'W'\)"/);
+  assert.match(core, /:badge="temperatureBadge\(hardware\?\.cpuTemperatureC\)"/);
+  assert.doesNotMatch(view, /dashboard-sensor-panel|dashboard-sensor-grid|辅助传感器/);
+  assert.doesNotMatch(styles, /dashboard-sensor-panel|dashboard-sensor-grid/);
+  const mobile = styles.slice(styles.indexOf('@media (max-width: 720px)'));
+  assert.match(mobile, /\.dashboard-hero-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(mobile, /\.dashboard-hero-grid \.metric-card:nth-child\(2n \+ 1\)\s*\{[^}]*border-left:\s*0/);
 });
 
 test('dashboard core metrics highlights the hottest disk with its temperature and name', async () => {
@@ -43,36 +69,52 @@ test('dashboard core metrics highlights the hottest disk with its temperature an
   assert.match(source, /:badge="temperatureBadge\(hottestDisk\?\.temperatureC\)"/);
   assert.match(
     source,
-    /const hottestDisk = computed\(\(\) => \{[\s\S]*?Number\.isFinite\(disk\.temperatureC\)/,
-    'expected the card to select a finite temperature from the sorted disk list',
+    /const hottestDisk = computed\(\(\) => findHottestDisk\(hardware\.value\?\.disks \?\? \[\]\)\)/,
+    'expected the card to select the hottest disk independently of table sorting',
   );
 });
 
-test('dashboard system status owns the uptime details without a duplicate metric card', async () => {
-  const [viewSource, styleSource] = await Promise.all([
+test('mobile core metrics keep memory context and allow complete model names to be opened', async () => {
+  const [view, card, styles] = await Promise.all([
     readFile(viewPath, 'utf8'),
+    readFile(metricCardPath, 'utf8'),
     readFile(observatoryStylesPath, 'utf8'),
   ]);
+  const mobile = styles.slice(styles.indexOf('@media (max-width: 720px)'));
+  assert.match(view, /label="内存已使用"[\s\S]*?:hint="formatMemoryHint\(hardware\?\.memoryTotalMb\)"/);
+  assert.match(card, /<span v-if="hint" class="metric-hint" :title="hint">\{\{ hint \}\}<\/span>/);
+  assert.match(mobile, /\.dashboard-hero-grid \.metric-hint\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/);
+  assert.doesNotMatch(mobile, /\.dashboard-hero-grid \.metric-hint\s*\{[^}]*display:\s*none/);
+  assert.match(view, /<details class="metric-model-details">[\s\S]*?\{\{ coreMetricDetails \}\}[\s\S]*?<\/details>/);
+  assert.match(view, /const coreMetricDetails = computed\([\s\S]*?formatCpuNameHint\(hardware\.value\?\.cpuName\)[\s\S]*?hottestDiskName\.value/);
+  assert.match(mobile, /\.metric-model-details\s*\{[^}]*display:\s*block/);
+});
 
-  assert.match(
-    viewSource,
-    /<dt>最新样本<\/dt>[\s\S]*?<dt>开机时间<\/dt>[\s\S]*?<dt>运行时间<\/dt>[\s\S]*?<dt>存储状态<\/dt>/,
-    'expected boot time to sit alongside the existing system status facts',
-  );
-  assert.match(
-    viewSource,
-    /<dt>开机时间<\/dt>\s*<dd>{{ formatDateTime\(bootTimeText\) }}<\/dd>/,
-    'expected boot time to use the existing formatter',
-  );
-  assert.doesNotMatch(viewSource, /label="已开机"/, 'expected the duplicate uptime metric card to be removed');
-  assert.match(
-    styleSource,
-    /\.system-status-facts \{[\s\S]*?grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);[\s\S]*?\}/,
-    'expected four equal status fact columns',
-  );
-  assert.match(
-    styleSource,
-    /\.system-status-facts dd \{[\s\S]*?font-size: 14px;[\s\S]*?\}/,
-    'expected the status values to use the larger readable type size',
-  );
+test('overview header keeps only boot time and uptime instead of a separate status panel', async () => {
+  const [view, styles, header] = await Promise.all([
+    readFile(viewPath, 'utf8'),
+    readFile(observatoryStylesPath, 'utf8'),
+    readFile(new URL('./src/components/PageHeader.vue', import.meta.url), 'utf8'),
+  ]);
+  assert.match(view, /<PageHeader title="概览">/);
+  assert.doesNotMatch(view, /CPU、内存与磁盘的当前状态及最近一小时记录/);
+  assert.match(header, /description\?: string;/);
+  assert.match(header, /<p v-if="description" class="page-description">/);
+  const meta = view.match(/<template #meta>([\s\S]*?)<\/template>/)?.[1] ?? '';
+  assert.equal((meta.match(/<dt>/g) ?? []).length, 2);
+  assert.match(meta, /<dt>开机时间<\/dt>\s*<dd>{{ formatDateTime\(bootTimeText\) }}<\/dd>/);
+  assert.match(meta, /<dt>运行时间<\/dt>\s*<dd>{{ formatUptime\(hardware\?\.uptimeSeconds\) }}<\/dd>/);
+  assert.match(header, /<slot name="meta"\s*\/>/);
+  assert.match(styles, /\.page-header\s*\{[^}]*padding:\s*16px 20px;[^}]*border:\s*1px solid var\(--line-strong\);[^}]*background:\s*var\(--surface-1\);/);
+  assert.doesNotMatch(header, /page-header-footer|name="footer"/);
+  assert.doesNotMatch(styles, /dashboard-banner|page-header-footer/);
+  const mobile = styles.slice(styles.indexOf('@media (max-width: 720px)'));
+  assert.match(mobile, /\.page-header\s*\{[^}]*padding:\s*16px;/);
+  assert.doesNotMatch(view, /system-status-card|latestSampleText|storageStatusText|系统运行平稳|<dt>最新样本|<dt>存储状态|label="已开机"/);
+  assert.doesNotMatch(styles, /system-status-/);
+  assert.match(styles, /\.dashboard-overview-facts\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/);
+  assert.match(styles, /\.dashboard-overview-facts dd\s*\{[^}]*font-variant-numeric:\s*tabular-nums;/);
+  assert.match(view, /const errorMessage = computed\([\s\S]*?hardwareFreshnessNotice\.value/);
+  assert.match(view, /hardwareFreshness\.value\.state === 'stale'/);
+  assert.match(view, /hardwareFreshness\.value\.state === 'invalid-time'/);
 });

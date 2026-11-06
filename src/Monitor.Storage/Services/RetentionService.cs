@@ -31,69 +31,11 @@ public sealed class RetentionService(
             cutoff,
             DeleteBatchSize);
 
-        var deletedHardwareSamples = await DeleteInBatchesAsync(
-            "hardware_samples",
-            """
-            DELETE FROM hardware_samples
-            WHERE id IN (
-                SELECT id
-                FROM hardware_samples
-                WHERE sample_time < $cutoff
-                ORDER BY sample_time
-                LIMIT $batchSize
-            );
-            """,
-            cutoff,
-            retentionDays,
-            cancellationToken);
+        var deletedHardwareSamples = await DeleteHardwareInBatchesAsync(cutoff, retentionDays, cancellationToken);
+        if (!ShouldContinueCleanup(retentionDays)) return;
 
-        var deletedNetworkBuckets = await DeleteInBatchesAsync(
-            "network_usage_agg",
-            """
-            DELETE FROM network_usage_agg
-            WHERE id IN (
-                SELECT id
-                FROM network_usage_agg
-                WHERE bucket_start_time < $cutoff
-                ORDER BY bucket_start_time
-                LIMIT $batchSize
-            );
-            """,
-            cutoff,
-            retentionDays,
-            cancellationToken);
-
-        var deletedNetworkRollupRows = await DeleteInBatchesAsync(
-            "network_usage_rollup_12h",
-            """
-            DELETE FROM network_usage_rollup_12h
-            WHERE rowid IN (
-                SELECT rowid
-                FROM network_usage_rollup_12h
-                WHERE window_start_time < $cutoff
-                ORDER BY window_start_time
-                LIMIT $batchSize
-            );
-            """,
-            cutoff,
-            retentionDays,
-            cancellationToken);
-
-        var deletedNetworkRollupWindows = await DeleteInBatchesAsync(
-            "network_usage_rollup_12h_windows",
-            """
-            DELETE FROM network_usage_rollup_12h_windows
-            WHERE window_start_time IN (
-                SELECT window_start_time
-                FROM network_usage_rollup_12h_windows
-                WHERE window_start_time < $cutoff
-                ORDER BY window_start_time
-                LIMIT $batchSize
-            );
-            """,
-            cutoff,
-            retentionDays,
-            cancellationToken);
+        var deletedNetworkBuckets = await DeleteNetworkInBatchesAsync(cutoff, retentionDays, cancellationToken);
+        if (!ShouldContinueCleanup(retentionDays)) return;
 
         // app_registry 只删除没有 raw bucket 和 rollup 引用的陈旧应用，避免历史查询丢失进程显示信息。
         var deletedAppRegistryEntries = await DeleteInBatchesAsync(
@@ -122,24 +64,128 @@ public sealed class RetentionService(
             retentionDays,
             cancellationToken);
 
-        var totalDeleted = deletedHardwareSamples
-                           + deletedNetworkBuckets
-                           + deletedNetworkRollupRows
-                           + deletedNetworkRollupWindows
-                           + deletedAppRegistryEntries;
+        var totalDeleted = deletedHardwareSamples + deletedNetworkBuckets + deletedAppRegistryEntries;
         if (totalDeleted > 0)
         {
             await TryPassiveCheckpointAsync(cancellationToken);
         }
 
         logger.LogInformation(
-            "Retention cleanup finished. Cutoff={Cutoff}, hardwareDeleted={HardwareDeleted}, networkDeleted={NetworkDeleted}, networkRollupRowsDeleted={NetworkRollupRowsDeleted}, networkRollupWindowsDeleted={NetworkRollupWindowsDeleted}, appRegistryDeleted={AppRegistryDeleted}.",
-            cutoff,
-            deletedHardwareSamples,
-            deletedNetworkBuckets,
-            deletedNetworkRollupRows,
-            deletedNetworkRollupWindows,
-            deletedAppRegistryEntries);
+            "Retention cleanup finished. Cutoff={Cutoff}, hardwareDeleted={HardwareDeleted}, networkDeleted={NetworkDeleted}, appRegistryDeleted={AppRegistryDeleted}.",
+            cutoff, deletedHardwareSamples, deletedNetworkBuckets, deletedAppRegistryEntries);
+    }
+
+    private async Task<long> DeleteHardwareInBatchesAsync(DateTimeOffset cutoff, int retentionDays, CancellationToken cancellationToken)
+    {
+        long total = 0;
+        while (ShouldContinueCleanup(retentionDays))
+        {
+            var deleted = await SqliteBusyRetry.ExecuteAsync(async token =>
+            {
+                await using var connection = await dbConnectionFactory.OpenConnectionAsync(token);
+                await using var transaction = connection.BeginTransaction();
+                await using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = """
+                    CREATE TEMP TABLE IF NOT EXISTS retention_minutes (minute_start TEXT PRIMARY KEY);
+                    DELETE FROM retention_minutes;
+                    INSERT OR IGNORE INTO retention_minutes
+                    SELECT substr(sample_time, 1, 16) || ':00.0000000+00:00' FROM hardware_samples
+                    WHERE id IN (SELECT id FROM hardware_samples WHERE sample_time < $cutoff ORDER BY sample_time LIMIT $batchSize);
+                    DELETE FROM hardware_minute_candidates WHERE minute_start IN (SELECT minute_start FROM retention_minutes);
+                    DELETE FROM hardware_minute_windows WHERE minute_start IN (SELECT minute_start FROM retention_minutes);
+                    DELETE FROM hardware_minute_anchor_windows WHERE minute_start IN (SELECT minute_start FROM retention_minutes);
+                    DELETE FROM hardware_samples WHERE id IN (
+                        SELECT id FROM hardware_samples WHERE sample_time < $cutoff ORDER BY sample_time LIMIT $batchSize
+                    );
+                    """;
+                command.Parameters.AddWithValue("$cutoff", cutoff.ToUniversalTime().ToString("O"));
+                command.Parameters.AddWithValue("$batchSize", DeleteBatchSize);
+                await command.ExecuteNonQueryAsync(token);
+                await using var count = connection.CreateCommand();
+                count.Transaction = transaction;
+                count.CommandText = "SELECT changes();";
+                var rows = Convert.ToInt32(await count.ExecuteScalarAsync(token));
+                await transaction.CommitAsync(token);
+                return rows;
+            }, cancellationToken);
+            total += deleted;
+            if (deleted < DeleteBatchSize) break;
+            await Task.Delay(BatchYieldDelay, cancellationToken);
+        }
+        return total;
+    }
+
+    private async Task<long> DeleteNetworkInBatchesAsync(DateTimeOffset cutoff, int retentionDays, CancellationToken cancellationToken)
+    {
+        long total = 0;
+        while (ShouldContinueCleanup(retentionDays))
+        {
+            var deleted = await SqliteBusyRetry.ExecuteAsync(async token =>
+            {
+                await using var connection = await dbConnectionFactory.OpenConnectionAsync(token);
+                await using var transaction = connection.BeginTransaction();
+                // Invalidate whole affected windows and advance the permanent completeness floor
+                // in the same transaction as the first deletion from each window.
+                await using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = """
+                    CREATE TEMP TABLE IF NOT EXISTS retention_windows (window_start TEXT PRIMARY KEY);
+                    DELETE FROM retention_windows;
+                    INSERT OR IGNORE INTO retention_windows
+                    SELECT strftime('%Y-%m-%dT', bucket_start_time) ||
+                           CASE WHEN CAST(substr(bucket_start_time, 12, 2) AS INTEGER) < 12 THEN '00' ELSE '12' END ||
+                           ':00:00.0000000+00:00'
+                    FROM network_usage_agg WHERE id IN (
+                        SELECT id FROM network_usage_agg WHERE bucket_start_time < $cutoff ORDER BY bucket_start_time LIMIT $batchSize
+                    );
+                    INSERT INTO storage_progress(name, value) VALUES ('network_retention_cutoff', $cutoff)
+                    ON CONFLICT(name) DO UPDATE SET value = MAX(value, excluded.value);
+                    DELETE FROM network_usage_rollup_12h WHERE window_start_time IN (SELECT window_start FROM retention_windows);
+                    DELETE FROM network_usage_rollup_12h_windows WHERE window_start_time IN (SELECT window_start FROM retention_windows);
+                    DELETE FROM network_usage_agg WHERE id IN (
+                        SELECT id FROM network_usage_agg WHERE bucket_start_time < $cutoff ORDER BY bucket_start_time LIMIT $batchSize
+                    );
+                    -- Windows entirely before the cut-off may have lost their raw rows in
+                    -- an older release. Retire rollup and marker together; keep the cut
+                    -- window if no raw was deleted, since its retained portion is unknowable.
+                    DELETE FROM network_usage_rollup_12h WHERE window_start_time IN (
+                        SELECT window_start_time FROM network_usage_rollup_12h_windows
+                        WHERE window_end_time <= $cutoff ORDER BY window_start_time LIMIT $batchSize
+                    );
+                    DELETE FROM network_usage_rollup_12h_windows WHERE window_start_time IN (
+                        SELECT window_start_time FROM network_usage_rollup_12h_windows
+                        WHERE window_end_time <= $cutoff ORDER BY window_start_time LIMIT $batchSize
+                    );
+                    DELETE FROM network_usage_rollup_12h WHERE rowid IN (
+                        SELECT r.rowid FROM network_usage_rollup_12h r
+                        WHERE r.window_start_time < $cutoff
+                          AND NOT EXISTS (SELECT 1 FROM network_usage_rollup_12h_windows w WHERE w.window_start_time = r.window_start_time)
+                        ORDER BY r.window_start_time LIMIT $batchSize
+                    );
+                    """;
+                command.Parameters.AddWithValue("$cutoff", cutoff.ToUniversalTime().ToString("O"));
+                command.Parameters.AddWithValue("$batchSize", DeleteBatchSize);
+                await command.ExecuteNonQueryAsync(token);
+                await using var countCommand = connection.CreateCommand();
+                countCommand.Transaction = transaction;
+                countCommand.CommandText = """
+                    SELECT changes() + (SELECT COUNT(*) FROM retention_windows)
+                        + EXISTS(SELECT 1 FROM network_usage_agg WHERE bucket_start_time < $cutoff)
+                        + EXISTS(SELECT 1 FROM network_usage_rollup_12h_windows WHERE window_end_time <= $cutoff)
+                        + EXISTS(SELECT 1 FROM network_usage_rollup_12h r WHERE r.window_start_time < $cutoff
+                            AND NOT EXISTS (SELECT 1 FROM network_usage_rollup_12h_windows w WHERE w.window_start_time = r.window_start_time));
+                    """;
+                countCommand.Parameters.AddWithValue("$cutoff", cutoff.ToUniversalTime().ToString("O"));
+                var count = Convert.ToInt32(await countCommand.ExecuteScalarAsync(token));
+                await transaction.CommitAsync(token);
+                return count;
+            }, cancellationToken);
+            total += deleted;
+            if (deleted == 0) break;
+            await Task.Delay(BatchYieldDelay, cancellationToken);
+        }
+        return total;
     }
 
     private async Task<long> DeleteInBatchesAsync(
@@ -157,8 +203,7 @@ public sealed class RetentionService(
             var deleted = await SqliteBusyRetry.ExecuteAsync(
                 async token =>
                 {
-                    await using var connection = dbConnectionFactory.CreateConnection();
-                    await connection.OpenAsync(token);
+                    await using var connection = await dbConnectionFactory.OpenConnectionAsync(token);
                     await using var transactionHandle = await connection.BeginTransactionAsync(token);
                     var transaction = (SqliteTransaction)transactionHandle;
 
@@ -209,8 +254,7 @@ public sealed class RetentionService(
     {
         try
         {
-            await using var connection = dbConnectionFactory.CreateConnection();
-            await connection.OpenAsync(cancellationToken);
+            await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
             await using var command = connection.CreateCommand();
             // PASSIVE 不等待其他连接释放读写锁，也不截断 WAL；失败时交给 SQLite 自动 checkpoint。
             command.CommandText = "PRAGMA wal_checkpoint(PASSIVE);";

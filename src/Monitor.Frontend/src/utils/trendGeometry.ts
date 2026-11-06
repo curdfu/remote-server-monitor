@@ -21,6 +21,11 @@ export function getTrendWindow(
   return { startMs: endMs - durationMs, endMs };
 }
 
+export function getTrendGapMs(intervalMs: number | null | undefined) {
+  const safeInterval = intervalMs != null && Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 60_000;
+  return Math.max(15_000, safeInterval * 3);
+}
+
 export function splitTrendSegments(points: TrendGeometryPoint[], gapMs = 15_000): TrendSegment[] {
   const segments: TrendSegment[] = [];
   let current: TrendSegment['points'] = [];

@@ -63,11 +63,12 @@ This file gives coding agents repository-specific guidance for working in
 
 ## Lint / Formatting / Validation
 
-- There is no dedicated lint script, ESLint config, Prettier config, or test
-  runner config checked in today.
-- Practical validation commands currently are:
+- There is no dedicated ESLint or Prettier configuration. Do not assume those
+  tools are available.
+- Practical validation commands are:
   - `dotnet build win11-system-monitor.sln`
-  - `npm run build` in `src/Monitor.Frontend`
+  - `dotnet test tests/Monitor.Tests/Monitor.Tests.csproj`
+  - `npm run typecheck`, `npm test`, and `npm run build` in `src/Monitor.Frontend`
 - If you need to sanity-check ETW/network behavior, use:
   - `powershell -ExecutionPolicy Bypass -File .\scripts\verify-etw-network.ps1`
 - Do not assume `dotnet format`, ESLint, Vitest, or Jest are configured unless
@@ -75,22 +76,32 @@ This file gives coding agents repository-specific guidance for working in
 
 ## Test Commands
 
-- There are no test projects or frontend test suites in the repository today.
-- `dotnet test win11-system-monitor.sln` currently has nothing meaningful to
-  execute.
-- If you add tests, document the new commands in this file.
+- Backend: `dotnet test win11-system-monitor.sln` or
+  `dotnet test tests/Monitor.Tests/Monitor.Tests.csproj`.
+- The xUnit test project targets .NET 8 and deliberately uses `LatestPatch`
+  runtime roll-forward. Install the .NET 8 and ASP.NET Core 8 runtimes; do not
+  silently run its TestHost against a different framework major version.
+- Frontend: `npm test` in `src/Monitor.Frontend` uses Node's built-in test runner.
+  Tests include behavior checks and a small number of source-structure guards;
+  source matching is not a substitute for browser interaction testing.
+- Deployment rollback tests (mock services and temporary directories only):
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-deployment.ps1`
+- SQLite maintenance tests (temporary databases only; never production):
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-vacuum.ps1`
+- Use isolated temporary SQLite databases and fake collectors for fault tests.
+  Never stop a user's running service or modify its database to run tests.
+- If you add tooling or test commands, update this file in the same change.
 
 ## Single-Test Guidance
 
-- Current status: no single-test command exists because no tests are present.
-- If a .NET test project is added later, the expected single-test pattern is:
-  - `dotnet test path\to\Project.Tests.csproj --filter "FullyQualifiedName~TestName"`
-- If a JS/Vitest suite is added later, the expected single-test pattern is
-  usually one of:
-  - `npm test -- --runInBand test-file-name`
-  - `npx vitest run path/to/test-file.spec.ts -t "test name"`
-- Do not claim a single-test command works unless you verified the project
-  actually contains a test runner.
+- Backend HTTP delivery tests:
+  - `dotnet test tests/Monitor.Tests/Monitor.Tests.csproj --filter "FullyQualifiedName~HttpDeliveryTests"`
+- A frontend test file, run in `src/Monitor.Frontend`:
+  - `node --test ui-trend-geometry.test.js`
+- A named frontend test:
+  - `node --test --test-name-pattern="trend geometry" ui-trend-geometry.test.js`
+- Do not use Jest/Vitest flags such as `--runInBand`; these suites use Node's
+  test runner.
 
 ## Existing Repo Rules
 

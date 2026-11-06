@@ -19,6 +19,11 @@ export default defineConfig({
     }
   },
   server: {
-    port: 5173
+    port: 5173,
+    proxy: {
+      '/api': 'http://127.0.0.1:5188',
+      '/health': 'http://127.0.0.1:5188',
+      '/hubs': { target: 'http://127.0.0.1:5188', ws: true }
+    }
   }
 });

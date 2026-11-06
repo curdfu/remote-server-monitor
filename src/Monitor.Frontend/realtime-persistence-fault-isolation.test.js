@@ -16,14 +16,14 @@ test('network aggregation isolates persistence failures from the hosted-service 
 
   assert.match(
     source,
-    /catch \(Exception exception\) when \(!cancellationToken\.IsCancellationRequested\)/,
-    'expected non-cancellation persistence failures to be retained instead of escaping the hosted service',
+    /catch \(OperationCanceledException\) when \(cancellationToken\.IsCancellationRequested\)[\s\S]*?throw;[\s\S]*?catch \(Exception exception\)/,
+    'expected cancellation to propagate while other persistence failures are contained',
   );
 
   assert.match(
     source,
-    /Retaining \{Count\} network traffic buckets for the next cycle/,
-    'expected failed network batches to remain available for a later retry',
+    /PeekPendingBuckets\(PersistenceBatchSize\)[\s\S]*?SaveAsync\(batch, cancellationToken\)[\s\S]*?ConfirmPendingBuckets\(batch.Count\)[\s\S]*?Retaining \{Count\} network traffic buckets for the next cycle/,
+    'expected batches to be confirmed only after persistence succeeds and retained for retry on failure',
   );
 });
 

@@ -23,9 +23,16 @@ public sealed class CollectorHostedService(
     private static readonly TimeSpan PersistenceInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan StopFlushTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PersistenceFailureLogInterval = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan IdleProcessSampleInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ProcessBaselineInterval = TimeSpan.FromSeconds(1);
     private const int PersistenceBatchSize = 10;
     private DateTimeOffset _lastPersistenceFailureLogAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastHardwareFailureLogAt = DateTimeOffset.MinValue;
     private DateTimeOffset _lastProcessCpuFailureLogAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastProcessCpuSampleAt = DateTimeOffset.MinValue;
+    private long _processCpuActivationVersion = -1;
+    private bool _processCpuBaselinePending;
+    private bool _processCpuBaselineResetPending;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -39,18 +46,19 @@ public sealed class CollectorHostedService(
         while (!stoppingToken.IsCancellationRequested)
         {
             var interval = TimeSpan.FromMilliseconds(settings.Current.HardwareSampleIntervalMs);
+            if (_processCpuBaselinePending && hardwareMonitoringDemand.HasHardwareSubscribers)
+            {
+                var untilBaseline = _lastProcessCpuSampleAt + ProcessBaselineInterval - DateTimeOffset.UtcNow;
+                interval = untilBaseline <= TimeSpan.Zero ? TimeSpan.Zero :
+                    untilBaseline < interval ? untilBaseline : interval;
+            }
+
             // 设置变化或首页首次订阅时不等待旧 delay 结束，立即采一次并进入新周期。
-            var wokeEarly = await WaitForIntervalSettingsOrHardwareDemandAsync(
+            await WaitForIntervalSettingsOrHardwareDemandAsync(
                 interval,
                 handledHardwareActivationVersion,
                 stoppingToken);
             handledHardwareActivationVersion = hardwareMonitoringDemand.ActivationVersion;
-            if (wokeEarly)
-            {
-                await CollectSnapshotAsync(stoppingToken);
-                continue;
-            }
-
             await CollectSnapshotAsync(stoppingToken);
 
             var now = DateTimeOffset.UtcNow;
@@ -61,15 +69,20 @@ public sealed class CollectorHostedService(
                 lastPersistedAt = now;
             }
         }
-
-        await FlushPendingSnapshotsAsync(CancellationToken.None);
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        await networkCollector.StopAsync(cancellationToken);
-        await FlushPendingSnapshotsAsync(cancellationToken);
+        // 先取消并等待唯一生产者退出，再刷尾批，避免采样或周期写入与关闭刷盘并发。
         await base.StopAsync(cancellationToken);
+        await networkCollector.StopAsync(cancellationToken);
+        if (ExecuteTask is { IsCompleted: false })
+        {
+            logger.LogWarning("Hardware collector did not stop before the shutdown deadline; pending snapshots remain buffered.");
+            return;
+        }
+
+        await FlushPendingSnapshotsAsync(cancellationToken);
     }
 
     private async Task<bool> WaitForIntervalSettingsOrHardwareDemandAsync(
@@ -85,24 +98,20 @@ public sealed class CollectorHostedService(
         var hardwareActivatedTask = hardwareMonitoringDemand.WaitForActivationAsync(
             observedHardwareActivationVersion,
             waitCancellation.Token);
-        var completedTask = await Task.WhenAny(
-            delayTask,
-            settingsChangedSource.Task,
-            hardwareActivatedTask);
-
-        if (completedTask == delayTask)
+        try
         {
-            await delayTask;
-            return false;
+            var completedTask = await Task.WhenAny(
+                delayTask,
+                settingsChangedSource.Task,
+                hardwareActivatedTask);
+            await completedTask;
+            return completedTask != delayTask;
         }
-
-        if (completedTask == hardwareActivatedTask)
+        finally
         {
-            await hardwareActivatedTask;
+            // 包括 delay 获胜和异常/取消路径，均须释放 activation WaitAsync 注册。
+            waitCancellation.Cancel();
         }
-
-        waitCancellation.Cancel();
-        return true;
     }
 
     private async Task FlushPendingSnapshotsAsync(CancellationToken cancellationToken)
@@ -146,6 +155,16 @@ public sealed class CollectorHostedService(
                 await repository.SaveBatchAsync(batch, cancellationToken);
                 logger.LogDebug("Persisted {Count} hardware snapshots in batch.", batch.Count);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                snapshotBuffer.RequeuePendingBatch(batch);
+                throw;
+            }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                snapshotBuffer.RequeuePendingBatch(batch);
+                throw;
+            }
             catch (SqliteException exception) when (SqliteBusyRetry.IsBusy(exception))
             {
                 snapshotBuffer.RequeuePendingBatch(batch);
@@ -157,7 +176,7 @@ public sealed class CollectorHostedService(
                     snapshotBuffer.PendingCount);
                 return;
             }
-            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception exception)
             {
                 // 硬件历史写入失败时回队重试，避免一次 SQLite 异常终止整个采集服务。
                 snapshotBuffer.RequeuePendingBatch(batch);
@@ -191,12 +210,57 @@ public sealed class CollectorHostedService(
 
     private async Task CollectSnapshotAsync(CancellationToken cancellationToken)
     {
-        var snapshot = await hardwareCollector.GetCurrentSnapshotAsync(cancellationToken);
-        hardwareSnapshotBuffer.Add(snapshot);
+        try
+        {
+            var snapshot = await hardwareCollector.GetCurrentSnapshotAsync(cancellationToken);
+            hardwareSnapshotBuffer.Add(snapshot);
+            logger.LogDebug(
+                "Collected hardware snapshot at {SampleTime}. Pending hardware samples: {PendingCount}.",
+                snapshot.SampleTime,
+                hardwareSnapshotBuffer.PendingCount);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (now - _lastHardwareFailureLogAt >= PersistenceFailureLogInterval)
+            {
+                _lastHardwareFailureLogAt = now;
+                logger.LogWarning(exception, "Hardware sampling failed; preserving the last valid hardware snapshot.");
+            }
+        }
+
+        var sampleAt = DateTimeOffset.UtcNow;
+        var activationVersion = hardwareMonitoringDemand.ActivationVersion;
+        var hasSubscribers = hardwareMonitoringDemand.HasHardwareSubscribers;
+        if (hasSubscribers && activationVersion != _processCpuActivationVersion)
+        {
+            // 空闲期间基线可能过期：激活时重新建立，并在一秒后提供有效排名。
+            _processCpuActivationVersion = activationVersion;
+            _processCpuBaselineResetPending = true;
+            _processCpuBaselinePending = true;
+            _lastProcessCpuSampleAt = DateTimeOffset.MinValue;
+        }
+
+        if (!hasSubscribers && sampleAt - _lastProcessCpuSampleAt < IdleProcessSampleInterval)
+        {
+            return;
+        }
 
         try
         {
+            if (_processCpuBaselineResetPending && hasSubscribers)
+            {
+                processCpuCollector.Reset();
+                _processCpuBaselineResetPending = false;
+            }
+
             var processCpuSnapshot = await processCpuCollector.CaptureAsync(cancellationToken);
+            _lastProcessCpuSampleAt = sampleAt;
+            _processCpuBaselinePending = hasSubscribers && !processCpuSnapshot.IsReady;
             processCpuSnapshotBuffer.Set(processCpuSnapshot);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -205,13 +269,10 @@ public sealed class CollectorHostedService(
         }
         catch (Exception exception)
         {
+            _lastProcessCpuSampleAt = sampleAt;
+            _processCpuBaselinePending = hasSubscribers;
             LogProcessCpuFailure(exception);
         }
-
-        logger.LogDebug(
-            "Collected hardware snapshot at {SampleTime}. Pending hardware samples: {PendingCount}.",
-            snapshot.SampleTime,
-            hardwareSnapshotBuffer.PendingCount);
     }
 
     private void LogProcessCpuFailure(Exception exception)

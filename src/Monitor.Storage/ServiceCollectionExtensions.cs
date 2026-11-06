@@ -14,6 +14,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<DatabaseInitializationHostedService>();
         services.AddHostedService<DatabaseOptimizationHostedService>();
         services.AddSingleton<HardwareRepository>();
+        services.AddHostedService<HardwareMinuteBackfillHostedService>();
         services.AddSingleton<NetworkTrafficRepository>();
         services.AddHostedService<NetworkTrafficRollupHostedService>();
         services.AddSingleton<SettingsRepository>();

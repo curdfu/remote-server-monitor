@@ -1,7 +1,7 @@
-﻿using System.Runtime.InteropServices;
-using System.Threading;
+﻿using System.Threading;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Diagnostics.Tracing.Parsers;
 using Microsoft.Diagnostics.Tracing.Parsers.Kernel;
 using Microsoft.Diagnostics.Tracing.Session;
@@ -16,12 +16,30 @@ namespace Monitor.Network.Collectors;
 // ETW 采集器直接管理 Windows 内核网络 TraceEvent 会话，是整条网络链路的最底层入口。
 // 这里的目标是尽量可靠地把 TCP/UDP 事件转换成统一的 NetworkTraceEvent，后续进程解析、地址分类、聚合和落库都不在本类完成。
 // 因为 ETW 资源是系统级共享资源，本类特别处理了启动失败、陈旧会话清理、丢事件监控和自适应 buffer 重启。
-public sealed class EtwNetworkCollector(
-    ILogger<EtwNetworkCollector> logger,
-    IMonitorSettingsProvider settingsMonitor) : INetworkCollector, INetworkCollectorDiagnostics, IDisposable
+public sealed class EtwNetworkCollector : INetworkCollector, INetworkCollectorDiagnostics, IDisposable
 {
+    private readonly ILogger<EtwNetworkCollector> logger;
+    private readonly IMonitorSettingsProvider settingsMonitor;
+    private readonly Func<string, int, TraceEventSessionOptions, IEtwSession> _sessionFactory;
+    private readonly TimeSpan _initialRecoveryDelay;
+    private readonly bool _cleanupSessions;
+    private readonly HashSet<string> _ownedSessionNames = new(StringComparer.OrdinalIgnoreCase);
+
+    public EtwNetworkCollector(ILogger<EtwNetworkCollector> logger, IMonitorSettingsProvider settingsMonitor)
+        : this(logger, settingsMonitor, static (name, size, options) => new EtwSession(name, size, options), TimeSpan.FromSeconds(1), true)
+    {
+    }
+
+    internal EtwNetworkCollector(ILogger<EtwNetworkCollector> logger, IMonitorSettingsProvider settingsMonitor,
+        Func<string, int, TraceEventSessionOptions, IEtwSession> sessionFactory, TimeSpan initialRecoveryDelay, bool cleanupSessions)
+    {
+        this.logger = logger;
+        this.settingsMonitor = settingsMonitor;
+        _sessionFactory = sessionFactory;
+        _initialRecoveryDelay = initialRecoveryDelay;
+        _cleanupSessions = cleanupSessions;
+    }
     private static readonly int[] AdaptiveBufferSizesMb = [4, 8, 16];
-    private const int InsufficientResourcesHResult = unchecked((int)0x800705AA);
     private const string SessionNamePrefix = "Monitor.Network.Etw.";
     private const int TargetProcessEventLogLimit = 500;
     private static readonly string[] TargetProcessNames = ["chrome", "verge-mihomo", "telegram"];
@@ -33,7 +51,7 @@ public sealed class EtwNetworkCollector(
         static name => name,
         static _ => 0,
         StringComparer.OrdinalIgnoreCase);
-    private TraceEventSession? _session;
+    private IEtwSession? _session;
     private Task? _processingTask;
     private Task? _adaptiveRestartTask;
     private Task? _sessionMonitorTask;
@@ -51,112 +69,131 @@ public sealed class EtwNetworkCollector(
     private string _targetProcessEventLoggingProtocolFilter = "all";
     private bool _adaptiveRestartScheduled;
     private bool _disposed;
+    private bool _stopRequested;
+    private bool _everStarted;
+    private int _desiredBufferSizeMb;
+    private int _consecutiveFailures;
+    private DateTimeOffset? _lastFailureAt;
+    private DateTimeOffset? _lastRecoveryAt;
+    private CancellationTokenSource? _recoveryCancellation;
+    private Task? _recoveryTask;
+    private Task? _stopTask;
+    private long _sessionGeneration;
+    private long _processingExitedGeneration;
+    private int _isRunning;
 
     public event Action<NetworkTraceEvent>? EventReceived;
 
-    public bool IsRunning { get; private set; }
+    public bool IsRunning
+    {
+        get => Volatile.Read(ref _isRunning) != 0 &&
+               Interlocked.Read(ref _processingExitedGeneration) != Interlocked.Read(ref _sessionGeneration);
+        private set => Volatile.Write(ref _isRunning, value ? 1 : 0);
+    }
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_syncRoot)
         {
             ThrowIfDisposed();
-
-            if (IsRunning)
+            // A stopped collector cannot be restarted accidentally during host shutdown.
+            if (_stopRequested || _everStarted)
             {
                 return Task.CompletedTask;
             }
 
-            // 进程异常退出后可能残留同前缀 ETW 会话；启动前先清理，减少系统 ETW 资源不足的概率。
+            _everStarted = true;
+            _desiredBufferSizeMb = GetInitialAdaptiveBufferSize();
+            _recoveryCancellation = new CancellationTokenSource();
             TryCleanupStaleMonitorSessions();
-            _sessionName = BuildSessionName();
-
-            try
-            {
-                StartSessionCore(GetInitialAdaptiveBufferSize());
-            }
-            catch (COMException exception) when (exception.HResult == InsufficientResourcesHResult)
-            {
-                var sessionName = _sessionName;
-                var requestedBufferSizeMb = GetInitialAdaptiveBufferSize();
-                CleanupFailedStart(clearTotals: false);
-
-                // 资源不足时只做一次清理重试，避免服务启动阶段进入无限重试并持续占用系统资源。
-                var cleanedSessionCount = TryCleanupStaleMonitorSessions();
-                if (cleanedSessionCount > 0)
-                {
-                    logger.LogWarning(
-                        exception,
-                        "ETW network collector start failed due to insufficient resources. Cleaned {CleanedSessionCount} stale monitor ETW sessions and will retry once. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}",
-                        cleanedSessionCount,
-                        sessionName,
-                        requestedBufferSizeMb);
-
-                    _sessionName = BuildSessionName();
-                    try
-                    {
-                        StartSessionCore(requestedBufferSizeMb);
-                        return Task.CompletedTask;
-                    }
-                    catch (COMException retryException) when (retryException.HResult == InsufficientResourcesHResult)
-                    {
-                        sessionName = _sessionName;
-                        CleanupFailedStart(clearTotals: false);
-                        logger.LogError(
-                            retryException,
-                            "Failed to start ETW network collector because ETW resources are insufficient even after cleanup retry. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}. Consider releasing other ETW sessions or reducing load.",
-                            sessionName,
-                            requestedBufferSizeMb);
-                        return Task.CompletedTask;
-                    }
-                }
-
-                logger.LogError(
-                    exception,
-                    "Failed to start ETW network collector because ETW resources are insufficient. SessionName: {SessionName}, BufferSizeMB: {BufferSizeMB}. Consider releasing other ETW sessions or reducing load.",
-                    sessionName,
-                    requestedBufferSizeMb);
-                return Task.CompletedTask;
-            }
-            catch (UnauthorizedAccessException exception)
-            {
-                var sessionName = _sessionName;
-                CleanupFailedStart(clearTotals: false);
-                logger.LogError(
-                    exception,
-                    "Failed to start ETW network collector due to insufficient privileges. SessionName: {SessionName}. Administrator rights are required to start the ETW kernel session.",
-                    sessionName);
-                return Task.CompletedTask;
-            }
-            catch (Exception exception)
-            {
-                var sessionName = _sessionName;
-                CleanupFailedStart(clearTotals: false);
-                logger.LogError(
-                    exception,
-                    "Failed to start ETW network collector. SessionName: {SessionName}",
-                    sessionName);
-                return Task.CompletedTask;
-            }
+            TryStartSessionCore();
         }
 
         return Task.CompletedTask;
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken = default)
+    private void TryStartSessionCore()
+    {
+        if (_stopRequested || _disposed)
+        {
+            return;
+        }
+
+        _sessionName = BuildSessionName();
+        try
+        {
+            StartSessionCore(_desiredBufferSizeMb);
+            if (_consecutiveFailures > 0)
+            {
+                _lastRecoveryAt = DateTimeOffset.UtcNow;
+            }
+        }
+        catch (Exception exception)
+        {
+            CleanupFailedStart(clearTotals: false);
+            RecordFailureAndScheduleRecoveryCore(exception, "Failed to start ETW network collector.");
+        }
+    }
+
+    private void RecordFailureAndScheduleRecoveryCore(Exception? exception, string message)
+    {
+        _consecutiveFailures++;
+        _lastFailureAt = DateTimeOffset.UtcNow;
+        var delay = TimeSpan.FromMilliseconds(Math.Min(60_000, _initialRecoveryDelay.TotalMilliseconds * (1 << Math.Min(_consecutiveFailures - 1, 6))));
+        logger.LogWarning(exception, "{Message} Retrying in {Delay}; consecutive failures: {ConsecutiveFailures}.", message, delay, _consecutiveFailures);
+        if (_stopRequested || _disposed || _recoveryCancellation is null)
+        {
+            return;
+        }
+
+        var token = _recoveryCancellation.Token;
+        _recoveryTask = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delay, token);
+                lock (_syncRoot)
+                {
+                    if (!token.IsCancellationRequested && !_stopRequested && !_disposed && !IsRunning)
+                    {
+                        TryCleanupStaleMonitorSessions();
+                        TryStartSessionCore();
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
+        });
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        Task stopTask;
+        lock (_syncRoot)
+        {
+            _stopTask ??= StopCoreAsync();
+            stopTask = _stopTask;
+        }
+
+        return stopTask.WaitAsync(cancellationToken);
+    }
+
+    private async Task StopCoreAsync()
     {
         Task? processingTask;
         Task? adaptiveRestartTask;
         Task? sessionMonitorTask;
+        Task? recoveryTask;
         string? sessionName;
 
         lock (_syncRoot)
         {
-            if (!IsRunning && !_adaptiveRestartScheduled)
-            {
-                return;
-            }
-
+            // Mark the collector terminal before releasing the lock, including failed starts.
+            _stopRequested = true;
+            _recoveryCancellation?.Cancel();
+            recoveryTask = _recoveryTask;
             // 停止前最后读取一次 EventsLost，保证诊断快照和日志包含本会话结束前的丢事件统计。
             RefreshLostEventsCore(logIfIncreased: true);
             processingTask = _processingTask;
@@ -172,7 +209,7 @@ public sealed class EtwNetworkCollector(
         {
             try
             {
-                await processingTask.WaitAsync(cancellationToken);
+                await processingTask;
             }
             catch (OperationCanceledException)
             {
@@ -188,7 +225,7 @@ public sealed class EtwNetworkCollector(
         {
             try
             {
-                await sessionMonitorTask.WaitAsync(cancellationToken);
+                await sessionMonitorTask;
             }
             catch (OperationCanceledException)
             {
@@ -204,7 +241,7 @@ public sealed class EtwNetworkCollector(
         {
             try
             {
-                await adaptiveRestartTask.WaitAsync(cancellationToken);
+                await adaptiveRestartTask;
             }
             catch (OperationCanceledException)
             {
@@ -214,6 +251,11 @@ public sealed class EtwNetworkCollector(
             {
                 logger.LogDebug(exception, "ETW adaptive restart task ended with exception during stop.");
             }
+        }
+
+        if (recoveryTask is not null)
+        {
+            await recoveryTask;
         }
 
         logger.LogInformation("ETW network collector stopped. SessionName: {SessionName}", sessionName);
@@ -234,7 +276,12 @@ public sealed class EtwNetworkCollector(
                 LostEvents = Interlocked.Read(ref _sessionLostEvents),
                 TotalPublishedEvents = Interlocked.Read(ref _totalPublishedEvents),
                 TotalLostEvents = Interlocked.Read(ref _totalLostEvents),
-                AdaptiveRestartCount = _adaptiveRestartCount
+                AdaptiveRestartCount = _adaptiveRestartCount,
+                IsRecovering = !_stopRequested && _everStarted && !IsRunning && _consecutiveFailures > 0,
+                IsStopping = _stopRequested,
+                ConsecutiveFailures = _consecutiveFailures,
+                LastFailureAt = _lastFailureAt,
+                LastRecoveryAt = _lastRecoveryAt
             };
         }
     }
@@ -256,6 +303,8 @@ public sealed class EtwNetworkCollector(
             try
             {
                 RefreshLostEventsCore(logIfIncreased: true);
+                _stopRequested = true;
+                _recoveryCancellation?.Cancel();
                 _adaptiveRestartScheduled = false;
                 _sessionMonitorCancellation?.Cancel();
                 _session?.Dispose();
@@ -291,20 +340,34 @@ public sealed class EtwNetworkCollector(
         parser.UdpIpRecvIPV6 += data => PublishUdpV6(data, TrafficDirection.Inbound);
     }
 
-    private static void ProcessSession(TraceEventSession session, ILogger logger)
+    private void ProcessSession(IEtwSession session, long generation)
     {
-        // Source.Process() 是阻塞式 ETW 消费循环，必须放到 LongRunning 后台任务中运行。
+        Exception? failure = null;
         try
         {
-            session.Source.Process();
+            session.Process();
         }
         catch (Exception exception)
         {
-            logger.LogDebug(exception, "ETW session processing loop exited with exception.");
+            failure = exception;
+        }
+        finally
+        {
+            InterlockedExtensionsMax(ref _processingExitedGeneration, generation);
+            lock (_syncRoot)
+            {
+                // Intentional stop/restart replaces or detaches the session before Process exits.
+                if (ReferenceEquals(session, _session) && !_stopRequested && !_disposed)
+                {
+                    RefreshLostEventsCore(logIfIncreased: false);
+                    StopSessionCore();
+                    RecordFailureAndScheduleRecoveryCore(failure, "ETW processing loop exited unexpectedly.");
+                }
+            }
         }
     }
 
-    private async Task MonitorSessionAsync(TraceEventSession session, CancellationTokenSource cancellationTokenSource)
+    private async Task MonitorSessionAsync(IEtwSession session, CancellationTokenSource cancellationTokenSource)
     {
         // TraceEvent 不会主动推送 EventsLost 变化；额外轮询用于及时发现 buffer 不足并触发自适应重启。
         using (cancellationTokenSource)
@@ -323,6 +386,10 @@ public sealed class EtwNetworkCollector(
                         }
 
                         RefreshLostEventsCore(session, logIfIncreased: true);
+                        if (_startedAt is { } startedAt && DateTimeOffset.UtcNow - startedAt >= TimeSpan.FromSeconds(30))
+                        {
+                            _consecutiveFailures = 0;
+                        }
                     }
                 }
             }
@@ -561,7 +628,7 @@ public sealed class EtwNetworkCollector(
         }
     }
 
-    private void RefreshLostEventsCore(TraceEventSession session, bool logIfIncreased)
+    private void RefreshLostEventsCore(IEtwSession session, bool logIfIncreased)
     {
         if (!ReferenceEquals(session, _session))
         {
@@ -617,7 +684,7 @@ public sealed class EtwNetworkCollector(
 
     private void ScheduleAdaptiveBufferIncreaseCore()
     {
-        if (_adaptiveRestartScheduled || !IsRunning || _session is null)
+        if (_stopRequested || _adaptiveRestartScheduled || !IsRunning || _session is null)
         {
             return;
         }
@@ -643,12 +710,13 @@ public sealed class EtwNetworkCollector(
         Task? previousProcessingTask = null;
         Task? previousSessionMonitorTask = null;
         string? previousSessionName = null;
+        long restartGeneration = 0;
 
         try
         {
             lock (_syncRoot)
             {
-                if (_disposed || !IsRunning || _session is null || targetBufferSizeMb <= _bufferSizeMb)
+                if (_disposed || _stopRequested || !IsRunning || _session is null || targetBufferSizeMb <= _bufferSizeMb)
                 {
                     _adaptiveRestartScheduled = false;
                     _adaptiveRestartTask = null;
@@ -659,11 +727,12 @@ public sealed class EtwNetworkCollector(
                 previousSessionMonitorTask = _sessionMonitorTask;
                 previousSessionName = _sessionName;
                 StopSessionCore();
+                _desiredBufferSizeMb = targetBufferSizeMb;
                 _sessionName = BuildSessionName();
+                restartGeneration = _sessionGeneration + 1;
                 StartSessionCore(targetBufferSizeMb);
                 _adaptiveRestartCount++;
                 _adaptiveRestartScheduled = false;
-                _adaptiveRestartTask = null;
             }
 
             if (previousProcessingTask is not null)
@@ -699,13 +768,13 @@ public sealed class EtwNetworkCollector(
         {
             lock (_syncRoot)
             {
-                CleanupFailedStart(clearTotals: false);
+                // A later stop/recovery must not be cleaned up by this stale restart.
+                if (!_stopRequested && !_disposed && restartGeneration == _sessionGeneration)
+                {
+                    CleanupFailedStart(clearTotals: false);
+                    RecordFailureAndScheduleRecoveryCore(exception, "Adaptive ETW restart failed.");
+                }
             }
-
-            logger.LogError(
-                exception,
-                "Failed to adaptively restart ETW network collector with buffer size {TargetBufferSizeMB}MB.",
-                targetBufferSizeMb);
         }
     }
 
@@ -723,7 +792,14 @@ public sealed class EtwNetworkCollector(
             logger.LogDebug(exception, "Ignoring ETW session stop exception.");
         }
 
-        _session?.Dispose();
+        try
+        {
+            _session?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            logger.LogDebug(exception, "Ignoring ETW session dispose exception.");
+        }
         _session = null;
         _processingTask = null;
         _sessionMonitorTask = null;
@@ -742,15 +818,22 @@ public sealed class EtwNetworkCollector(
     {
         _sessionMonitorCancellation?.Cancel();
         _sessionMonitorCancellation = null;
-        _session?.Dispose();
+        try
+        {
+            _session?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            logger.LogDebug(exception, "Ignoring ETW session dispose exception.");
+        }
         _session = null;
         _processingTask = null;
         _sessionMonitorTask = null;
         _sessionName = null;
         _startedAt = null;
         _bufferSizeMb = 0;
+        IsRunning = false;
         _adaptiveRestartScheduled = false;
-        _adaptiveRestartTask = null;
         Interlocked.Exchange(ref _sessionPublishedEvents, 0);
         Interlocked.Exchange(ref _sessionLostEvents, 0);
         Interlocked.Exchange(ref _lastLoggedLostEvents, 0);
@@ -766,14 +849,15 @@ public sealed class EtwNetworkCollector(
     private void StartSessionCore(int bufferSizeMb)
     {
         // 每次启动都使用唯一会话名，避免和旧进程或并行实例的内核会话互相覆盖。
+        Interlocked.Increment(ref _sessionGeneration);
         var sessionOptions = TraceEventSessionOptions.Create |
                              TraceEventSessionOptions.NoPerProcessorBuffering;
 
-        var session = new TraceEventSession(_sessionName, sessionOptions);
-        session.StopOnDispose = true;
-        session.BufferSizeMB = bufferSizeMb;
-        session.EnableKernelProvider(KernelTraceEventParser.Keywords.NetworkTCPIP);
-        RegisterHandlers(session.Source.Kernel);
+        _ownedSessionNames.Add(_sessionName!);
+        var session = _sessionFactory(_sessionName!, bufferSizeMb, sessionOptions);
+        // Publish ownership immediately so failed handler initialization is cleaned up.
+        _session = session;
+        session.RegisterHandlers(RegisterHandlers);
 
         var sessionMonitorCancellation = new CancellationTokenSource();
 
@@ -804,8 +888,9 @@ public sealed class EtwNetworkCollector(
             }
         }
 
+        var generation = _sessionGeneration;
         _processingTask = Task.Factory.StartNew(
-            () => ProcessSession(session, logger),
+            () => ProcessSession(session, generation),
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
@@ -848,6 +933,17 @@ public sealed class EtwNetworkCollector(
         return currentBufferSizeMb;
     }
 
+    private static void InterlockedExtensionsMax(ref long location, long value)
+    {
+        var current = Interlocked.Read(ref location);
+        while (current < value)
+        {
+            var previous = Interlocked.CompareExchange(ref location, value, current);
+            if (previous == current) return;
+            current = previous;
+        }
+    }
+
     private static string BuildSessionName()
     {
         return $"{SessionNamePrefix}{Environment.ProcessId}.{Guid.NewGuid():N}";
@@ -855,30 +951,19 @@ public sealed class EtwNetworkCollector(
 
     private int TryCleanupStaleMonitorSessions()
     {
-        // 只清理本应用前缀的 ETW 会话，不能影响其他工具或系统组件正在使用的 TraceEvent 会话。
+        if (!_cleanupSessions) return 0;
         try
         {
-            var cleanedCount = 0;
-            foreach (var sessionName in TraceEventSession.GetActiveSessionNames()
-                         .Where(name => name.StartsWith(SessionNamePrefix, StringComparison.OrdinalIgnoreCase))
-                         .Where(name => !string.Equals(name, _sessionName, StringComparison.OrdinalIgnoreCase)))
-            {
-                try
+            var activeSessionNames = TraceEventSession.GetActiveSessionNames().ToArray();
+            _ownedSessionNames.RemoveWhere(name => !activeSessionNames.Contains(name, StringComparer.OrdinalIgnoreCase));
+            var cleanedCount = CleanupStaleMonitorSessions(
+                activeSessionNames, _sessionName, IsProcessAlive, sessionName =>
                 {
                     using var activeSession = TraceEventSession.GetActiveSession(sessionName);
-                    if (activeSession is null)
-                    {
-                        continue;
-                    }
-
+                    if (activeSession is null) return false;
                     activeSession.Stop();
-                    cleanedCount++;
-                }
-                catch (Exception exception)
-                {
-                    logger.LogDebug(exception, "Failed to cleanup stale ETW session {SessionName}.", sessionName);
-                }
-            }
+                    return true;
+                }, _ownedSessionNames);
 
             if (cleanedCount > 0)
             {
@@ -891,6 +976,66 @@ public sealed class EtwNetworkCollector(
         {
             logger.LogDebug(exception, "Failed while enumerating active ETW sessions for cleanup.");
             return 0;
+        }
+    }
+
+    // null means that process state cannot be determined; in that case leave the session alone.
+    internal static int CleanupStaleMonitorSessions(IEnumerable<string> sessionNames, string? currentSession,
+        Func<int, bool?> processAlive, Func<string, bool> stopSession, IReadOnlySet<string>? ownedSessionNames = null)
+    {
+        var cleanedCount = 0;
+        foreach (var sessionName in sessionNames)
+        {
+            if (string.Equals(sessionName, currentSession, StringComparison.OrdinalIgnoreCase) ||
+                !TryGetSessionProcessId(sessionName, out var pid))
+            {
+                continue;
+            }
+
+            try
+            {
+                // A name created by this collector is safe to retry cleaning. Otherwise
+                // any live PID (including a reused PID) is conservatively untouched.
+                var owned = ownedSessionNames?.Contains(sessionName) == true;
+                if ((owned || processAlive(pid) == false) && stopSession(sessionName))
+                {
+                    cleanedCount++;
+                }
+            }
+            catch
+            {
+                // Access denied, inspection races or stop failures are not proof of death.
+            }
+        }
+        return cleanedCount;
+    }
+
+    private static bool TryGetSessionProcessId(string sessionName, out int pid)
+    {
+        pid = 0;
+        if (!sessionName.StartsWith(SessionNamePrefix, StringComparison.OrdinalIgnoreCase)) return false;
+        var suffix = sessionName.AsSpan(SessionNamePrefix.Length);
+        var dot = suffix.IndexOf('.');
+        return dot > 0 && dot < suffix.Length - 1 &&
+               int.TryParse(suffix[..dot], NumberStyles.None, CultureInfo.InvariantCulture, out pid) && pid > 0 &&
+               Guid.TryParseExact(suffix[(dot + 1)..], "N", out _);
+    }
+
+    private static bool? IsProcessAlive(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            // GetProcessById could not find this PID.
+            return false;
+        }
+        catch
+        {
+            return null;
         }
     }
 }

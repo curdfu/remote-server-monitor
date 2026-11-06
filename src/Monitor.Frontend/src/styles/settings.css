@@ -1,0 +1,511 @@
+/* Settings: compact controls, measured impact and a quiet editing surface. */
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-action-button,
+.settings-save-button,
+.settings-reset-button {
+  min-height: 40px;
+}
+
+.settings-save-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 20px;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--surface-1);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.settings-save-button:hover:not(:disabled) {
+  border-color: var(--ink-secondary);
+  background: var(--ink-secondary);
+}
+
+.settings-profile-header {
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.settings-section-description {
+  margin: 4px 0 0;
+  color: var(--ink-tertiary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.settings-profile-current {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--ink-tertiary);
+  font-size: 12px;
+  line-height: 24px;
+}
+
+.settings-profile-current strong {
+  margin-left: 4px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.settings-profile-options {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.settings-profile-option {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  grid-template-areas: 'marker copy values';
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.settings-profile-option:first-child {
+  border-radius: calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px) 0 0;
+}
+
+.settings-profile-option:last-child {
+  border-bottom: 0;
+  border-radius: 0 0 calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px);
+}
+
+.settings-profile-option:hover:not(:disabled),
+.settings-profile-option-active {
+  background: var(--surface-0);
+}
+
+.settings-profile-option:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--signal);
+  outline-offset: -3px;
+}
+
+.settings-profile-marker {
+  display: grid;
+  grid-area: marker;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--ink-tertiary);
+  border-radius: 50%;
+}
+
+.settings-profile-option-active .settings-profile-marker {
+  border-color: var(--signal);
+}
+
+.settings-profile-option-active .settings-profile-marker::after {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--signal);
+  content: '';
+}
+
+.settings-profile-copy {
+  display: flex;
+  grid-area: copy;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+.settings-profile-label {
+  flex: 0 0 32px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.settings-profile-description {
+  color: var(--ink-secondary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.settings-profile-values {
+  grid-area: values;
+  color: var(--ink-tertiary);
+  font-family: var(--font-code);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.settings-impact-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin: 20px 0 0;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.settings-impact-item {
+  min-width: 0;
+}
+
+.settings-impact-item dt {
+  color: var(--ink-tertiary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.settings-impact-item dd {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
+
+.settings-impact-item dd span {
+  color: var(--ink-tertiary);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.settings-error {
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.settings-content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  align-items: start;
+  gap: 24px;
+  min-width: 0;
+}
+
+.settings-group {
+  min-width: 0;
+}
+
+.settings-group + .settings-group {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-group-header {
+  margin-bottom: 16px;
+}
+
+.settings-fields {
+  display: grid;
+  gap: 20px;
+}
+
+.settings-page .field {
+  display: grid;
+  grid-template-columns: minmax(136px, 1fr) minmax(0, 2fr);
+  gap: 4px 24px;
+  min-width: 0;
+  align-items: start;
+}
+
+.settings-page .field > span {
+  padding-top: 8px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.settings-page .field input {
+  width: min(100%, 320px);
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+}
+
+.settings-page .field input:not([aria-invalid='true']):hover:not(:disabled) {
+  border-color: var(--ink-secondary);
+}
+
+.settings-page .field input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.settings-page .field input:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.settings-page .field-help,
+.settings-page .field-error {
+  grid-column: 2;
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.settings-page .field-help {
+  color: var(--ink-tertiary);
+}
+
+.settings-page .field-error {
+  color: var(--danger);
+}
+
+.settings-side {
+  min-width: 0;
+  padding: 4px 0 0;
+}
+
+.settings-side h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.settings-side-intro,
+.settings-notes {
+  color: var(--ink-secondary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.settings-side-intro {
+  margin: 8px 0 0;
+}
+
+.settings-draft-status {
+  margin: 16px 0 0;
+  color: var(--ink-tertiary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.settings-draft-status.is-dirty {
+  color: var(--warning);
+}
+
+.settings-notes {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-notes li {
+  position: relative;
+  padding-left: 12px;
+}
+
+.settings-notes li::before {
+  position: absolute;
+  top: 8px;
+  left: 0;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ink-tertiary);
+  content: '';
+}
+
+.settings-reset-button {
+  margin-top: 16px;
+}
+
+.settings-save-toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(400px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+
+.settings-save-toast-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-save-toast-copy strong {
+  color: var(--signal);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.settings-save-toast-copy p {
+  margin: 4px 0 0;
+  color: var(--ink-secondary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.settings-save-toast-close {
+  display: grid;
+  flex: 0 0 40px;
+  place-items: center;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-secondary);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.settings-save-toast-close:hover {
+  background: var(--surface-0);
+  color: var(--ink);
+}
+
+.settings-toast-enter-active,
+.settings-toast-leave-active {
+  transition: opacity 160ms cubic-bezier(.22, 1, .36, 1), transform 160ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.settings-toast-enter-from,
+.settings-toast-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+@media (max-width: 900px) {
+  .settings-content-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-side {
+    padding: 20px 0 0;
+    border-top: 1px solid var(--line);
+  }
+}
+
+@media (max-width: 720px) {
+  .settings-action-button,
+  .settings-save-button,
+  .settings-reset-button,
+  .settings-save-toast-close {
+    min-height: 44px;
+  }
+
+  .settings-profile-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .settings-profile-current {
+    line-height: 20px;
+  }
+
+  .settings-profile-option {
+    grid-template-columns: 12px minmax(0, 1fr);
+    grid-template-areas:
+      'marker copy'
+      '. values';
+    gap: 4px 12px;
+    padding: 12px;
+  }
+
+  .settings-profile-marker {
+    align-self: start;
+    margin-top: 4px;
+  }
+
+  .settings-profile-copy {
+    display: grid;
+    gap: 4px;
+  }
+
+  .settings-profile-values {
+    text-align: left;
+    white-space: normal;
+  }
+
+  .settings-impact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-content-grid {
+    gap: 16px;
+  }
+
+  .settings-page .field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .settings-page .field > span {
+    padding-top: 0;
+  }
+
+  .settings-page .field input {
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .settings-page .field-help,
+  .settings-page .field-error {
+    grid-column: 1;
+  }
+
+  .settings-save-toast {
+    right: 16px;
+    bottom: 16px;
+  }
+
+  .settings-save-toast-close {
+    flex-basis: 44px;
+    min-width: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-toast-enter-active,
+  .settings-toast-leave-active {
+    transition: none;
+  }
+}

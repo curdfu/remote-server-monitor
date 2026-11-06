@@ -1,192 +1,171 @@
 ﻿<template>
   <section class="page settings-page">
     <PageHeader
-      iconName="settings"
-      kicker="设置"
       title="设置"
-      description="调整端口、硬件采样与网络处理间隔、统计粒度和历史保留时间。"
+      description="调整端口、硬件采样与网络处理间隔、统计粒度和历史保留时间"
     >
       <template #actions>
-        <div class="actions-row settings-actions page-tier-toolbar-inline">
-          <button class="chip-button settings-action-button" :disabled="isBusy" @click="refreshSettings()">
-            <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
+        <div class="settings-actions">
+          <button type="button" class="ghost-button settings-action-button" :disabled="isBusy" @click="refreshSettings()">
             刷新
           </button>
-          <button class="ghost-button settings-action-button" :disabled="!canSave || !isDirty" @click="save">
-            <span class="button-inline-icon"><AppIcon name="settings" :size="14" /></span>
+          <button type="submit" form="settings-form" class="settings-save-button" :disabled="!canSave || !isDirty">
             {{ isSaving ? '保存中...' : '保存' }}
           </button>
         </div>
       </template>
     </PageHeader>
 
-    <section class="card settings-profile-panel">
-      <div class="section-header section-header-rich">
+    <section class="card settings-profile-panel" aria-labelledby="settings-profile-title">
+      <div class="section-header settings-profile-header">
         <div>
-          <span class="section-overline">RUNTIME PROFILE</span>
-          <h3>选择运行策略</h3>
-          <p class="section-subtitle">预设仅调整硬件采样与网络处理频率；统计粒度、历史保留时间和排行数量保持不变。</p>
+          <h3 id="settings-profile-title">运行策略</h3>
+          <p class="settings-section-description">预设仅调整硬件采样与网络处理频率；统计粒度、历史保留时间和排行数量保持不变。</p>
         </div>
-        <span class="section-tag">{{ activeProfileLabel }}</span>
+        <p class="settings-profile-current">当前策略 <strong>{{ activeProfileLabel }}</strong></p>
       </div>
 
-      <div class="settings-profile-grid">
+      <div class="settings-profile-options" role="group" aria-label="选择运行策略">
         <button
           v-for="profile in performanceProfiles"
           :key="profile.id"
           type="button"
-          class="settings-profile-button"
-          :class="{ 'settings-profile-button-active': activeProfileId === profile.id }"
+          class="settings-profile-option"
+          :class="{ 'settings-profile-option-active': activeProfileId === profile.id }"
           :aria-pressed="activeProfileId === profile.id"
           :disabled="isBusy"
           @click="applyPerformanceProfile(profile)"
         >
-          <span class="settings-profile-kicker">{{ profile.kicker }}</span>
-          <strong>{{ profile.label }}</strong>
-          <small>{{ profile.description }}</small>
+          <span class="settings-profile-marker" aria-hidden="true"></span>
+          <span class="settings-profile-copy">
+            <span class="settings-profile-label">{{ profile.label }}</span>
+            <span class="settings-profile-description">{{ profile.description }}</span>
+          </span>
+          <span class="settings-profile-values">硬件 {{ profile.values.hardwareSampleIntervalMs }} ms · 网络 {{ profile.values.networkProcessingIntervalMs }} ms</span>
         </button>
       </div>
 
-      <div class="settings-impact-grid">
+      <dl class="settings-impact-grid" aria-label="策略影响估算">
         <div class="settings-impact-item">
-          <span>硬件样本</span>
-          <strong>{{ hardwareSamplesPerMinute }}/分钟</strong>
+          <dt>硬件样本</dt>
+          <dd>{{ hardwareSamplesPerMinute }}<span> / 分钟</span></dd>
         </div>
         <div class="settings-impact-item">
-          <span>理论样本量</span>
-          <strong>{{ hardwareSamplesPerDay }}/天</strong>
+          <dt>理论样本量</dt>
+          <dd>{{ hardwareSamplesPerDay }}<span> / 天</span></dd>
         </div>
         <div class="settings-impact-item">
-          <span>网络处理检查</span>
-          <strong>{{ networkProcessingChecksPerMinute }}/分钟</strong>
+          <dt>网络处理检查</dt>
+          <dd>{{ networkProcessingChecksPerMinute }}<span> / 分钟</span></dd>
         </div>
         <div class="settings-impact-item">
-          <span>资源倾向</span>
-          <strong>{{ resourceImpactLabel }}</strong>
+          <dt>资源倾向</dt>
+          <dd>{{ resourceImpactLabel }}</dd>
         </div>
-      </div>
+      </dl>
     </section>
 
-    <div v-if="errorMessage" class="card state-card error-state" role="alert">
+    <div v-if="errorMessage" class="card settings-error error-state" role="alert">
       {{ errorMessage }}
     </div>
 
-    <section class="panel-grid">
-      <form class="card settings-layout settings-layout-elevated page-tier-panel" @submit.prevent="save">
-        <div class="settings-group">
-          <div class="section-header">
-            <div class="panel-title">
-              <span class="panel-icon"><AppIcon name="settings" :size="16" /></span>
-              <div>
-                <h3>访问端口</h3>
-                <p class="panel-subtitle">配置 Web 服务的 HTTP 监听端口。</p>
-              </div>
+    <div class="settings-content-grid">
+      <form id="settings-form" class="card settings-layout" @submit.prevent="save">
+        <section class="settings-group" aria-labelledby="settings-port-title">
+          <div class="section-header settings-group-header">
+            <div>
+              <h3 id="settings-port-title">访问端口</h3>
+              <p class="settings-section-description">配置 Web 服务的 HTTP 监听端口</p>
             </div>
-            <span class="section-tag">HTTP 端口配置</span>
           </div>
 
-          <label class="field" for="settings-http-port">
-            <span>HTTP 端口</span>
-            <input id="settings-http-port" v-model.number="form.httpPort" type="number" min="1" max="65535" :disabled="isBusy" :aria-invalid="Boolean(validation.httpPort)" :aria-describedby="validation.httpPort ? 'settings-http-port-help settings-http-port-error' : 'settings-http-port-help'" />
-            <small id="settings-http-port-help" class="field-help">本地页面访问端口，例如 http://127.0.0.1:5188。保存后需要重启服务。</small>
-            <small v-if="validation.httpPort" id="settings-http-port-error" class="field-error">{{ validation.httpPort }}</small>
-          </label>
-        </div>
+          <div class="settings-fields">
+            <label class="field" for="settings-http-port">
+              <span>HTTP 端口</span>
+              <input id="settings-http-port" v-model.number="form.httpPort" type="number" min="1" max="65535" :disabled="isBusy" :aria-invalid="Boolean(validation.httpPort)" :aria-describedby="validation.httpPort ? 'settings-http-port-help settings-http-port-error' : 'settings-http-port-help'" />
+              <small id="settings-http-port-help" class="field-help">本地页面访问端口，例如 http://127.0.0.1:5188。保存后需要重启服务。</small>
+              <small v-if="validation.httpPort" id="settings-http-port-error" class="field-error">{{ validation.httpPort }}</small>
+            </label>
+          </div>
+        </section>
 
-        <div class="settings-group">
-          <div class="section-header">
-            <div class="panel-title">
-              <span class="panel-icon"><AppIcon name="network" :size="16" /></span>
-              <div>
-                <h3>采样与统计</h3>
-                <p class="panel-subtitle">配置硬件数据的采集频率和网络历史数据的聚合粒度。</p>
-              </div>
+        <section class="settings-group" aria-labelledby="settings-sampling-title">
+          <div class="section-header settings-group-header">
+            <div>
+              <h3 id="settings-sampling-title">采样与统计</h3>
+              <p class="settings-section-description">配置硬件数据的采集频率和网络历史数据的聚合粒度</p>
             </div>
-            <span class="section-tag">采样与聚合</span>
           </div>
 
-          <label class="field" for="settings-hardware-interval">
-            <span>硬件采样间隔 (ms)</span>
-            <input id="settings-hardware-interval" v-model.number="form.hardwareSampleIntervalMs" type="number" min="500" max="60000" :disabled="isBusy" :aria-invalid="Boolean(validation.hardwareSampleIntervalMs)" :aria-describedby="validation.hardwareSampleIntervalMs ? 'settings-hardware-interval-help settings-hardware-interval-error' : 'settings-hardware-interval-help'" />
-            <small id="settings-hardware-interval-help" class="field-help">建议 1000ms 左右，兼顾刷新速度和资源占用。</small>
-            <small v-if="validation.hardwareSampleIntervalMs" id="settings-hardware-interval-error" class="field-error">{{ validation.hardwareSampleIntervalMs }}</small>
-          </label>
+          <div class="settings-fields">
+            <label class="field" for="settings-hardware-interval">
+              <span>硬件采样间隔 (ms)</span>
+              <input id="settings-hardware-interval" v-model.number="form.hardwareSampleIntervalMs" type="number" min="500" max="60000" :disabled="isBusy" :aria-invalid="Boolean(validation.hardwareSampleIntervalMs)" :aria-describedby="validation.hardwareSampleIntervalMs ? 'settings-hardware-interval-help settings-hardware-interval-error' : 'settings-hardware-interval-help'" />
+              <small id="settings-hardware-interval-help" class="field-help">建议 1000ms 左右，兼顾刷新速度和资源占用。</small>
+              <small v-if="validation.hardwareSampleIntervalMs" id="settings-hardware-interval-error" class="field-error">{{ validation.hardwareSampleIntervalMs }}</small>
+            </label>
 
-          <label class="field" for="settings-network-interval">
-            <span>网络处理间隔 (ms)</span>
-            <input id="settings-network-interval" v-model.number="form.networkProcessingIntervalMs" type="number" min="500" max="60000" :disabled="isBusy" :aria-invalid="Boolean(validation.networkProcessingIntervalMs)" :aria-describedby="validation.networkProcessingIntervalMs ? 'settings-network-interval-help settings-network-interval-error' : 'settings-network-interval-help'" />
-            <small id="settings-network-interval-help" class="field-help">控制网络事件追平、完成时间桶轮转和持久化检查；ETW 原始事件仍会持续采集。</small>
-            <small v-if="validation.networkProcessingIntervalMs" id="settings-network-interval-error" class="field-error">{{ validation.networkProcessingIntervalMs }}</small>
-          </label>
+            <label class="field" for="settings-network-interval">
+              <span>网络处理间隔 (ms)</span>
+              <input id="settings-network-interval" v-model.number="form.networkProcessingIntervalMs" type="number" min="500" max="60000" :disabled="isBusy" :aria-invalid="Boolean(validation.networkProcessingIntervalMs)" :aria-describedby="validation.networkProcessingIntervalMs ? 'settings-network-interval-help settings-network-interval-error' : 'settings-network-interval-help'" />
+              <small id="settings-network-interval-help" class="field-help">控制网络事件追平、完成时间桶轮转和持久化检查；ETW 原始事件仍会持续采集。</small>
+              <small v-if="validation.networkProcessingIntervalMs" id="settings-network-interval-error" class="field-error">{{ validation.networkProcessingIntervalMs }}</small>
+            </label>
 
-          <label class="field" for="settings-aggregate-interval">
-            <span>默认统计粒度 (秒)</span>
-            <input id="settings-aggregate-interval" v-model.number="form.aggregateIntervalSeconds" type="number" min="1" max="3600" :disabled="isBusy" :aria-invalid="Boolean(validation.aggregateIntervalSeconds)" :aria-describedby="validation.aggregateIntervalSeconds ? 'settings-aggregate-interval-help settings-aggregate-interval-error' : 'settings-aggregate-interval-help'" />
-            <small id="settings-aggregate-interval-help" class="field-help">用于网络历史数据聚合，较小数值会带来更细的趋势。</small>
-            <small v-if="validation.aggregateIntervalSeconds" id="settings-aggregate-interval-error" class="field-error">{{ validation.aggregateIntervalSeconds }}</small>
-          </label>
-        </div>
+            <label class="field" for="settings-aggregate-interval">
+              <span>默认统计粒度 (秒)</span>
+              <input id="settings-aggregate-interval" v-model.number="form.aggregateIntervalSeconds" type="number" min="1" max="3600" :disabled="isBusy" :aria-invalid="Boolean(validation.aggregateIntervalSeconds)" :aria-describedby="validation.aggregateIntervalSeconds ? 'settings-aggregate-interval-help settings-aggregate-interval-error' : 'settings-aggregate-interval-help'" />
+              <small id="settings-aggregate-interval-help" class="field-help">用于网络历史数据聚合，较小数值会带来更细的趋势。</small>
+              <small v-if="validation.aggregateIntervalSeconds" id="settings-aggregate-interval-error" class="field-error">{{ validation.aggregateIntervalSeconds }}</small>
+            </label>
+          </div>
+        </section>
 
-        <div class="settings-group">
-          <div class="section-header">
-            <div class="panel-title">
-              <span class="panel-icon"><AppIcon name="disk" :size="16" /></span>
-              <div>
-                <h3>历史数据</h3>
-                <p class="panel-subtitle">配置历史数据的保留时间和网络排行默认显示数量。</p>
-              </div>
+        <section class="settings-group" aria-labelledby="settings-history-title">
+          <div class="section-header settings-group-header">
+            <div>
+              <h3 id="settings-history-title">历史数据</h3>
+              <p class="settings-section-description">配置历史数据的保留时间和网络排行默认显示数量</p>
             </div>
-            <span class="section-tag">存储与默认展示</span>
           </div>
 
-          <label class="field" for="settings-retention-days">
-            <span>历史保留天数</span>
-            <input id="settings-retention-days" v-model.number="form.historyRetentionDays" type="number" min="1" max="3650" :disabled="isBusy" :aria-invalid="Boolean(validation.historyRetentionDays)" :aria-describedby="validation.historyRetentionDays ? 'settings-retention-days-help settings-retention-days-error' : 'settings-retention-days-help'" />
-            <small id="settings-retention-days-help" class="field-help">超过这个天数的历史数据会被清理。</small>
-            <small v-if="validation.historyRetentionDays" id="settings-retention-days-error" class="field-error">{{ validation.historyRetentionDays }}</small>
-          </label>
+          <div class="settings-fields">
+            <label class="field" for="settings-retention-days">
+              <span>历史保留天数</span>
+              <input id="settings-retention-days" v-model.number="form.historyRetentionDays" type="number" min="1" max="3650" :disabled="isBusy" :aria-invalid="Boolean(validation.historyRetentionDays)" :aria-describedby="validation.historyRetentionDays ? 'settings-retention-days-help settings-retention-days-error' : 'settings-retention-days-help'" />
+              <small id="settings-retention-days-help" class="field-help">超过这个天数的历史数据会被清理。</small>
+              <small v-if="validation.historyRetentionDays" id="settings-retention-days-error" class="field-error">{{ validation.historyRetentionDays }}</small>
+            </label>
 
-          <label class="field" for="settings-top-n">
-            <span>默认排行数量</span>
-            <input id="settings-top-n" v-model.number="form.topNDefault" type="number" min="1" max="100" :disabled="isBusy" :aria-invalid="Boolean(validation.topNDefault)" :aria-describedby="validation.topNDefault ? 'settings-top-n-help settings-top-n-error' : 'settings-top-n-help'" />
-            <small id="settings-top-n-help" class="field-help">影响网络页面默认显示的排行数量。</small>
-            <small v-if="validation.topNDefault" id="settings-top-n-error" class="field-error">{{ validation.topNDefault }}</small>
-          </label>
-        </div>
+            <label class="field" for="settings-top-n">
+              <span>默认排行数量</span>
+              <input id="settings-top-n" v-model.number="form.topNDefault" type="number" min="1" max="100" :disabled="isBusy" :aria-invalid="Boolean(validation.topNDefault)" :aria-describedby="validation.topNDefault ? 'settings-top-n-help settings-top-n-error' : 'settings-top-n-help'" />
+              <small id="settings-top-n-help" class="field-help">影响网络页面默认显示的排行数量。</small>
+              <small v-if="validation.topNDefault" id="settings-top-n-error" class="field-error">{{ validation.topNDefault }}</small>
+            </label>
+          </div>
+        </section>
       </form>
 
-      <aside class="card settings-side settings-side-elevated page-tier-panel">
-        <div class="section-header">
-          <div class="panel-title">
-            <span class="panel-icon"><AppIcon name="status" :size="16" /></span>
-            <div>
-              <h3>保存说明</h3>
-              <p class="panel-subtitle">先修改草稿，再一次性保存；保存成功后会明确提示生效范围。</p>
-            </div>
-          </div>
-          <span class="section-tag">{{ isDirty ? '有未保存修改' : '已同步' }}</span>
-        </div>
-
-        <ul class="simple-list compact">
+      <aside class="settings-side" aria-labelledby="settings-notes-title">
+        <h3 id="settings-notes-title">保存说明</h3>
+        <p class="settings-side-intro">先修改草稿，再一次性保存；保存成功后会明确提示生效范围。</p>
+        <p class="settings-draft-status" :class="{ 'is-dirty': isDirty }" role="status">
+          {{ isLoading ? '正在读取配置' : !hasLoaded ? '配置尚未载入' : isDirty ? '有未保存修改' : '与已保存配置一致' }}
+        </p>
+        <ul class="settings-notes">
           <li>端口变更保存后需要重启服务，其余配置会在运行中逐步生效。</li>
           <li>刷新会重新读取服务端已保存的配置，并可能放弃当前草稿。</li>
           <li>输入超出合法范围时，保存按钮会保持禁用。</li>
         </ul>
-
-        <div class="settings-side-actions">
-          <button class="chip-button" :disabled="!isDirty || isBusy" @click="resetForm">
-            <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
-            放弃修改
-          </button>
-        </div>
+        <button type="button" class="ghost-button settings-reset-button" :disabled="!isDirty || isBusy" @click="resetForm">
+          放弃修改
+        </button>
       </aside>
-    </section>
+    </div>
 
     <Transition name="settings-toast">
       <aside v-if="successMessage" class="settings-save-toast" role="status" aria-live="polite">
-        <span class="settings-save-toast-icon" aria-hidden="true">
-          <AppIcon name="status" :size="18" />
-        </span>
         <div class="settings-save-toast-copy">
           <strong>设置已保存</strong>
           <p>{{ successMessage }}</p>
@@ -202,7 +181,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
-import AppIcon from '../components/AppIcon.vue';
 import PageHeader from '../components/PageHeader.vue';
 import { getSettings, saveSettings } from '../services/api';
 import type { AppSettingsDto } from '../types/monitor';

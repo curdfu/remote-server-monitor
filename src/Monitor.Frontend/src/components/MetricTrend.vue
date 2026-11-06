@@ -17,14 +17,7 @@
           <span v-for="tick in domain.ticks" :key="tick">{{ formatTick(tick) }}</span>
         </div>
         <svg viewBox="0 0 360 120" preserveAspectRatio="none" role="img" :aria-label="summary">
-          <defs>
-            <linearGradient :id="gradientId" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="currentColor" stop-opacity=".28" />
-              <stop offset="100%" stop-color="currentColor" stop-opacity="0" />
-            </linearGradient>
-          </defs>
           <path class="trend-grid-line" d="M0 30H360M0 60H360M0 90H360" />
-          <path v-for="(path, index) in areaPaths" :key="`area-${index}`" class="trend-area" :d="path" :fill="`url(#${gradientId})`" />
           <polyline v-for="(points, index) in polylinePoints" :key="`line-${index}`" class="trend-line" :points="points" />
           <circle v-for="point in singlePoints" :key="`point-${point.timestamp}`" class="trend-point" :cx="point.x" :cy="point.y" r="3" />
         </svg>
@@ -43,8 +36,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, useId } from 'vue';
-import { downsampleTrendSegments, getTrendDomain, getTrendWindow, projectTrendPoint, splitTrendSegments } from '../utils/trendGeometry';
+import { computed } from 'vue';
+import { downsampleTrendSegments, getTrendDomain, getTrendGapMs, getTrendWindow, projectTrendPoint, splitTrendSegments } from '../utils/trendGeometry';
 
 export interface MetricTrendPoint {
   time: string;
@@ -61,6 +54,7 @@ const props = withDefaults(defineProps<{
   windowEndMs?: number;
   windowDurationMs?: number;
   maxPlotPoints?: number;
+  sampleIntervalMs?: number | null;
   tone?: 'signal' | 'info' | 'warning';
 }>(), {
   rangeLabel: '区间末样本',
@@ -70,17 +64,9 @@ const props = withDefaults(defineProps<{
   maxPlotPoints: 240
 });
 
-const gradientId = `trend-${useId().replaceAll(':', '')}`;
 const window = computed(() => getTrendWindow(props.points, props.windowDurationMs, props.windowEndMs));
 const domain = computed(() => getTrendDomain(props.scaleKind, props.points));
-const gapMs = computed(() => {
-  const timestamps = [...new Set(props.points
-    .map((point) => Date.parse(point.time))
-    .filter((value) => Number.isFinite(value)))].sort((left, right) => left - right);
-  const gaps = timestamps.slice(1).map((value, index) => value - timestamps[index]).filter((value) => value > 0);
-  const median = gaps.length ? [...gaps].sort((left, right) => left - right)[Math.floor(gaps.length / 2)] : 0;
-  return Math.max(15_000, median > 0 ? median * 3 : props.windowDurationMs / 20);
-});
+const gapMs = computed(() => getTrendGapMs(props.sampleIntervalMs));
 const segments = computed(() => downsampleTrendSegments(
   splitTrendSegments(props.points, gapMs.value),
   props.maxPlotPoints
@@ -95,12 +81,6 @@ const projectedSegments = computed(() => segments.value.map((segment) => segment
 const polylinePoints = computed(() => projectedSegments.value
   .filter((points) => points.length > 1)
   .map((points) => points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' ')));
-const areaPaths = computed(() => projectedSegments.value
-  .filter((points) => points.length > 1)
-  .map((points) => {
-    const line = points.map((point) => `L${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ');
-    return `M${points[0].x.toFixed(2)} 112 ${line} L${points.at(-1)?.x.toFixed(2)} 112 Z`;
-  }));
 const singlePoints = computed(() => projectedSegments.value.filter((points) => points.length === 1).flat());
 const lastPoint = computed(() => props.points
   .filter((point) => Number.isFinite(Date.parse(point.time)))

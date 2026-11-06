@@ -3,6 +3,7 @@
   AppTrafficSegmentDto,
   AppTrafficSummaryDto,
   HardwareRealtimeDto,
+  HealthDto,
   IgnoredNetworkAppDto,
   NetworkDashboardDto,
   NetworkPeriodSummaryDto,
@@ -73,6 +74,10 @@ async function resolveResponseError(response: Response) {
   return response.status >= 500
     ? '服务处理请求时发生异常，请稍后重试。'
     : `请求失败（HTTP ${response.status}）。`;
+}
+
+export function getHealth(signal?: AbortSignal) {
+  return request<HealthDto>('/health', { signal });
 }
 
 // 调用后端 /api/overview：获取首页概览数据

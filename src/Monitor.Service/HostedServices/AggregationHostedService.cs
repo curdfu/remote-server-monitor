@@ -16,6 +16,7 @@ public sealed class AggregationHostedService(
     IMonitorSettingsProvider settings) : BackgroundService
 {
     private const int PersistenceBatchSize = 500;
+    private readonly SemaphoreSlim _persistenceGate = new(1, 1);
     private static readonly TimeSpan MinimumAggregationTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan MaximumAggregationTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan FailureLogInterval = TimeSpan.FromMinutes(1);
@@ -37,11 +38,17 @@ public sealed class AggregationHostedService(
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        // 停止顺序先截断 ETW 输入，再等待聚合队列追平，最后持久化 pending bucket。
-        await networkCollector.StopAsync(cancellationToken);
-        await networkAggregator.FlushAsync(cancellationToken);
-        await PersistPendingBucketsAsync(cancellationToken);
+        // 先停周期循环，保证 peek/save/confirm 只有一个执行路径；再截断输入、排空并封口当前桶。
         await base.StopAsync(cancellationToken);
+        await networkCollector.StopAsync(cancellationToken);
+        if (ExecuteTask is { IsCompleted: false })
+        {
+            logger.LogWarning("Network aggregation cycle did not stop before the shutdown deadline; pending buckets remain buffered.");
+            return;
+        }
+
+        await networkAggregator.CompleteAsync(cancellationToken);
+        await PersistPendingBucketsAsync(cancellationToken);
     }
 
     private async Task WaitForIntervalOrSettingsChangeAsync(
@@ -50,16 +57,33 @@ public sealed class AggregationHostedService(
     {
         var settingsChangedSource = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var registration = settings.RegisterChangeCallback(_ => settingsChangedSource.TrySetResult());
-        var delayTask = Task.Delay(interval, cancellationToken);
-        var completedTask = await Task.WhenAny(delayTask, settingsChangedSource.Task);
-
-        if (completedTask == delayTask)
+        using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var delayTask = Task.Delay(interval, waitCancellation.Token);
+        try
         {
-            await delayTask;
+            var completedTask = await Task.WhenAny(delayTask, settingsChangedSource.Task);
+            await completedTask;
+        }
+        finally
+        {
+            waitCancellation.Cancel();
         }
     }
 
     private async Task PersistPendingBucketsAsync(CancellationToken cancellationToken)
+    {
+        await _persistenceGate.WaitAsync(cancellationToken);
+        try
+        {
+            await PersistPendingBucketsCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _persistenceGate.Release();
+        }
+    }
+
+    private async Task PersistPendingBucketsCoreAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -74,10 +98,17 @@ public sealed class AggregationHostedService(
                 await networkTrafficRepository.SaveAsync(batch, cancellationToken);
                 // 只有数据库写入成功后才确认 bucket，失败时保留在聚合器 pending 队列等待下一轮。
                 networkAggregator.ConfirmPendingBuckets(batch.Count);
+                networkAggregator.RecordPersistenceSuccess();
                 logger.LogDebug("Persisted {Count} network traffic buckets.", batch.Count);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                networkAggregator.RecordPersistenceFailure();
+                throw;
             }
             catch (SqliteException exception) when (SqliteBusyRetry.IsBusy(exception))
             {
+                networkAggregator.RecordPersistenceFailure();
                 LogPersistenceFailure(
                     LogLevel.Warning,
                     exception,
@@ -85,9 +116,10 @@ public sealed class AggregationHostedService(
                     batch.Count);
                 return;
             }
-            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception exception)
             {
                 // 持久化错误只能延后写入，不能让后台服务退出。
+                networkAggregator.RecordPersistenceFailure();
                 LogPersistenceFailure(
                     LogLevel.Error,
                     exception,
@@ -100,39 +132,54 @@ public sealed class AggregationHostedService(
 
     private async Task RunAggregationCycleSafeAsync(CancellationToken stoppingToken)
     {
-        using var cycleCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-        cycleCancellation.CancelAfter(GetAggregationTimeout());
+        using (var flushCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken))
+        {
+            flushCancellation.CancelAfter(GetAggregationTimeout());
+            try
+            {
+                await networkAggregator.FlushAsync(flushCancellation.Token);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException) when (flushCancellation.IsCancellationRequested)
+            {
+                LogCycleFailure(
+                    LogLevel.Warning,
+                    null,
+                    "Network aggregation flush exceeded its timeout of {Timeout}; persisting completed buckets anyway.",
+                    GetAggregationTimeout());
+            }
+            catch (Exception exception)
+            {
+                LogCycleFailure(
+                    LogLevel.Error,
+                    exception,
+                    "Network aggregation flush failed; persisting completed buckets anyway.");
+            }
+        }
 
+        // A stalled barrier must not prevent old pending buckets from freeing capacity.
+        // Use a fresh deadline rather than the already-cancelled flush token.
+        using var persistenceCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        persistenceCancellation.CancelAfter(GetAggregationTimeout());
         try
         {
-            await FlushAggregationAsync(cycleCancellation.Token);
+            await PersistPendingBucketsAsync(persistenceCancellation.Token);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (OperationCanceledException) when (cycleCancellation.IsCancellationRequested)
+        catch (OperationCanceledException) when (persistenceCancellation.IsCancellationRequested)
         {
-            LogCycleFailure(
-                LogLevel.Warning,
-                null,
-                "Network aggregation cycle exceeded its timeout of {Timeout}. The next cycle will retry.",
-                GetAggregationTimeout());
+            LogCycleFailure(LogLevel.Warning, null, "Network aggregation persistence timed out; pending buckets will be retried.");
         }
         catch (Exception exception)
         {
-            LogCycleFailure(
-                LogLevel.Error,
-                exception,
-                "Network aggregation cycle failed. The next cycle will retry.");
+            LogCycleFailure(LogLevel.Error, exception, "Network aggregation persistence failed; pending buckets will be retried.");
         }
-    }
-
-    private async Task FlushAggregationAsync(CancellationToken cancellationToken)
-    {
-        // 先等待调用前已入队事件处理完，再旋转并持久化已经封口的 bucket。
-        await networkAggregator.FlushAsync(cancellationToken);
-        await PersistPendingBucketsAsync(cancellationToken);
     }
 
     private TimeSpan GetAggregationTimeout()

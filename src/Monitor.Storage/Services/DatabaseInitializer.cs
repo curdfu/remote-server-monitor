@@ -15,8 +15,7 @@ public sealed class DatabaseInitializer(
 {
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
 
         await EnablePragmasAsync(connection, cancellationToken);
         await CreateSchemaAsync(connection, cancellationToken);
@@ -27,8 +26,7 @@ public sealed class DatabaseInitializer(
 
     public async Task OptimizeAsync(CancellationToken cancellationToken = default)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
 
         await EnablePragmasAsync(connection, cancellationToken);
         await CreateDeferredIndexesAsync(connection, cancellationToken);
@@ -68,6 +66,11 @@ public sealed class DatabaseInitializer(
                             updated_at TEXT NOT NULL
                         );
 
+                        CREATE TABLE IF NOT EXISTS storage_progress (
+                            name TEXT PRIMARY KEY,
+                            value TEXT NOT NULL
+                        );
+
                         CREATE TABLE IF NOT EXISTS hardware_samples (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             sample_time TEXT NOT NULL,
@@ -83,6 +86,22 @@ public sealed class DatabaseInitializer(
 
                         CREATE INDEX IF NOT EXISTS idx_hardware_samples_sample_time
                         ON hardware_samples(sample_time);
+
+                        CREATE TABLE IF NOT EXISTS hardware_minute_windows (
+                            minute_start TEXT PRIMARY KEY
+                        );
+
+                        CREATE TABLE IF NOT EXISTS hardware_minute_candidates (
+                            minute_start TEXT NOT NULL,
+                            sample_id INTEGER NOT NULL,
+                            PRIMARY KEY (minute_start, sample_id)
+                        );
+
+                        -- Separate versioned marker: existing minute summaries lack the
+                        -- cadence anchors and must fall back to raw until rebuilt.
+                        CREATE TABLE IF NOT EXISTS hardware_minute_anchor_windows (
+                            minute_start TEXT PRIMARY KEY
+                        );
 
                         CREATE TABLE IF NOT EXISTS app_registry (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,

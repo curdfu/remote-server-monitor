@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const stylesPath = new URL('./src/styles.css', import.meta.url);
+const stylesPath = new URL('./src/styles/observatory.css', import.meta.url);
 
 test('sidebar brand description remains fully visible on desktop', async () => {
   const source = await readFile(stylesPath, 'utf8');

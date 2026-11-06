@@ -1,97 +1,34 @@
 ﻿<template>
   <section class="page network-page">
-    <!-- 页面头部：标题、说明和手动刷新按钮 -->
     <PageHeader
       title="网络"
-      description="查看一段时间内的流量汇总、占比和应用排行。"
+      description="查看指定时间内的网络流量和应用排行"
     >
       <template #actions>
-        <button class="ghost-button" :disabled="isLoading" @click="refreshApps">
-          <span class="button-inline-icon"><AppIcon name="refresh" :size="14" /></span>
-          {{ isLoading ? '刷新中...' : '刷新' }}
+        <button type="button" class="ghost-button network-refresh" :disabled="isLoading" @click="refreshApps">
+          <AppIcon name="refresh" :size="16" />
+          {{ isLoading ? '刷新中…' : '刷新' }}
         </button>
       </template>
     </PageHeader>
 
-    <!-- 查询条件区：按工具栏分组展示时间、范围、方向和 TopN -->
-    <article class="card filters-card filters-card-elevated network-section network-section-filters">
-      <div id="network-filters-toolbar" v-show="showAdvancedFilters" class="filters-toolbar">
-        <section class="filter-group filter-group-time">
-          <div class="filter-group-title">
-            <strong>时间</strong>
-            <small>选择统计区间</small>
-          </div>
-          <div class="filter-group-fields filter-group-fields-time">
-            <label class="filter-field">
-              <span>开始时间</span>
-              <input v-model="filters.from" type="datetime-local" />
-            </label>
-            <label class="filter-field">
-              <span>结束时间</span>
-              <input v-model="filters.to" type="datetime-local" />
-            </label>
-          </div>
-        </section>
-
-        <section class="filter-group">
-          <div class="filter-group-title">
-            <strong>范围</strong>
-            <small>选择网络范围</small>
-          </div>
-          <div class="filter-group-fields">
-            <label class="filter-field">
-              <span>统计范围</span>
-              <select v-model="filters.scope">
-                <option value="all">全部</option>
-                <option value="wan">WAN</option>
-                <option value="lan">LAN</option>
-                <option value="loopback">Loopback</option>
-              </select>
-            </label>
-          </div>
-        </section>
-
-        <section class="filter-group">
-          <div class="filter-group-title">
-            <strong>方向</strong>
-            <small>选择统计方向</small>
-          </div>
-          <div class="filter-group-fields">
-            <label class="filter-field">
-              <span>统计方向</span>
-              <select v-model="filters.direction">
-                <option value="total">总流量</option>
-                <option value="upload">上传</option>
-                <option value="download">下载</option>
-              </select>
-            </label>
-          </div>
-        </section>
-
-        <section class="filter-group filter-group-topn">
-          <div class="filter-group-title">
-            <strong>TopN</strong>
-            <small>控制排行数量</small>
-          </div>
-          <div class="filter-group-fields">
-            <label class="filter-field">
-              <span>排行数量</span>
-              <input v-model.number="filters.topN" type="number" min="1" max="100" />
-            </label>
-          </div>
-        </section>
+    <article class="card filters-card network-section network-section-filters" aria-labelledby="network-filters-title">
+      <div class="panel-header network-filter-heading">
+        <div>
+          <h3 id="network-filters-title">筛选条件</h3>
+          <p class="panel-subtitle">设置时间、网络范围和排行方式</p>
+        </div>
       </div>
 
       <div class="preset-toolbar">
-        <div class="preset-toolbar-title">
-          <strong>常用预设</strong>
-          <small>快速切换常见时间范围</small>
-        </div>
+        <span class="preset-toolbar-title">快捷时间</span>
         <div class="preset-row">
           <button
             v-for="preset in presetOptions"
             :key="preset.hours"
+            type="button"
             class="chip-button"
+            :aria-pressed="activePresetHours === preset.hours"
             :class="{ 'chip-button-active': activePresetHours === preset.hours }"
             @click="applyPreset(preset.hours)"
           >
@@ -112,6 +49,58 @@
         <span>{{ isMobileFiltersExpanded ? '收起更多筛选' : '展开更多筛选' }}</span>
         <span class="network-mobile-toggle-icon" aria-hidden="true">{{ isMobileFiltersExpanded ? '▴' : '▾' }}</span>
       </button>
+
+      <div id="network-filters-toolbar" v-show="showAdvancedFilters" class="filters-toolbar">
+        <section class="filter-group filter-group-time" aria-label="时间区间">
+          <div class="filter-group-fields filter-group-fields-time">
+            <label class="filter-field">
+              <span>开始时间</span>
+              <input v-model="filters.from" type="datetime-local" />
+            </label>
+            <label class="filter-field">
+              <span>结束时间</span>
+              <input v-model="filters.to" type="datetime-local" />
+            </label>
+          </div>
+        </section>
+
+        <section class="filter-group" aria-label="网络范围">
+          <div class="filter-group-fields">
+            <label class="filter-field">
+              <span>统计范围</span>
+              <select v-model="filters.scope">
+                <option value="all">全部</option>
+                <option value="wan">WAN</option>
+                <option value="lan">LAN</option>
+                <option value="loopback">Loopback</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="filter-group" aria-label="流量方向">
+          <div class="filter-group-fields">
+            <label class="filter-field">
+              <span>统计方向</span>
+              <select v-model="filters.direction">
+                <option value="total">总流量</option>
+                <option value="upload">上传</option>
+                <option value="download">下载</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="filter-group filter-group-topn" aria-label="排行数量">
+          <div class="filter-group-fields">
+            <label class="filter-field">
+              <span>排行数量</span>
+              <input v-model.number="filters.topN" type="number" min="1" max="100" />
+            </label>
+          </div>
+        </section>
+      </div>
+
     </article>
 
     <div v-if="errorMessage" class="card state-card error-state" role="alert">
@@ -125,197 +114,74 @@
       <div class="network-section network-section-column network-section-column-analytics">
         <article class="card dashboard-panel-card network-section network-section-upload-download">
           <div class="panel-header">
-            <div class="panel-title">
-              <span class="panel-icon"><AppIcon name="traffic" :size="16" /></span>
-              <div>
-                <h3>累计上传 / 下载</h3>
-                <p class="panel-subtitle">基于累计总流量展示上传与下载方向的整体分布。</p>
-              </div>
+            <div>
+              <h3>累计上传 / 下载</h3>
+              <p class="panel-subtitle">按所选网络范围汇总，不受方向筛选影响</p>
             </div>
-            <span class="section-tag">仅基于累计总量</span>
+            <span class="section-tag">累计总量</span>
           </div>
 
-          <div class="ratio-overview">
-            <div class="ratio-summary-card ratio-summary-card-wan">
-              <div class="ratio-summary-top">
-                <span class="ratio-summary-label">累计上传</span>
-                <span class="ratio-summary-badge">发送</span>
-              </div>
+          <p v-if="!totalsSummary" class="summary-unavailable">{{ isLoading ? '正在加载流量汇总…' : '流量汇总尚不可用' }}</p>
+          <div v-if="totalsSummary" class="ratio-overview traffic-summary-values">
+            <div class="ratio-summary-card">
+              <span class="ratio-summary-label">累计上传</span>
               <strong>{{ formatBytes(totalUploadBytes) }}</strong>
               <small>{{ formatRatioPercent(uploadDownloadTotalBytes, uploadPercent) }}</small>
             </div>
-
-            <div class="ratio-summary-card ratio-summary-card-lan">
-              <div class="ratio-summary-top">
-                <span class="ratio-summary-label">累计下载</span>
-                <span class="ratio-summary-badge">接收</span>
-              </div>
+            <div class="ratio-summary-card">
+              <span class="ratio-summary-label">累计下载</span>
               <strong>{{ formatBytes(totalDownloadBytes) }}</strong>
               <small>{{ formatRatioPercent(uploadDownloadTotalBytes, downloadPercent) }}</small>
             </div>
-
-            <div class="ratio-summary-card ratio-summary-card-neutral">
-              <div class="ratio-summary-top">
-                <span class="ratio-summary-label">累计总流量</span>
-                <span class="ratio-summary-badge">总计</span>
-              </div>
+            <div class="ratio-summary-card">
+              <span class="ratio-summary-label">累计总流量</span>
               <strong>{{ formatBytes(uploadDownloadTotalBytes) }}</strong>
               <small>上传 + 下载</small>
-            </div>
-
-            <div class="ratio-summary-card ratio-summary-card-neutral">
-              <div class="ratio-summary-top">
-                <span class="ratio-summary-label">主导方向</span>
-                <span class="ratio-summary-badge">概览</span>
-              </div>
-              <strong>{{ dominantTrafficDirectionLabel }}</strong>
-              <small>{{ dominantTrafficDirectionHint }}</small>
-            </div>
-          </div>
-
-          <div class="ratio-group">
-            <div class="ratio-item">
-              <div class="ratio-header">
-                <strong>上传</strong>
-                <span>{{ formatRatioPercent(uploadDownloadTotalBytes, uploadPercent) }}</span>
-              </div>
-              <div class="ratio-track">
-                <div class="ratio-bar ratio-bar-wan" :style="{ width: `${uploadPercent}%` }"></div>
-              </div>
-              <small class="muted">{{ formatBytes(totalUploadBytes) }}</small>
-            </div>
-
-            <div class="ratio-item">
-              <div class="ratio-header">
-                <strong>下载</strong>
-                <span>{{ formatRatioPercent(uploadDownloadTotalBytes, downloadPercent) }}</span>
-              </div>
-              <div class="ratio-track">
-                <div class="ratio-bar ratio-bar-lan" :style="{ width: `${downloadPercent}%` }"></div>
-              </div>
-              <small class="muted">{{ formatBytes(totalDownloadBytes) }}</small>
             </div>
           </div>
         </article>
 
-        <!-- 占比面板：展示 WAN / LAN / Loopback 在当前时间范围和方向下的占比 -->
         <article class="card dashboard-panel-card network-ratio-panel network-section network-section-wan-lan">
           <div class="panel-header">
-            <div class="panel-title">
-              <span class="panel-icon"><AppIcon name="traffic" :size="16" /></span>
-              <div>
-                <h3>WAN / LAN 占比</h3>
-                <p class="panel-subtitle">按当前筛选结果汇总的累计流量分布，包含其他未分类流量。</p>
-              </div>
+            <div>
+              <h3>网络流量分布</h3>
+              <p class="panel-subtitle">按所选方向汇总全部网络，包含未分类流量，不受范围筛选影响</p>
             </div>
-            <span class="section-tag">按当前筛选结果汇总</span>
+            <span class="section-tag">全部网络 / 当前方向</span>
           </div>
 
-          <div class="ratio-overview">
-            <div class="ratio-summary-card ratio-summary-card-wan">
-              <div class="ratio-summary-top">
-                <span class="ratio-summary-label">WAN 流量</span>
-                <span class="ratio-summary-badge">外网</span>
-              </div>
+          <p v-if="!overviewSummary" class="summary-unavailable">{{ isLoading ? '正在加载网络分布…' : '网络分布尚不可用' }}</p>
+          <div v-if="overviewSummary" class="ratio-overview network-distribution-values">
+            <div class="ratio-summary-card">
+              <span class="ratio-summary-label">WAN</span>
               <strong>{{ formatBytes(wanTotalBytes) }}</strong>
               <small>{{ formatRatioPercent(overviewTotalBytes, wanPercent) }}</small>
             </div>
-
-            <div class="ratio-summary-card ratio-summary-card-lan">
-              <div class="ratio-summary-top">
-                <span class="ratio-summary-label">LAN 流量</span>
-                <span class="ratio-summary-badge">内网</span>
-              </div>
+            <div class="ratio-summary-card">
+              <span class="ratio-summary-label">LAN</span>
               <strong>{{ formatBytes(lanTotalBytes) }}</strong>
               <small>{{ formatRatioPercent(overviewTotalBytes, lanPercent) }}</small>
             </div>
-
-            <div class="ratio-summary-card ratio-summary-card-loopback">
-              <div class="ratio-summary-top">
-                <span class="ratio-summary-label">Loopback 流量</span>
-                <span class="ratio-summary-badge">本地</span>
-              </div>
+            <div class="ratio-summary-card">
+              <span class="ratio-summary-label">Loopback</span>
               <strong>{{ formatBytes(loopbackTotalBytes) }}</strong>
               <small>{{ formatRatioPercent(overviewTotalBytes, loopbackPercent) }}</small>
             </div>
-
-            <div class="ratio-summary-card ratio-summary-card-other">
-              <div class="ratio-summary-top">
-                <span class="ratio-summary-label">其他流量</span>
-                <span class="ratio-summary-badge">未分类</span>
-              </div>
+            <div class="ratio-summary-card">
+              <span class="ratio-summary-label">其他</span>
               <strong>{{ formatBytes(otherTotalBytes) }}</strong>
               <small>{{ formatRatioPercent(overviewTotalBytes, otherPercent) }}</small>
-            </div>
-
-            <div class="ratio-summary-card ratio-summary-card-neutral">
-              <div class="ratio-summary-top">
-                <span class="ratio-summary-label">主导网络</span>
-                <span class="ratio-summary-badge">概览</span>
-              </div>
-              <strong>{{ dominantScopeLabel }}</strong>
-              <small>{{ dominantScopeHint }}</small>
-            </div>
-          </div>
-
-          <div class="ratio-group">
-            <div class="ratio-item">
-              <div class="ratio-header">
-                <strong>WAN</strong>
-                <span>{{ formatRatioPercent(overviewTotalBytes, wanPercent) }}</span>
-              </div>
-              <div class="ratio-track">
-                <div class="ratio-bar ratio-bar-wan" :style="{ width: `${wanPercent}%` }"></div>
-              </div>
-              <small class="muted">{{ formatBytes(wanTotalBytes) }}</small>
-            </div>
-
-            <div class="ratio-item">
-              <div class="ratio-header">
-                <strong>LAN</strong>
-                <span>{{ formatRatioPercent(overviewTotalBytes, lanPercent) }}</span>
-              </div>
-              <div class="ratio-track">
-                <div class="ratio-bar ratio-bar-lan" :style="{ width: `${lanPercent}%` }"></div>
-              </div>
-              <small class="muted">{{ formatBytes(lanTotalBytes) }}</small>
-            </div>
-
-            <div class="ratio-item">
-              <div class="ratio-header">
-                <strong>Loopback</strong>
-                <span>{{ formatRatioPercent(overviewTotalBytes, loopbackPercent) }}</span>
-              </div>
-              <div class="ratio-track">
-                <div class="ratio-bar ratio-bar-loopback" :style="{ width: `${loopbackPercent}%` }"></div>
-              </div>
-              <small class="muted">{{ formatBytes(loopbackTotalBytes) }}</small>
-            </div>
-
-            <div class="ratio-item">
-              <div class="ratio-header">
-                <strong>其他</strong>
-                <span>{{ formatRatioPercent(overviewTotalBytes, otherPercent) }}</span>
-              </div>
-              <div class="ratio-track">
-                <div class="ratio-bar ratio-bar-other" :style="{ width: `${otherPercent}%` }"></div>
-              </div>
-              <small class="muted">{{ formatBytes(otherTotalBytes) }}</small>
             </div>
           </div>
         </article>
       </div>
 
       <div class="network-section network-section-column network-section-column-ranking">
-        <!-- 排行面板：展示按当前 scope + direction 排序后的应用流量排行 -->
         <article class="card dashboard-panel-card network-ranking-panel network-section network-section-ranking">
           <div class="panel-header">
-            <div class="panel-title">
-              <span class="panel-icon"><AppIcon name="apps" :size="16" /></span>
-              <div>
-                <h3>应用流量排行</h3>
-                <p class="panel-subtitle">按选择的统计范围和方向排序显示应用流量排行。</p>
-              </div>
+            <div>
+              <h3>应用流量排行</h3>
+              <p class="panel-subtitle">按所选网络范围和方向排序，选择应用查看分段明细</p>
             </div>
             <div class="ranking-header-tags">
               <button
@@ -325,7 +191,6 @@
                 :disabled="ignoredApps.length === 0"
                 @click="scrollToIgnoredApps"
               >
-                <AppIcon name="eye-off" :size="13" />
                 已忽略 {{ ignoredApps.length }}
               </button>
               <span class="section-tag">{{ rankingDescription }}</span>
@@ -333,25 +198,21 @@
           </div>
 
           <div v-if="hasPendingFilterChanges" class="network-pending-state" role="status">
-            筛选条件已修改，正在等待最新结果；当前排行仍对应 {{ rankingDescription }}。
+            筛选条件已修改，当前排行仍对应 {{ rankingDescription }}，请等待最新结果
           </div>
 
           <div class="ranking-meta">
-            <div class="card metric-card metric-card-compact network-stat-card">
-              <div class="metric-top">
-                <span class="metric-label metric-label-inline"><AppIcon name="apps" :size="14" />应用数量</span>
-              </div>
-              <strong class="metric-value">{{ topRanking.length }}</strong>
+            <div class="ranking-meta-item">
+              <span>应用数量</span>
+              <strong>{{ appliedFilters ? topRanking.length : '--' }}</strong>
             </div>
-            <div class="card metric-card metric-card-compact network-stat-card">
-              <div class="metric-top">
-                <span class="metric-label metric-label-inline"><AppIcon name="uptime" :size="14" />统计时间范围</span>
+            <div class="ranking-meta-item ranking-meta-range">
+              <span>统计时间</span>
+              <div v-if="rangeParts" class="range-value">
+                <span>{{ rangeParts.from }}</span>
+                <span>至 {{ rangeParts.to }}</span>
               </div>
-              <div v-if="rangeParts" class="metric-value metric-small range-value">
-                <span>{{ rangeParts.from }}&nbsp;~</span>
-                <span>{{ rangeParts.to }}</span>
-              </div>
-              <strong v-else class="metric-value metric-small">--</strong>
+              <strong v-else>--</strong>
             </div>
           </div>
 
@@ -359,9 +220,9 @@
             <span>排名</span>
             <span>应用名称</span>
             <span>应用路径</span>
-            <span>上传 / 下载</span>
-            <span>当前统计</span>
-            <span>操作</span>
+            <span class="ranking-table-number">上传 / 下载</span>
+            <span class="ranking-table-number">当前统计</span>
+            <span class="ranking-table-action">操作</span>
           </div>
 
           <ol v-if="showRankingSkeleton" class="ranking-list ranking-list-skeleton" aria-hidden="true">
@@ -397,7 +258,7 @@
               <button
                 type="button"
                 class="ranking-open-button"
-                :aria-label="`查看 ${item.displayName || item.processName} 的流量明细`"
+                :aria-label="`${item.displayName || item.processName}，上传 ${formatBytes(getScopedUploadBytes(item))}，下载 ${formatBytes(getScopedDownloadBytes(item))}，当前统计 ${formatBytes(getRankingValue(item))}，查看流量明细`"
                 :aria-pressed="selectedApp?.appKey === item.appKey"
                 @click="selectApp(item)"
               >
@@ -407,15 +268,15 @@
                   <small class="muted">{{ item.executablePath || item.processName }}</small>
                 </div>
                 <div class="ranking-side">
-                  <span class="ranking-value">{{ formatBytes(getRankingValue(item)) }}</span>
+                  <span class="ranking-value"><span class="ranking-value-label">当前统计</span>{{ formatBytes(getRankingValue(item)) }}</span>
                   <div class="ranking-breakdown">
                     <span class="ranking-flow">
-                      <AppIcon name="upload" :size="12" />
-                      {{ formatBytes(getScopedUploadBytes(item)) }}
+                      <span>上传</span>
+                      <span>{{ formatBytes(getScopedUploadBytes(item)) }}</span>
                     </span>
                     <span class="ranking-flow">
-                      <AppIcon name="download" :size="12" />
-                      {{ formatBytes(getScopedDownloadBytes(item)) }}
+                      <span>下载</span>
+                      <span>{{ formatBytes(getScopedDownloadBytes(item)) }}</span>
                     </span>
                   </div>
                   <div class="ranking-progress" aria-hidden="true">
@@ -436,7 +297,7 @@
             </li>
             <li v-if="!topRanking.length" class="network-empty-state">
               <strong>当前条件没有可展示的排行数据</strong>
-              <small>{{ appliedFilters ? `查询范围：${rankingDescription}，${formatRangeLabel()}` : '等待第一次成功查询。' }}</small>
+              <small>{{ appliedFilters ? `查询范围：${rankingDescription}，${formatRangeLabel()}` : '等待第一次成功查询' }}</small>
               <div class="network-empty-actions">
                 <button v-if="selectedPresetHours !== 24" type="button" class="chip-button" @click="applyPreset(24)">切换最近 24 小时</button>
                 <button type="button" class="chip-button" @click="focusNetworkFilters">调整筛选</button>
@@ -458,13 +319,10 @@
               aria-controls="ranking-ignored-list"
               @click="isIgnoredAppsExpanded = !isIgnoredAppsExpanded"
             >
-              <span class="ranking-ignored-heading-main">
-                <span class="ranking-ignored-icon"><AppIcon name="eye-off" :size="16" /></span>
-                <span>
+                <span class="ranking-ignored-heading-main">
                   <strong id="ranking-ignored-title">已忽略的应用</strong>
-                  <small>这些应用不会参与排行，流量统计原始数据保持不变。</small>
+                  <small>这些应用不参与排行，原始流量数据不变</small>
                 </span>
-              </span>
               <span class="ranking-ignored-heading-action">
                 {{ isIgnoredAppsExpanded ? '收起' : '展开' }}
                 <span class="ranking-ignored-count-badge">{{ ignoredApps.length }}</span>
@@ -478,14 +336,8 @@
                   <small>{{ entry.record.executablePath || entry.record.processName }}</small>
                 </div>
                 <div v-if="entry.summary" class="ranking-ignored-traffic">
-                  <span>
-                    <AppIcon name="upload" :size="12" />
-                    {{ formatBytes(getScopedUploadBytes(entry.summary)) }}
-                  </span>
-                  <span>
-                    <AppIcon name="download" :size="12" />
-                    {{ formatBytes(getScopedDownloadBytes(entry.summary)) }}
-                  </span>
+                  <span>上传 {{ formatBytes(getScopedUploadBytes(entry.summary)) }}</span>
+                  <span>下载 {{ formatBytes(getScopedDownloadBytes(entry.summary)) }}</span>
                 </div>
                 <span v-else class="ranking-ignored-unavailable">当前范围无排行数据</span>
                 <button
@@ -494,7 +346,6 @@
                   :disabled="isIgnoreMutationPending"
                   @click="restoreIgnoredApp(entry.record.appKey)"
                 >
-                  <AppIcon name="restore" :size="14" />
                   恢复排行
                 </button>
               </li>
@@ -507,7 +358,6 @@
     <Teleport to="body">
       <Transition name="ranking-ignore-toast">
         <div v-if="recentlyIgnoredApp" class="ranking-ignore-toast" role="status" aria-live="polite">
-          <span class="ranking-ignore-toast-icon"><AppIcon name="eye-off" :size="17" /></span>
           <span>
             已忽略
             <strong>{{ recentlyIgnoredApp.displayName || recentlyIgnoredApp.processName }}</strong>
@@ -523,7 +373,7 @@
       role="dialog"
       :open="Boolean(selectedApp)"
       title="应用流量明细"
-      description="以下明细按当前时间、范围和方向筛选条件查询。"
+      description="以下明细按当前时间、范围和方向筛选条件查询"
       :return-focus="dialogTrigger"
       @close="closeAppSegmentsPanel"
     >
@@ -537,11 +387,9 @@
 
           <div class="app-segments-header">
             <div class="app-segments-title">
-              <span class="panel-icon"><AppIcon name="network" :size="16" /></span>
-              <div>
-                <h4 id="app-segments-title">{{ selectedApp.displayName || selectedApp.processName }}</h4>
-                <p class="panel-subtitle">{{ selectedApp.executablePath || selectedApp.processName }}</p>
-              </div>
+              <span class="app-segments-kicker">应用流量明细</span>
+              <h4 id="app-segments-title">{{ selectedApp.displayName || selectedApp.processName }}</h4>
+              <p class="panel-subtitle">{{ selectedApp.executablePath || selectedApp.processName }}</p>
             </div>
             <div class="app-segments-actions">
               <div class="app-segments-tags">
@@ -552,47 +400,51 @@
           </div>
 
           <p class="app-segments-note" :class="{ 'app-segments-note-empty': !selectedAppOutsideRanking }">
-            {{ selectedAppOutsideRanking ? '该应用不在当前排行范围内，详情仍按当前筛选条件查询。' : '以下明细按当前时间、范围和方向筛选条件查询。' }}
+            {{ selectedAppOutsideRanking ? '该应用不在当前排行范围内，详情仍按当前筛选条件查询' : '明细按当前时间、范围和方向筛选' }}
           </p>
 
           <div v-if="segmentsErrorMessage" class="app-segments-state app-segments-error">
             {{ segmentsErrorMessage }}
           </div>
           <div v-else-if="isSegmentsLoading" class="app-segments-state">
-            正在加载应用分段流量...
+            正在加载应用分段流量…
           </div>
           <div v-else-if="!appSegments.length" class="app-segments-state">
-            当前筛选范围内没有该应用的分段流量。
+            当前筛选范围内没有该应用的分段流量
           </div>
           <div v-else class="app-segments-chart" aria-label="应用分段流量柱状图">
-            <div class="app-segments-chart-grid" aria-hidden="true"></div>
             <div class="app-segments-scale" aria-hidden="true">
               <span>{{ formatBytes(segmentMaxValue) }}</span>
               <span>{{ formatBytes(segmentMaxValue / 2) }}</span>
               <span>0 B</span>
             </div>
-            <ol class="app-segments-bars">
-              <li
-                v-for="(segment, segmentIndex) in appSegments"
-                :key="`${segment.from}-${segment.to}`"
-                class="app-segment-bar-item"
-                :class="getSegmentTooltipPlacementClass(segmentIndex)"
-              >
-                <div
-                  class="app-segment-bar"
-                  :style="{ height: `${getSegmentPercent(segment)}%` }"
-                  tabindex="0"
-                  role="button"
-                  :aria-pressed="selectedSegmentIndex === segmentIndex"
-                  :aria-label="getSegmentTooltip(segment)"
-                  @click="selectSegment(segmentIndex)"
-                  @keydown="handleSegmentKeydown($event, segmentIndex)"
-                >
-                  <span class="app-segment-tooltip">{{ getSegmentTooltip(segment) }}</span>
-                </div>
-                <span class="app-segment-axis-label">{{ formatSegmentAxisLabel(segment) }}</span>
-              </li>
-            </ol>
+            <div class="app-segments-chart-scroll" role="region" aria-label="分段流量图，可横向滚动" tabindex="0">
+              <div class="app-segments-chart-plot">
+                <div class="app-segments-chart-grid" aria-hidden="true"></div>
+                <ol class="app-segments-bars">
+                  <li
+                    v-for="(segment, segmentIndex) in appSegments"
+                    :key="`${segment.from}-${segment.to}`"
+                    class="app-segment-bar-item"
+                    :class="getSegmentTooltipPlacementClass(segmentIndex)"
+                  >
+                    <div
+                      class="app-segment-bar-target"
+                      tabindex="0"
+                      role="button"
+                      :aria-pressed="selectedSegmentIndex === segmentIndex"
+                      :aria-label="getSegmentTooltip(segment)"
+                      @click="selectSegment(segmentIndex)"
+                      @keydown="handleSegmentKeydown($event, segmentIndex)"
+                    >
+                      <div class="app-segment-bar" :style="{ height: `${getSegmentPercent(segment)}%` }"></div>
+                      <span class="app-segment-tooltip" aria-hidden="true">{{ getSegmentTooltip(segment) }}</span>
+                    </div>
+                    <span class="app-segment-axis-label">{{ formatSegmentAxisLabel(segment) }}</span>
+                  </li>
+                </ol>
+              </div>
+            </div>
           </div>
 
           <div v-if="selectedSegment" class="app-segments-selected-readout" role="status" aria-live="polite">
@@ -605,7 +457,7 @@
 
           <details v-if="appSegments.length" class="app-segments-table-details">
             <summary>展开分段明细表</summary>
-            <div class="table-shell">
+            <div class="table-shell app-segments-table-scroll" role="region" aria-label="分段明细表，可横向滚动" tabindex="0">
               <table class="data-table app-segments-table">
                 <thead>
                   <tr>
@@ -617,7 +469,10 @@
                 </thead>
                 <tbody>
                   <tr v-for="(segment, segmentIndex) in appSegments" :key="`detail-${segment.from}-${segment.to}`">
-                    <td>{{ formatSegmentRange(segment) }}</td>
+                    <td class="app-segment-time-cell">
+                      <span>{{ formatSegmentTime(segment.from) }}</span>
+                      <span>至 {{ formatSegmentTime(segment.to) }}</span>
+                    </td>
                     <td class="align-right">{{ formatBytes(getSegmentUploadBytes(segment)) }}</td>
                     <td class="align-right">{{ formatBytes(getSegmentDownloadBytes(segment)) }}</td>
                     <td class="align-right">
@@ -640,6 +495,8 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import AppIcon from '../components/AppIcon.vue';
 import AccessibleModal from '../components/AccessibleModal.vue';
 import PageHeader from '../components/PageHeader.vue';
+import { formatSegmentAxisTime, isDirectionIncluded } from '../utils/networkPresentation';
+import { createNetworkReloadController } from '../utils/networkReload';
 import {
   getNetworkAppSegments,
   getNetworkDashboard,
@@ -689,10 +546,8 @@ const isMobileViewport = ref(false);
 const isMobileFiltersExpanded = ref(false);
 const appliedFilters = ref<NetworkFilters | null>(null);
 const dialogTrigger = ref<HTMLElement | null>(null);
-let autoRefreshTimer: number | null = null;
 let mobileViewportQuery: MediaQueryList | null = null;
 let dashboardAbortController: AbortController | null = null;
-let pendingReloadSource: 'filter' | 'manual' = 'filter';
 let ignoreUndoTimer: number | null = null;
 // 应用明细请求可能被切换筛选条件、关闭弹层或重新选择应用打断；版本号用于丢弃过期响应。
 let segmentsRequestVersion = 0;
@@ -709,16 +564,23 @@ interface NetworkFilters {
 
 // 查询条件：分别驱动筛选区、占比面板和应用排行
 const filters = reactive({
-  from: toLocalInputValue(new Date(Date.now() - 24 * 60 * 60 * 1000)),
-  to: toLocalInputValue(new Date()),
+  from: toLocalInputValue(new Date(Math.floor(Date.now() / 60_000) * 60_000 - 24 * 60 * 60 * 1000)),
+  to: toLocalInputValue(new Date(Math.floor(Date.now() / 60_000) * 60_000)),
   topN: 10,
   scope: 'wan' as 'all' | 'wan' | 'lan' | 'loopback',
   direction: 'upload' as 'total' | 'upload' | 'download'
 });
 const selectedPresetHours = ref<number | null>(24);
-let presetSignature = '';
+let applyingPreset = false;
 let applyingDefaultTopN = false;
 let topNUserTouched = false;
+const reloadController = createNetworkReloadController({
+  schedule: (callback, delay) => window.setTimeout(callback, delay),
+  cancel: (timer) => window.clearTimeout(timer),
+  getPreset: () => selectedPresetHours.value,
+  advancePreset: applyPreset,
+  load: (source) => { void loadApps(source); }
+});
 
 // 累计上传/下载 - 使用 totalsSummary（保持当前 scope，但不受 direction 筛选影响）
 const totalUploadBytes = computed(() =>
@@ -740,17 +602,6 @@ const uploadPercent = computed(() =>
 const downloadPercent = computed(() =>
   uploadDownloadTotalBytes.value === 0 ? 0 : (totalDownloadBytes.value / uploadDownloadTotalBytes.value) * 100
 );
-
-const dominantTrafficDirectionLabel = computed(() => {
-  if (uploadDownloadTotalBytes.value === 0) return '--';
-  if (Math.abs(uploadPercent.value - downloadPercent.value) < 5) return '基本均衡';
-  return uploadPercent.value >= downloadPercent.value ? '上传为主' : '下载为主';
-});
-
-const dominantTrafficDirectionHint = computed(() => {
-  if (uploadDownloadTotalBytes.value === 0) return '当前没有流量数据';
-  return `差值 ${Math.abs(uploadPercent.value - downloadPercent.value).toFixed(1)}%`;
-});
 
 // 占比面板数据 - 使用 overviewSummary（不受 scope 筛选影响，但受 direction 和时间范围影响）
 const overviewWanTotalBytes = computed(() =>
@@ -864,23 +715,6 @@ const showAdvancedFilters = computed(() => !isMobileViewport.value || isMobileFi
 
 const rangeParts = computed(() => formatRangeParts());
 
-const dominantScopeLabel = computed(() => {
-  if (overviewTotalBytes.value === 0) return '--';
-  const entries = [
-    ['WAN', wanPercent.value],
-    ['LAN', lanPercent.value],
-    ['Loopback', loopbackPercent.value],
-    ['其他', otherPercent.value]
-  ] as const;
-  const [label, percent] = entries.reduce((winner, entry) => entry[1] > winner[1] ? entry : winner);
-  return percent > 50 ? `${label} 为主` : '分布较均衡';
-});
-
-const dominantScopeHint = computed(() => {
-  if (overviewTotalBytes.value === 0) return '当前没有流量数据';
-  return `最高占比 ${Math.max(wanPercent.value, lanPercent.value, loopbackPercent.value, otherPercent.value).toFixed(1)}%`;
-});
-
 onMounted(() => {
   isViewActive = true;
   if (typeof window !== 'undefined' && 'matchMedia' in window) {
@@ -897,10 +731,7 @@ onUnmounted(() => {
   segmentsRequestVersion++;
   dashboardAbortController?.abort();
 
-  if (autoRefreshTimer !== null) {
-    window.clearTimeout(autoRefreshTimer);
-    autoRefreshTimer = null;
-  }
+  reloadController.dispose();
 
   if (ignoreUndoTimer !== null) {
     window.clearTimeout(ignoreUndoTimer);
@@ -914,31 +745,18 @@ onUnmounted(() => {
 
 });
 
+watch(() => [filters.from, filters.to], () => {
+  if (!applyingPreset) selectedPresetHours.value = null;
+}, { flush: 'sync' });
+
+watch(() => filters.topN, () => {
+  if (!applyingDefaultTopN) topNUserTouched = true;
+}, { flush: 'sync' });
+
 watch(
   () => [filters.from, filters.to, filters.topN, filters.scope, filters.direction],
-  () => {
-    if (presetSignature === `${filters.from}|${filters.to}`) {
-      presetSignature = '';
-    } else {
-      selectedPresetHours.value = null;
-    }
-
-    if (!applyingDefaultTopN) {
-      topNUserTouched = true;
-    }
-
-    // 多个筛选控件可能连续变化，统一 debounce 后再请求，减少无效接口调用和骨架屏闪烁。
-    if (autoRefreshTimer !== null) {
-      window.clearTimeout(autoRefreshTimer);
-    }
-
-    autoRefreshTimer = window.setTimeout(() => {
-      autoRefreshTimer = null;
-      const source = pendingReloadSource;
-      pendingReloadSource = 'filter';
-      void loadApps(source);
-    }, 250);
-  }
+  () => reloadController.filtersChanged(),
+  { flush: 'sync' }
 );
 
 async function loadApps(source: 'filter' | 'manual' = 'filter') {
@@ -1001,20 +819,8 @@ async function loadApps(source: 'filter' | 'manual' = 'filter') {
 }
 
 function refreshApps() {
-  if (autoRefreshTimer !== null) {
-    window.clearTimeout(autoRefreshTimer);
-    autoRefreshTimer = null;
-  }
-
-  // 当前时间范围命中预设时，手动刷新会先重算“到当前时间”的范围，再由 watcher 触发加载。
-  const presetHours = activePresetHours.value;
-  if (presetHours) {
-    pendingReloadSource = 'manual';
-    applyPreset(presetHours);
-    return;
-  }
-
-  void loadApps('manual');
+  // 即使预设时间仍在同一分钟，也只显式发出一次请求。
+  reloadController.refresh();
 }
 
 function selectApp(item: AppTrafficSummaryDto) {
@@ -1110,6 +916,7 @@ async function initializeNetworkPage() {
     migrationError = error instanceof Error ? error.message : '迁移旧版忽略列表失败。';
   }
 
+  if (!isViewActive) return;
   try {
     const settings = await getSettings();
     if (isViewActive && !topNUserTouched) {
@@ -1124,7 +931,7 @@ async function initializeNetworkPage() {
     }
   }
 
-  if (isViewActive) {
+  if (isViewActive && dashboardRequestVersion === 0) {
     await loadApps('filter');
   }
   if (migrationError && !errorMessage.value) {
@@ -1211,7 +1018,6 @@ function closeAppSegmentsPanel() {
   segmentsErrorMessage.value = '';
   isSegmentsLoading.value = false;
   segmentsRequestVersion++;
-  restoreDialogFocus();
 }
 
 async function loadSelectedAppSegments() {
@@ -1287,11 +1093,13 @@ function syncMobileViewportState(matches: boolean) {
 function applyPreset(hours: number) {
   const now = new Date();
   const to = toLocalInputValue(now);
-  const from = toLocalInputValue(new Date(now.getTime() - hours * 60 * 60 * 1000));
-  presetSignature = `${from}|${to}`;
+  const end = new Date(to);
+  const from = toLocalInputValue(new Date(end.getTime() - hours * 60 * 60 * 1000));
+  applyingPreset = true;
   selectedPresetHours.value = hours;
   filters.to = to;
   filters.from = from;
+  applyingPreset = false;
 }
 
 function focusNetworkFilters() {
@@ -1307,7 +1115,8 @@ function formatRangeLabel() {
   return parts ? `${parts.from} ~ ${parts.to}` : '时间范围无效';
 }
 
-function formatBytes(value: number) {
+function formatBytes(value: number | null | undefined) {
+  if (value == null) return '未统计';
   if (!Number.isFinite(value) || value < 0) return '--';
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
@@ -1462,6 +1271,7 @@ function getSegmentValue(segment: AppTrafficSegmentDto) {
 
 function getSegmentUploadBytes(segment: AppTrafficSegmentDto) {
   const activeFilters = appliedFilters.value ?? filters;
+  if (!isDirectionIncluded(activeFilters.direction, 'upload')) return null;
   if (activeFilters.scope === 'wan') return segment.wanUploadBytes;
   if (activeFilters.scope === 'lan') return segment.lanUploadBytes;
   if (activeFilters.scope === 'loopback') return segment.loopbackUploadBytes;
@@ -1470,6 +1280,7 @@ function getSegmentUploadBytes(segment: AppTrafficSegmentDto) {
 
 function getSegmentDownloadBytes(segment: AppTrafficSegmentDto) {
   const activeFilters = appliedFilters.value ?? filters;
+  if (!isDirectionIncluded(activeFilters.direction, 'download')) return null;
   if (activeFilters.scope === 'wan') return segment.wanDownloadBytes;
   if (activeFilters.scope === 'lan') return segment.lanDownloadBytes;
   if (activeFilters.scope === 'loopback') return segment.loopbackDownloadBytes;
@@ -1496,14 +1307,15 @@ function handleSegmentKeydown(event: KeyboardEvent, index: number) {
   selectSegment(index);
 }
 
-function formatSegmentRange(segment: AppTrafficSegmentDto) {
-  const from = new Date(segment.from);
-  const to = new Date(segment.to);
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-    return '--';
-  }
+function formatSegmentTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString();
+}
 
-  return `${from.toLocaleString()} ~ ${to.toLocaleString()}`;
+function formatSegmentRange(segment: AppTrafficSegmentDto) {
+  const from = formatSegmentTime(segment.from);
+  const to = formatSegmentTime(segment.to);
+  return from === '--' || to === '--' ? '--' : `${from} ~ ${to}`;
 }
 
 function formatSegmentAxisLabel(segment: AppTrafficSegmentDto) {
@@ -1512,10 +1324,8 @@ function formatSegmentAxisLabel(segment: AppTrafficSegmentDto) {
     return '--';
   }
 
-  const month = String(from.getMonth() + 1).padStart(2, '0');
-  const day = String(from.getDate()).padStart(2, '0');
-  const hour = String(from.getHours()).padStart(2, '0');
-  return segmentDurationLabel.value === '1 小时' ? `${hour}:00` : `${month}-${day}`;
+  const activeFilters = appliedFilters.value ?? filters;
+  return formatSegmentAxisTime(segment.from, activeFilters.from, activeFilters.to);
 }
 
 function getSegmentTooltip(segment: AppTrafficSegmentDto) {

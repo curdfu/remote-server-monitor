@@ -6,7 +6,7 @@ namespace Monitor.Network.Services;
 
 // AppRegistryService 是内存态应用注册表，把短生命周期 PID 映射到稳定 appKey。
 // 聚合器只需要 appKey 和应用元数据快照，真正落库由 NetworkTrafficRepository 在保存 bucket 时完成。
-public sealed class AppRegistryService(IProcessResolver processResolver) : IAppRegistry
+public sealed class AppRegistryService(IProcessResolver processResolver, TimeProvider? timeProvider = null) : IAppRegistry
 {
     private static readonly TimeSpan PidCacheLifetime = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PidTouchInterval = TimeSpan.FromSeconds(1);
@@ -20,8 +20,8 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
 
     public AppRegistryEntry GetOrAdd(int pid)
     {
-        var now = DateTimeOffset.UtcNow;
-        if (_pidCache.TryGetValue(pid, out var pidCache) && now - pidCache.LastSeenAt <= PidCacheLifetime)
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        if (_pidCache.TryGetValue(pid, out var pidCache) && now - pidCache.ResolvedAt < PidCacheLifetime)
         {
             // LastSeen 只用于应用元数据，不参与字节统计；每 PID 每秒更新一次即可，
             // 避免高包率进程在每个 ETW 事件上进入状态锁。
@@ -45,9 +45,11 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
                 return existing;
             });
 
-        state.Touch(resolved.ResolvedAt);
+        state.Touch(now);
         var snapshot = state.CreateSnapshot();
-        _pidCache[pid] = new PidCacheItem(snapshot, state, resolved.ResolvedAt);
+        // The resolver may itself return an older cached resolution; never extend
+        // its identity TTL by starting a fresh registry lifetime on top of it.
+        _pidCache[pid] = new PidCacheItem(snapshot, state, resolved.ResolvedAt, now);
         PruneIfNeeded(now);
         return snapshot;
     }
@@ -87,9 +89,9 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
 
         foreach (var pair in _pidCache)
         {
-            if (now - pair.Value.LastSeenAt > PidCacheLifetime)
+            if (now - pair.Value.ResolvedAt >= PidCacheLifetime)
             {
-                _pidCache.TryRemove(pair.Key, out _);
+                _pidCache.TryRemove(pair);
             }
         }
 
@@ -102,12 +104,13 @@ public sealed class AppRegistryService(IProcessResolver processResolver) : IAppR
         }
     }
 
-    private sealed class PidCacheItem(AppRegistryEntry entry, AppRegistryState state, DateTimeOffset lastSeenAt)
+    private sealed class PidCacheItem(AppRegistryEntry entry, AppRegistryState state, DateTimeOffset resolvedAt, DateTimeOffset lastSeenAt)
     {
         private long _lastSeenAtUtcTicks = lastSeenAt.UtcTicks;
 
         public AppRegistryEntry Entry { get; } = entry;
         public AppRegistryState State { get; } = state;
+        public DateTimeOffset ResolvedAt { get; } = resolvedAt;
         public DateTimeOffset LastSeenAt =>
             new(Volatile.Read(ref _lastSeenAtUtcTicks), TimeSpan.Zero);
 

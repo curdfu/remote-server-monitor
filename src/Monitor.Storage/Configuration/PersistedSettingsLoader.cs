@@ -20,10 +20,19 @@ public static class PersistedSettingsLoader
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
                 DataSource = databasePath,
-                Mode = SqliteOpenMode.ReadOnly
+                Mode = SqliteOpenMode.ReadOnly,
+                ForeignKeys = true,
+                DefaultTimeout = 2
             }.ToString());
 
             connection.Open();
+            // This connection is opened before DI exists. Keep connection-local settings
+            // aligned with the factory without attempting journal-mode changes on a read-only database.
+            using (var pragma = connection.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000;";
+                pragma.ExecuteNonQuery();
+            }
 
             // 数据库文件可能来自旧版本或初始化中断；没有 settings 表时同样安全回退默认值。
             if (!TableExists(connection, "settings"))

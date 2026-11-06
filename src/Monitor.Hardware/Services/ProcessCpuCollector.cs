@@ -14,6 +14,15 @@ public sealed class ProcessCpuCollector : IProcessCpuCollector
     private Dictionary<ProcessIdentity, ProcessSample> _previousSamples = new();
     private long? _previousTimestamp;
 
+    public void Reset()
+    {
+        lock (_syncRoot)
+        {
+            _previousSamples.Clear();
+            _previousTimestamp = null;
+        }
+    }
+
     public Task<ProcessCpuSnapshot> CaptureAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

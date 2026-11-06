@@ -2,10 +2,9 @@
   <section class="card page-tier-panel dashboard-process-panel" aria-labelledby="process-cpu-title">
     <div class="panel-header">
       <div class="panel-title">
-        <span class="panel-icon"><AppIcon name="apps" :size="16" /></span>
         <div>
           <h3 id="process-cpu-title">CPU 占用最高的进程</h3>
-          <p class="panel-subtitle">按最近采样区间计算，占整机 CPU 的比例。</p>
+          <p class="panel-subtitle">最近采样区间 · 占整机 CPU 的比例</p>
         </div>
       </div>
       <span class="section-tag">Top 5 · {{ statusText }}</span>
@@ -50,7 +49,6 @@
 </template>
 
 <script setup lang="ts">
-import AppIcon from './AppIcon.vue';
 import type { ProcessCpuRealtimeDto } from '../types/monitor';
 
 withDefaults(defineProps<{

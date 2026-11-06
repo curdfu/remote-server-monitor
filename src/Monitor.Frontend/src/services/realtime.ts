@@ -1,5 +1,6 @@
 import * as signalR from '@microsoft/signalr';
 import type { HardwareRealtimeDto, ProcessCpuRealtimeDto } from '../types/monitor';
+import { createTopicSubscription } from '../utils/topicSubscription';
 
 type Listener<T> = (payload: T) => void;
 
@@ -12,13 +13,30 @@ export type RealtimeConnectionState =
 const hardwareListeners = new Set<Listener<HardwareRealtimeDto>>();
 const processCpuListeners = new Set<Listener<ProcessCpuRealtimeDto>>();
 const connectionStateListeners = new Set<Listener<RealtimeConnectionState>>();
+const hardwareTopicReadyListeners = new Set<() => void>();
+
+function emitHardwareTopicReady() {
+  hardwareTopicReadyListeners.forEach((listener) => listener());
+}
 
 let connection: signalR.HubConnection | null = null;
 let startPromise: Promise<void> | null = null;
 let reconnectTimer: number | null = null;
 let currentConnectionState: RealtimeConnectionState = 'disconnected';
-let hardwareTopicSubscribed = false;
-let topicSyncPromise: Promise<void> | null = null;
+const hardwareTopic = createTopicSubscription({
+  isConnected: () => connection?.state === signalR.HubConnectionState.Connected,
+  invoke: async (method) => {
+    const activeConnection = connection;
+    if (!activeConnection || activeConnection.state !== signalR.HubConnectionState.Connected) {
+      throw new Error('SignalR connection is not connected');
+    }
+    await activeConnection.invoke(method);
+  },
+  schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
+  cancel: (timer) => window.clearTimeout(timer),
+  onError: (error) => console.warn('SignalR hardware topic subscription failed; retrying', error),
+  onSubscribed: () => emitHardwareTopicReady()
+});
 
 // 向页面广播实时连接状态，供首页等页面展示“已连接/重连中”等状态
 function emitConnectionState(state: RealtimeConnectionState) {
@@ -43,45 +61,8 @@ function clearReconnectTimer() {
   }
 }
 
-async function invokeIfConnected(methodName: string) {
-  if (connection?.state !== signalR.HubConnectionState.Connected) {
-    return;
-  }
-
-  try {
-    await connection.invoke(methodName);
-  } catch (error) {
-    console.warn(`SignalR topic subscription failed: ${methodName}`, error);
-  }
-}
-
-async function syncActiveTopicSubscriptions() {
-  if (topicSyncPromise) {
-    await topicSyncPromise;
-  }
-
-  const shouldSubscribe = hardwareListeners.size + processCpuListeners.size > 0;
-  if (shouldSubscribe === hardwareTopicSubscribed || connection?.state !== signalR.HubConnectionState.Connected) {
-    return;
-  }
-
-  topicSyncPromise = (async () => {
-    if (shouldSubscribe) {
-      await invokeIfConnected('SubscribeHardware');
-      hardwareTopicSubscribed = true;
-    } else {
-      await invokeIfConnected('UnsubscribeHardware');
-      hardwareTopicSubscribed = false;
-    }
-  })().finally(() => {
-    topicSyncPromise = null;
-  });
-
-  await topicSyncPromise;
-  const shouldStillSubscribe = hardwareListeners.size + processCpuListeners.size > 0;
-  if (shouldSubscribe !== shouldStillSubscribe) {
-    await syncActiveTopicSubscriptions();
-  }
+function syncActiveTopicSubscriptions() {
+  hardwareTopic.setDesired(hardwareListeners.size + processCpuListeners.size > 0);
 }
 
 // SignalR 断开后兜底重连：后端 Hub 不可用时，前端每 5 秒再尝试一次
@@ -119,18 +100,19 @@ function ensureConnection() {
   });
 
   connection.onreconnecting(() => {
+    hardwareTopic.reset();
     emitConnectionState('reconnecting');
   });
 
   connection.onreconnected(() => {
-    hardwareTopicSubscribed = false;
+    hardwareTopic.reset();
     clearReconnectTimer();
+    syncActiveTopicSubscriptions();
     emitConnectionState('connected');
-    void syncActiveTopicSubscriptions();
   });
 
   connection.onclose(() => {
-    hardwareTopicSubscribed = false;
+    hardwareTopic.reset();
     emitConnectionState('disconnected');
     scheduleReconnect();
   });
@@ -163,8 +145,8 @@ export async function startRealtimeConnection() {
     .start()
     .then(async () => {
       clearReconnectTimer();
+      syncActiveTopicSubscriptions();
       emitConnectionState('connected');
-      await syncActiveTopicSubscriptions();
     })
     .catch((error) => {
       emitConnectionState('disconnected');
@@ -202,6 +184,12 @@ export function subscribeHardwareRealtime(listener: Listener<HardwareRealtimeDto
 
 export function subscribeProcessCpuRealtime(listener: Listener<ProcessCpuRealtimeDto>) {
   return subscribeHardwareTopic(processCpuListeners, listener);
+}
+
+// 在服务端确认加入主题后回填历史，覆盖订阅重试期间的缺口。
+export function subscribeHardwareTopicReady(listener: () => void) {
+  hardwareTopicReadyListeners.add(listener);
+  return () => { hardwareTopicReadyListeners.delete(listener); };
 }
 
 // 页面可通过这个订阅连接状态变化，用于提示当前实时通道是否正常

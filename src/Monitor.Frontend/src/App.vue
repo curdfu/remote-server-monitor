@@ -4,9 +4,8 @@
     <aside class="sidebar">
       <div class="sidebar-brand">
         <div class="sidebar-brand-copy">
-          <p class="sidebar-kicker">系统监控</p>
           <h1>服务器远程监控</h1>
-          <p class="sidebar-description">查看硬件状态、网络流量和基础配置。</p>
+          <p class="sidebar-description">硬件状态与网络流量</p>
         </div>
 
         <div class="sidebar-mobile-tools">
@@ -22,6 +21,7 @@
               @click="toggleRealtimePanel"
             >
               <span class="nav-utility-indicator" :data-state="connectionState" />
+              <span class="nav-utility-label">{{ connectionStatusText }}</span>
               <AppIcon name="status" :size="16" />
             </button>
 
@@ -128,72 +128,10 @@
           </RouterLink>
         </div>
 
-        <div class="sidebar-nav-meta">
-          <div class="sidebar-mini-card sidebar-realtime-card" :class="`is-${connectionState}`">
-            <div class="sidebar-realtime-main">
-              <span class="sidebar-realtime-icon" aria-hidden="true">
-                <AppIcon name="status" :size="17" />
-                <span class="sidebar-realtime-indicator" />
-              </span>
-              <span class="sidebar-realtime-copy">
-                <span class="sidebar-realtime-label">实时通道</span>
-                <strong aria-live="polite">{{ connectionStatusText }}</strong>
-              </span>
-            </div>
-            <span class="sidebar-realtime-description">
-              {{ connectionStatusCompactDescription }}
-            </span>
-          </div>
-
-          <div class="sidebar-mini-card theme-field">
-            <span class="sidebar-meta-label">
-              <AppIcon name="palette" :size="12" />
-              <span>界面主题</span>
-            </span>
-            <div class="sidebar-theme-control">
-              <button
-                ref="desktopThemeButtonRef"
-                type="button"
-                class="sidebar-theme-trigger"
-                :aria-expanded="showDesktopThemeMenu"
-                aria-haspopup="menu"
-                :aria-label="`界面主题，当前${themePreferenceText}`"
-                @click="toggleDesktopThemeMenu"
-              >
-                <span>{{ themePreferenceText }}</span>
-              </button>
-
-              <div
-                v-if="showDesktopThemeMenu"
-                ref="desktopThemeMenuRef"
-                class="sidebar-theme-menu"
-                role="menu"
-                aria-label="界面主题"
-              >
-                <button
-                  v-for="option in themeOptions"
-                  :key="option.value"
-                  type="button"
-                  class="sidebar-theme-option"
-                  :class="{ 'is-active': themePreference === option.value }"
-                  role="menuitemradio"
-                  :aria-checked="themePreference === option.value"
-                  @click="setThemePreference(option.value)"
-                >
-                  <span class="sidebar-theme-option-swatch" :data-theme-option="option.value" aria-hidden="true"></span>
-                  <span class="sidebar-theme-option-copy">
-                    <strong>{{ option.label }}</strong>
-                    <small>{{ option.description }}</small>
-                  </span>
-                  <span v-if="themePreference === option.value" class="sidebar-theme-option-check" aria-hidden="true">✓</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
       </nav>
     </aside>
     <main id="main-content" class="content" tabindex="-1">
+      <div v-if="healthNotice" class="health-notice" role="status">{{ healthNotice }}</div>
       <RouterView />
     </main>
   </div>
@@ -202,6 +140,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import AppIcon from './components/AppIcon.vue';
+import { getHealth } from './services/api';
+import type { HealthDto } from './types/monitor';
 import {
   type RealtimeConnectionState,
   startRealtimeConnection,
@@ -210,31 +150,70 @@ import {
 
 type ThemePreference = 'system' | 'light' | 'dark';
 
-const themeOptions: ReadonlyArray<{
-  value: ThemePreference;
-  label: string;
-  description: string;
-}> = [
-  { value: 'system', label: '跟随系统', description: '自动匹配设备设置' },
-  { value: 'light', label: '亮色', description: '明亮清晰，适合白天' },
-  { value: 'dark', label: '暗色', description: '降低亮度，适合夜间' }
-];
-
 const themeStorageKey = 'monitor.frontend.theme';
 const connectionState = ref<RealtimeConnectionState>('disconnected');
 const themePreference = ref<ThemePreference>('system');
 const showRealtimePanel = ref(false);
 const showThemeMenu = ref(false);
-const showDesktopThemeMenu = ref(false);
 const realtimeButtonRef = ref<HTMLElement | null>(null);
 const realtimePanelRef = ref<HTMLElement | null>(null);
 const themeButtonRef = ref<HTMLElement | null>(null);
 const themeMenuRef = ref<HTMLElement | null>(null);
-const desktopThemeButtonRef = ref<HTMLElement | null>(null);
-const desktopThemeMenuRef = ref<HTMLElement | null>(null);
 let unsubscribeConnectionState: (() => void) | null = null;
+const health = ref<HealthDto | null>(null);
+const healthUnavailable = ref(false);
+let healthTimer: number | null = null;
+let healthRequest: AbortController | null = null;
+let healthPollingActive = false;
+
+const healthNotice = computed(() => {
+  if (healthUnavailable.value) return '采集健康状态暂不可用，网络统计完整性未知。';
+  const network = health.value?.network;
+  if (!network) return health.value ? '采集健康状态不完整，网络统计完整性未知。' : '';
+  const notices: string[] = [];
+  if (network.isRecovering) notices.push('网络采集恢复中');
+  else if (network.isHealthy === false || network.collectorRunning === false) notices.push('网络采集状态异常');
+  if (network.statisticsComplete === false) notices.push('本次运行的网络统计不完整');
+  else if (network.statisticsComplete === undefined) notices.push('网络统计完整性未知');
+  return notices.join('；');
+});
+
+function stopHealthPolling() {
+  if (healthTimer !== null) window.clearTimeout(healthTimer);
+  healthTimer = null;
+  healthRequest?.abort();
+  healthRequest = null;
+}
+
+async function pollHealth() {
+  if (!healthPollingActive || document.hidden || healthRequest) return;
+  const controller = new AbortController();
+  healthRequest = controller;
+  try {
+    const response = await getHealth(controller.signal);
+    if (!controller.signal.aborted && healthPollingActive) {
+      health.value = response;
+      healthUnavailable.value = false;
+    }
+  } catch {
+    if (!controller.signal.aborted && healthPollingActive) healthUnavailable.value = true;
+  } finally {
+    if (healthRequest === controller) {
+      healthRequest = null;
+      if (healthPollingActive && !document.hidden) healthTimer = window.setTimeout(pollHealth, 30_000);
+    }
+  }
+}
+
+function handleHealthVisibility() {
+  if (document.hidden) stopHealthPolling();
+  else void pollHealth();
+}
 
 onMounted(() => {
+  healthPollingActive = true;
+  document.addEventListener('visibilitychange', handleHealthVisibility);
+  void pollHealth();
   const savedTheme = readSavedThemePreference();
   themePreference.value = savedTheme;
   applyThemePreference(savedTheme);
@@ -252,6 +231,9 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  healthPollingActive = false;
+  stopHealthPolling();
+  document.removeEventListener('visibilitychange', handleHealthVisibility);
   unsubscribeConnectionState?.();
   document.removeEventListener('pointerdown', handleDocumentPointerDown);
   document.removeEventListener('keydown', handleDocumentKeydown);
@@ -285,19 +267,6 @@ const connectionStatusDescription = computed(() => {
       return '连接中断后正在自动重试。';
     default:
       return '当前未连上后端实时通道，可手动重试。';
-  }
-});
-
-const connectionStatusCompactDescription = computed(() => {
-  switch (connectionState.value) {
-    case 'connected':
-      return '实时数据正在持续推送';
-    case 'connecting':
-      return '正在建立实时连接';
-    case 'reconnecting':
-      return '连接中断，正在自动重试';
-    default:
-      return '实时推送暂不可用';
   }
 });
 
@@ -348,7 +317,6 @@ function toggleRealtimePanel() {
   showRealtimePanel.value = !showRealtimePanel.value;
   if (showRealtimePanel.value) {
     showThemeMenu.value = false;
-    showDesktopThemeMenu.value = false;
   }
 }
 
@@ -356,28 +324,17 @@ function toggleThemeMenu() {
   showThemeMenu.value = !showThemeMenu.value;
   if (showThemeMenu.value) {
     showRealtimePanel.value = false;
-    showDesktopThemeMenu.value = false;
-  }
-}
-
-function toggleDesktopThemeMenu() {
-  showDesktopThemeMenu.value = !showDesktopThemeMenu.value;
-  if (showDesktopThemeMenu.value) {
-    showRealtimePanel.value = false;
-    showThemeMenu.value = false;
   }
 }
 
 function closeUtilityOverlays() {
   showRealtimePanel.value = false;
   showThemeMenu.value = false;
-  showDesktopThemeMenu.value = false;
 }
 
 function setThemePreference(value: ThemePreference) {
   themePreference.value = value;
   showThemeMenu.value = false;
-  showDesktopThemeMenu.value = false;
 }
 
 function retryRealtimeConnection() {
@@ -396,9 +353,7 @@ function handleDocumentPointerDown(event: PointerEvent) {
     containsTarget(realtimeButtonRef.value, target) ||
     containsTarget(realtimePanelRef.value, target) ||
     containsTarget(themeButtonRef.value, target) ||
-    containsTarget(themeMenuRef.value, target) ||
-    containsTarget(desktopThemeButtonRef.value, target) ||
-    containsTarget(desktopThemeMenuRef.value, target)
+    containsTarget(themeMenuRef.value, target)
   ) {
     return;
   }

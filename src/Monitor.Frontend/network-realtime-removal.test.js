@@ -16,6 +16,6 @@ test('network realtime speed feature is absent while historical aggregation rema
   const combinedSource = sources.join('\n');
 
   assert.doesNotMatch(combinedSource, /NetworkRealtime|networkRealtime|network\/realtime|RealtimeSlot|实时网络速率/);
-  assert.match(combinedSource, /AddToBucketCore/);
+  assert.match(combinedSource, /ProcessTraceEvent[\s\S]*?RotateBucketsCore/);
   assert.match(combinedSource, /api\/network\/dashboard/);
 });

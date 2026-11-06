@@ -66,51 +66,23 @@ public static class NetworkEndpoints
             string? scope,
             string? direction,
             NetworkTrafficRepository networkTrafficRepository,
-            IgnoredNetworkAppRepository ignoredNetworkAppRepository,
             IMonitorSettingsProvider settings,
             CancellationToken cancellationToken) =>
         {
-            var (rangeFrom, rangeTo) = NormalizeRange(from, to, TimeSpan.FromHours(1));
-            if (rangeFrom >= rangeTo)
+            if (!HistoryRange.TryNormalize(from, to, TimeSpan.FromHours(1), out var rangeFrom, out var rangeTo, out var error))
             {
-                return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
+                return Results.BadRequest(new { message = error });
             }
 
-            var ignoredApps = await ignoredNetworkAppRepository.GetAllAsync(cancellationToken);
             var requestedLimit = Math.Clamp(topN ?? settings.Current.TopNDefault, 1, 100);
-            var limit = Math.Clamp(requestedLimit + ignoredApps.Count, 1, 100);
-            var scopeFilter = ParseScope(scope);
-            var directionFilter = ParseDirection(direction);
-
-            // 页面原本需要三次 HTTP 往返。组合接口保持三类统计语义不变，
-            // 但由服务端统一调度并返回同一个一致时间窗口的快照。
-            var appsTask = networkTrafficRepository.QueryAppSummariesAsync(
-                rangeFrom,
-                rangeTo,
-                scopeFilter,
-                directionFilter,
-                limit,
-                cancellationToken);
-            var overviewTask = networkTrafficRepository.QueryTotalsAsync(
-                rangeFrom,
-                rangeTo,
-                NetworkTrafficRepository.TrafficScopeFilter.All,
-                directionFilter,
-                cancellationToken);
-            var totalsTask = networkTrafficRepository.QueryTotalsAsync(
-                rangeFrom,
-                rangeTo,
-                scopeFilter,
-                NetworkTrafficRepository.TrafficDirectionFilter.Total,
-                cancellationToken);
-
-            await Task.WhenAll(appsTask, overviewTask, totalsTask);
+            var dashboard = await networkTrafficRepository.QueryDashboardAsync(
+                rangeFrom, rangeTo, ParseScope(scope), ParseDirection(direction), requestedLimit, cancellationToken);
             return Results.Ok(new NetworkDashboardDto
             {
-                Apps = appsTask.Result.Select(ToSummaryDto).ToArray(),
-                IgnoredApps = [.. ignoredApps],
-                Overview = ToPeriodSummaryDto(overviewTask.Result),
-                Totals = ToPeriodSummaryDto(totalsTask.Result)
+                Apps = dashboard.Apps.Select(ToSummaryDto).ToArray(),
+                IgnoredApps = [.. dashboard.IgnoredApps],
+                Overview = ToPeriodSummaryDto(dashboard.Overview),
+                Totals = ToPeriodSummaryDto(dashboard.Totals)
             });
         });
 
@@ -124,10 +96,9 @@ public static class NetworkEndpoints
             IMonitorSettingsProvider settings,
             CancellationToken cancellationToken) =>
         {
-            var (rangeFrom, rangeTo) = NormalizeRange(from, to, TimeSpan.FromHours(1));
-            if (rangeFrom >= rangeTo)
+            if (!HistoryRange.TryNormalize(from, to, TimeSpan.FromHours(1), out var rangeFrom, out var rangeTo, out var error))
             {
-                return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
+                return Results.BadRequest(new { message = error });
             }
 
             var limit = Math.Clamp(topN ?? settings.Current.TopNDefault, 1, 100);
@@ -153,10 +124,9 @@ public static class NetworkEndpoints
             NetworkTrafficRepository networkTrafficRepository,
             CancellationToken cancellationToken) =>
         {
-            var (rangeFrom, rangeTo) = NormalizeRange(from, to, TimeSpan.FromHours(1));
-            if (rangeFrom >= rangeTo)
+            if (!HistoryRange.TryNormalize(from, to, TimeSpan.FromHours(1), out var rangeFrom, out var rangeTo, out var error))
             {
-                return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
+                return Results.BadRequest(new { message = error });
             }
 
             var segmentDuration = ResolveSegmentDuration(rangeFrom, rangeTo);
@@ -191,10 +161,9 @@ public static class NetworkEndpoints
             NetworkTrafficRepository networkTrafficRepository,
             CancellationToken cancellationToken) =>
         {
-            var (rangeFrom, rangeTo) = NormalizeRange(from, to, TimeSpan.FromHours(1));
-            if (rangeFrom >= rangeTo)
+            if (!HistoryRange.TryNormalize(from, to, TimeSpan.FromHours(1), out var rangeFrom, out var rangeTo, out var error))
             {
-                return Results.BadRequest(new { message = "'from' must be earlier than 'to'." });
+                return Results.BadRequest(new { message = error });
             }
 
             var scopeFilter = ParseScope(scope);
@@ -318,15 +287,6 @@ public static class NetworkEndpoints
         };
     }
 
-    private static (DateTimeOffset From, DateTimeOffset To) NormalizeRange(
-        DateTimeOffset? from,
-        DateTimeOffset? to,
-        TimeSpan defaultWindow)
-    {
-        var rangeTo = to ?? DateTimeOffset.UtcNow;
-        var rangeFrom = from ?? rangeTo.Subtract(defaultWindow);
-        return (rangeFrom, rangeTo);
-    }
 
     private static TimeSpan ResolveSegmentDuration(DateTimeOffset from, DateTimeOffset to)
     {

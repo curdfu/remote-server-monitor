@@ -14,8 +14,7 @@ public sealed class SettingsRepository(
 {
     public async Task<AppSettingsDto?> GetAsync(CancellationToken cancellationToken = default)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
         // 只读取当前前端可编辑且会影响运行时行为的设置字段。
@@ -59,8 +58,7 @@ public sealed class SettingsRepository(
 
     private async Task SaveCoreAsync(AppSettingsDto settings, CancellationToken cancellationToken)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
         // network_sample_interval_ms 是历史兼容字段，现在用于网络事件追平和持久化检查节奏。

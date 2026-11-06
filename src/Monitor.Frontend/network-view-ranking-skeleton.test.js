@@ -27,14 +27,14 @@ test('ranking panel shows skeleton rows for initial and filter-triggered loading
 
   assert.match(
     source,
-    /autoRefreshTimer = window\.setTimeout\(\(\) => \{[\s\S]*?const source = pendingReloadSource;[\s\S]*?pendingReloadSource = 'filter';[\s\S]*?void loadApps\(source\);[\s\S]*?\}, 250\);/,
-    'expected filter-triggered reloads to mark their loading source as filter-driven',
+    /\(\) => reloadController\.filtersChanged\(\)/,
+    'expected filter changes to schedule a filter-driven reload',
   );
 
   assert.match(
     source,
-    /function refreshApps\(\) \{[\s\S]*?pendingReloadSource = 'manual';[\s\S]*?applyPreset\(presetHours\);[\s\S]*?void loadApps\('manual'\);[\s\S]*?\}/,
-    'expected manual refreshes to keep using a manual loading source',
+    /function refreshApps\(\) \{[\s\S]*?reloadController\.refresh\(\);[\s\S]*?\}/,
+    'expected manual refreshes to use the controller rather than a filter reload',
   );
 
   assert.match(

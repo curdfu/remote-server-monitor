@@ -104,8 +104,7 @@ public sealed class IgnoredNetworkAppRepository(
 
     private async Task<IgnoredNetworkAppDto[]> LoadCoreAsync(CancellationToken cancellationToken)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -137,8 +136,7 @@ public sealed class IgnoredNetworkAppRepository(
         IgnoredNetworkAppDto app,
         CancellationToken cancellationToken)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -177,8 +175,7 @@ public sealed class IgnoredNetworkAppRepository(
 
     private async Task RemoveCoreAsync(string appKey, CancellationToken cancellationToken)
     {
-        await using var connection = dbConnectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await using var connection = await dbConnectionFactory.OpenConnectionAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
         command.CommandText = """
