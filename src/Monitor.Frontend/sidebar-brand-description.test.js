@@ -9,6 +9,7 @@ test('global runtime replaces the brand description and remains visible on mobil
     readFile(stylesPath, 'utf8'), readFile(new URL('./src/App.vue', import.meta.url), 'utf8')
   ]);
   assert.doesNotMatch(app, /硬件状态与网络流量|sidebar-description/);
+  assert.match(app, /<header class="sidebar">[\s\S]*?<nav class="sidebar-nav" aria-label="主导航">/);
   assert.match(app, /<h1>服务器远程监控<\/h1>\s*<dl class="sidebar-runtime"/);
   assert.equal((app.match(/<dt>/g) ?? []).length, 2);
   assert.match(app, /<dt>开机时间<\/dt>/);
@@ -32,4 +33,6 @@ test('tablet navigation wraps before squeezing connection status into vertical t
   assert.match(tablet, /\.sidebar-nav\s*\{[^}]*width:\s*100%/);
   assert.match(tablet, /\.sidebar-nav-links a\s*\{[^}]*min-height:\s*44px/);
   assert.doesNotMatch(tablet, /display:\s*none/);
+  const mobile = styles.slice(styles.indexOf('@media (max-width: 720px)', start));
+  assert.doesNotMatch(mobile, /\.nav-utility-label\s*\{[^}]*display:\s*none/);
 });

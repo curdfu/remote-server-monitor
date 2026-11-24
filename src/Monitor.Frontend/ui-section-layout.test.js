@@ -47,11 +47,11 @@ test('main panels use the shared bordered surface in each view', async () => {
   }
 });
 
-test('dashboard keeps its meaningful reading order and CPU-led trend data', async () => {
+test('dashboard keeps its reading order and switches among the three measured trend series', async () => {
   const [view, trend] = await Promise.all([readFile(dashboardPath, 'utf8'), readFile(trendPath, 'utf8')]);
   const names = [
-    'dashboard-core-metrics-section', 'dashboard-trends-panel',
-    '<CpuProcessPanel', 'dashboard-storage-grid'
+    'dashboard-core-metrics-section', 'dashboard-trends-panel', '<CpuProcessPanel',
+    'dashboard-disk-space-panel', 'dashboard-disk-temperature-panel'
   ];
   let previous = -1;
   for (const name of names) {
@@ -59,36 +59,38 @@ test('dashboard keeps its meaningful reading order and CPU-led trend data', asyn
     assert.ok(index > previous, `${name} should follow the preceding dashboard section`);
     previous = index;
   }
-  assert.match(view, /<MetricTrend\s+class="trend-card-primary"\s+title="CPU 使用率"[\s\S]*?:points="cpuTrend"/);
-  assert.match(view, /<MetricTrend\s+title="内存使用率"[\s\S]*?:points="memoryTrend"/);
-  assert.match(view, /<MetricTrend\s+title="CPU 温度"[\s\S]*?:points="temperatureTrend"[\s\S]*?scale-kind="temperature"/);
+  assert.match(view, /:aria-pressed="activeTrendId === option.id"\s+@click="activeTrendId = option.id"/);
+  assert.match(view, /<MetricTrend[\s\S]*?:points="activeTrend.points.value"/);
+  assert.match(view, /id: 'cpu', label: 'CPU 占用', points: cpuTrend/);
+  assert.match(view, /id: 'memory', label: '内存占用', points: memoryTrend/);
+  assert.match(view, /id: 'temperature', label: 'CPU 温度', points: temperatureTrend, unit: '°C', scaleKind: 'temperature'/);
   assert.match(trend, /role="img"\s+:aria-label="summary"/);
   assert.match(trend, /splitTrendSegments\(props\.points, gapMs\.value\)/);
   assert.match(trend, /v-else class="trend-empty"/);
 });
 
-test('desktop CPU plot spans two rows and mobile trends stack with usable plot heights', async () => {
-  const styles = await readFile(dashboardStylesPath, 'utf8');
-  const grid = declarationsFor(styles, '.trend-grid');
-  const primary = declarationsFor(styles, '.trend-card-primary');
-  assert.ok(grid.some((rule) => /grid-template-columns:\s*minmax\(0,\s*1\.8fr\)\s+minmax\(0,\s*1fr\)/.test(rule) && /grid-template-rows:\s*repeat\(2,/.test(rule)));
-  assert.ok(primary.some((rule) => /grid-row:\s*1\s*\/\s*span\s*2/.test(rule)));
-  assert.match(styles, /\.trend-plot-body\s*\{[^}]*min-height:\s*64px/);
-  assert.match(styles, /\.trend-card-primary \.trend-plot-body\s*\{[^}]*min-height:\s*200px/);
-  assert.match(styles, /\.trend-plot svg\s*\{[^}]*width:\s*calc\(100%\s*-\s*40px\);[^}]*height:\s*100%/);
-  const desktopStart = styles.indexOf('@media (min-width: 1200px)');
-  assert.ok(desktopStart >= 0, 'expected a desktop breakpoint');
-  const desktop = styles.slice(desktopStart, styles.indexOf('@media (max-width: 1199px)', desktopStart));
-  assert.match(desktop, /\.dashboard-trends-panel\s*\{[^}]*align-self:\s*stretch/);
-  assert.match(desktop, /\.dashboard-process-panel\s*\{[^}]*align-self:\s*stretch/);
-  assert.match(styles, /\.trend-grid\s*\{[^}]*flex:\s*1/);
-  const mobileStart = styles.indexOf('@media (max-width: 720px)');
-  assert.ok(mobileStart >= 0, 'expected a phone breakpoint');
-  const mobile = styles.slice(mobileStart);
-  assert.match(mobile, /\.trend-grid\s*\{[^}]*grid-template-columns:\s*1fr;[^}]*grid-template-rows:\s*auto/);
-  assert.match(mobile, /\.trend-card-primary\s*\{[^}]*grid-row:\s*auto/);
-  assert.match(mobile, /\.trend-card-primary \.trend-plot-body\s*\{[^}]*min-height:\s*180px/);
-  assert.match(mobile, /\.trend-plot-body\s*\{[^}]*min-height:\s*88px/);
+test('tablet layout uses shared column tracks and mobile volume rows keep all labels', async () => {
+  const [styles, view] = await Promise.all([readFile(dashboardStylesPath, 'utf8'), readFile(dashboardPath, 'utf8')]);
+  assert.match(styles, /@media \(min-width: 700px\)\s*\{\s*\.dashboard-page \{[^}]*grid-template-columns:\s*minmax\(0, 3fr\) minmax\(0, 2fr\)/);
+  assert.match(styles, /\.dashboard-trends-panel, \.dashboard-disk-space-panel \{ grid-column: 1; \}/);
+  assert.match(styles, /\.dashboard-process-panel, \.dashboard-disk-temperature-panel \{ grid-column: 2; \}/);
+  assert.match(styles, /\.trend-plot-body\s*\{[^}]*min-height:\s*156px/);
+  const mobile = styles.slice(styles.indexOf('@media (max-width: 560px)'));
+  assert.match(mobile, /\.disk-space-table tbody tr \{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+  for (const label of ['总容量', '已用空间', '剩余空间']) {
+    assert.ok(view.includes(`data-label="${label}"`));
+  }
+  assert.match(view, /@click="toggleDiskSort\('temperatureC'\)"/);
+});
+
+test('process CPU keeps the pie and name together and exposes long names on touch or keyboard', async () => {
+  const [view, styles] = await Promise.all([readFile(processPath, 'utf8'), readFile(dashboardStylesPath, 'utf8')]);
+  assert.match(view, /class="process-cpu-identity"[\s\S]*?class="process-cpu-pie"[\s\S]*?pathLength="100"[\s\S]*?class="process-cpu-name"/);
+  assert.match(view, /:aria-expanded="expandedProcessKey === processKey\(process\)"[\s\S]*?@click="toggleProcessName\(process\)"/);
+  assert.match(view, /v-show="expandedProcessKey === processKey\(process\)"[\s\S]*?class="process-cpu-full-name"/);
+  assert.match(styles, /\.process-cpu-identity \{[^}]*grid-template-columns:\s*14px minmax\(0, 1fr\) auto/);
+  assert.match(styles, /\.process-cpu-name \{[^}]*text-overflow:\s*ellipsis/);
+  assert.match(styles, /\.process-cpu-full-name \{[^}]*overflow-wrap:\s*anywhere/);
 });
 
 test('network retains its filter heading and secondary table surfaces', async () => {

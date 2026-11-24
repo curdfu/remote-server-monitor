@@ -17,20 +17,42 @@
         </div>
 
         <div class="dashboard-core-metrics-panel-body">
-          <div class="dashboard-hero-grid page-tier-stats">
+          <div class="dashboard-hero-grid dashboard-primary-metrics">
             <MetricCard
               label="CPU 占用"
               :value="formatPercent(hardware?.cpuUsagePercent)"
-              :hint="formatCpuNameHint(hardware?.cpuName)"
+              :percent="hardware?.cpuUsagePercent"
+              :hint="cpuPeakHint"
               :badge="usageBadge(hardware?.cpuUsagePercent)"
               :tone="usageTone(hardware?.cpuUsagePercent)"
             />
             <MetricCard
               label="内存已使用"
               :value="formatMemoryUsage(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
-              :hint="formatMemoryHint(hardware?.memoryTotalMb)"
+              :percent="memoryUsagePercent"
+              :hint="memoryCapacityHint"
               :badge="memoryUsageBadge(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
               :tone="memoryUsageTone(hardware?.memoryUsedMb, hardware?.memoryTotalMb)"
+            />
+          </div>
+          <div class="dashboard-hero-grid dashboard-secondary-metrics">
+            <MetricCard
+              label="CPU 当前温度"
+              :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
+              :hint="formatTemperatureHint(hardware?.cpuTemperatureC)"
+              :badge="temperatureBadge(hardware?.cpuTemperatureC)"
+              :tone="temperatureTone(hardware?.cpuTemperatureC)"
+              small-value
+            />
+            <MetricCard
+              label="CPU 当前频率"
+              :value="formatFrequency(hardware?.cpuFrequencyMhz)"
+              small-value
+            />
+            <MetricCard
+              label="CPU 当前功耗"
+              :value="formatNullable(hardware?.cpuPowerWatts, 'W')"
+              small-value
             />
             <MetricCard
               label="最高磁盘温度"
@@ -38,25 +60,7 @@
               :hint="hottestDiskName"
               :badge="temperatureBadge(hottestDisk?.temperatureC)"
               :tone="temperatureTone(hottestDisk?.temperatureC)"
-            />
-            <MetricCard
-              label="CPU 当前频率"
-              :value="formatNullable(hardware?.cpuFrequencyMhz, 'MHz')"
-              :hint="formatCpuNameHint(hardware?.cpuName)"
-              tone="info"
-            />
-            <MetricCard
-              label="CPU 当前温度"
-              :value="formatNullable(hardware?.cpuTemperatureC, '°C')"
-              :hint="formatTemperatureHint(hardware?.cpuTemperatureC)"
-              :badge="temperatureBadge(hardware?.cpuTemperatureC)"
-              :tone="temperatureTone(hardware?.cpuTemperatureC)"
-            />
-            <MetricCard
-              label="CPU 当前功耗"
-              :value="formatNullable(hardware?.cpuPowerWatts, 'W')"
-              :hint="formatPowerHint(hardware?.cpuPowerWatts)"
-              tone="info"
+              small-value
             />
           </div>
           <details class="metric-model-details">
@@ -71,41 +75,29 @@
       <div class="section-header section-header-rich">
         <div>
           <h3>最近一小时趋势</h3>
-          <p class="section-subtitle">真实采样记录 · 缺失区间保留空白</p>
+          <p class="section-subtitle">断线表示缺测</p>
+        </div>
+        <div class="dashboard-trend-options" role="group" aria-label="选择趋势指标">
+          <button
+            v-for="option in trendOptions"
+            :key="option.id"
+            type="button"
+            :aria-pressed="activeTrendId === option.id"
+            @click="activeTrendId = option.id"
+          >{{ option.label }}</button>
         </div>
       </div>
       <div v-if="historyErrorMessage" class="trend-inline-state">{{ historyErrorMessage }}</div>
-      <div class="trend-grid">
-        <MetricTrend
-          class="trend-card-primary"
-          title="CPU 使用率"
-          eyebrow=""
-          :points="cpuTrend"
-          unit="%"
-          :window-end-ms="currentTimeMs"
-          :sample-interval-ms="hardwareSampleIntervalMs"
-          tone="signal"
-        />
-        <MetricTrend
-          title="内存使用率"
-          eyebrow=""
-          :points="memoryTrend"
-          unit="%"
-          :window-end-ms="currentTimeMs"
-          :sample-interval-ms="hardwareSampleIntervalMs"
-          tone="info"
-        />
-        <MetricTrend
-          title="CPU 温度"
-          eyebrow=""
-          :points="temperatureTrend"
-          unit="°C"
-          scale-kind="temperature"
-          :window-end-ms="currentTimeMs"
-          :sample-interval-ms="hardwareSampleIntervalMs"
-          tone="warning"
-        />
-      </div>
+      <MetricTrend
+        :title="activeTrend.label"
+        eyebrow=""
+        :points="activeTrend.points.value"
+        :unit="activeTrend.unit"
+        :scale-kind="activeTrend.scaleKind"
+        :window-end-ms="currentTimeMs"
+        :sample-interval-ms="hardwareSampleIntervalMs"
+        :tone="activeTrend.tone"
+      />
     </section>
 
     <CpuProcessPanel
@@ -116,100 +108,93 @@
       :sample-text="processCpuSampleText"
     />
 
-    <section class="panel-grid dashboard-storage-grid">
-      <article class="card dashboard-panel-card page-tier-panel">
-        <div class="panel-header">
-          <div class="panel-title">
-            <div>
-              <h3>磁盘温度</h3>
-              <p class="panel-subtitle">各物理磁盘的当前传感器读数</p>
-            </div>
+    <article class="card dashboard-panel-card page-tier-panel dashboard-disk-space-panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div>
+            <h3>磁盘空间</h3>
+            <p class="panel-subtitle">各卷的容量、已用与剩余空间</p>
           </div>
-          <span class="section-tag">当前 {{ hardware?.disks?.length ?? 0 }} 块</span>
         </div>
+        <span class="section-tag">按卷汇总</span>
+      </div>
 
-        <div class="table-shell realtime-table-shell">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>磁盘名称</th>
-                <th class="align-right">
-                  <button class="table-sort-button" @click="toggleDiskSort('temperatureC')">
-                    当前温度 {{ sortIndicator('temperatureC') }}
-                  </button>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="disk in sortedDisks" :key="`${disk.name}-${disk.temperatureSource ?? 'none'}`">
-                <td>{{ disk.name }}</td>
-                <td class="align-right">
-                  <span class="status-pill status-pill-temperature" :class="temperatureToneClass(disk.temperatureC)">
-                    {{ formatNullable(disk.temperatureC, '°C') }}
-                  </span>
-                </td>
-              </tr>
-              <tr v-if="!sortedDisks.length">
-                <td colspan="2" class="empty-cell">当前没有可展示的磁盘温度数据。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </article>
-
-      <article class="card dashboard-panel-card page-tier-panel">
-        <div class="panel-header">
-          <div class="panel-title">
-            <div>
-              <h3>磁盘空间</h3>
-              <p class="panel-subtitle">各卷的容量、已用与剩余空间</p>
-            </div>
-          </div>
-          <span class="section-tag">按卷汇总</span>
-        </div>
-
-        <div class="table-shell realtime-table-shell disk-space-table-shell">
-          <table class="data-table disk-space-table">
-            <thead>
-              <tr>
-                <th>磁盘 / 卷</th>
-                <th class="align-right">总容量</th>
-                <th class="align-right">已用空间</th>
-                <th class="align-right">剩余空间</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="disk in sortedDiskSpaces" :key="disk.name">
-                <td data-label="磁盘 / 卷">{{ disk.name }}</td>
-                <td class="align-right" data-label="总容量">{{ formatDiskSize(disk.totalBytes) }}</td>
-                <td class="align-right" data-label="已用空间">
-                  <div class="table-metric">
-                    <div class="table-metric-head">
-                      <strong>{{ formatDiskSize(disk.usedBytes) }}</strong>
-                      <small class="muted">{{ formatCapacityPercent(disk.usedBytes, disk.totalBytes) }}</small>
-                    </div>
-                    <div class="table-metric-subrow">
-                      <div class="mini-progress">
-                        <div
-                          class="mini-progress-bar"
-                          :style="{ width: `${getCapacityPercent(disk.usedBytes, disk.totalBytes)}%` }"
-                        ></div>
-                      </div>
-                    </div>
+      <div class="table-shell realtime-table-shell disk-space-table-shell">
+        <table class="data-table disk-space-table" role="table" aria-label="各卷磁盘空间">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th scope="col" role="columnheader">磁盘 / 卷</th>
+              <th scope="col" role="columnheader" class="align-right">总容量</th>
+              <th scope="col" role="columnheader" class="align-right">已用空间</th>
+              <th scope="col" role="columnheader" class="align-right">剩余空间</th>
+            </tr>
+          </thead>
+          <tbody role="rowgroup">
+            <tr v-for="disk in sortedDiskSpaces" :key="disk.name" role="row">
+              <th scope="row" role="rowheader">{{ disk.name }}</th>
+              <td role="cell" class="align-right" data-label="总容量">{{ formatDiskSize(disk.totalBytes) }}</td>
+              <td role="cell" class="align-right" data-label="已用空间">
+                <div class="table-metric">
+                  <div class="table-metric-head">
+                    <strong>{{ formatDiskSize(disk.usedBytes) }}</strong>
+                    <small class="muted">{{ formatCapacityPercent(disk.usedBytes, disk.totalBytes) }}</small>
                   </div>
-                </td>
-                <td class="align-right" data-label="剩余空间">
-                  <strong class="disk-space-value">{{ formatDiskSize(disk.freeBytes) }}</strong>
-                </td>
-              </tr>
-              <tr v-if="!sortedDiskSpaces.length">
-                <td colspan="4" class="empty-cell">当前没有可展示的磁盘空间数据。</td>
-              </tr>
-            </tbody>
-          </table>
+                  <div v-if="getCapacityPercent(disk.usedBytes, disk.totalBytes) !== null" class="mini-progress" aria-hidden="true">
+                    <div class="mini-progress-bar" :style="{ width: `${getCapacityPercent(disk.usedBytes, disk.totalBytes)}%` }"></div>
+                  </div>
+                </div>
+              </td>
+              <td role="cell" class="align-right" data-label="剩余空间">
+                <strong class="disk-space-value">{{ formatDiskSize(disk.freeBytes) }}</strong>
+              </td>
+            </tr>
+            <tr v-if="!sortedDiskSpaces.length" role="row">
+              <td colspan="4" role="cell" class="empty-cell">当前没有可展示的磁盘空间数据。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="card dashboard-panel-card page-tier-panel dashboard-disk-temperature-panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div>
+            <h3>磁盘温度</h3>
+            <p class="panel-subtitle">各物理磁盘的当前传感器读数</p>
+          </div>
         </div>
-      </article>
-    </section>
+        <span class="section-tag">当前 {{ hardware?.disks?.length ?? 0 }} 块</span>
+      </div>
+
+      <div class="table-shell realtime-table-shell">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">磁盘名称</th>
+              <th scope="col" class="align-right" :aria-sort="diskSortDescending ? 'descending' : 'ascending'">
+                <button class="table-sort-button" @click="toggleDiskSort('temperatureC')">
+                  当前温度 {{ sortIndicator('temperatureC') }}
+                </button>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="disk in sortedDisks" :key="`${disk.name}-${disk.temperatureSource ?? 'none'}`">
+              <td>{{ disk.name }}</td>
+              <td class="align-right">
+                <span class="status-pill status-pill-temperature" :class="temperatureToneClass(disk.temperatureC)">
+                  {{ formatNullable(disk.temperatureC, '°C') }}
+                </span>
+              </td>
+            </tr>
+            <tr v-if="!sortedDisks.length">
+              <td colspan="2" class="empty-cell">当前没有可展示的磁盘温度数据。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
   </section>
 </template>
 
@@ -283,6 +268,25 @@ const coreMetricDetails = computed(() =>
 const cpuTrend = computed(() => toTrendPoints((sample) => sample.cpuUsagePercent));
 const memoryTrend = computed(() => toTrendPoints((sample) => sample.memoryUsagePercent));
 const temperatureTrend = computed(() => toTrendPoints((sample) => sample.cpuTemperatureC));
+const trendOptions = [
+  { id: 'cpu', label: 'CPU 占用', points: cpuTrend, unit: '%', scaleKind: 'percent', tone: 'signal' },
+  { id: 'memory', label: '内存占用', points: memoryTrend, unit: '%', scaleKind: 'percent', tone: 'info' },
+  { id: 'temperature', label: 'CPU 温度', points: temperatureTrend, unit: '°C', scaleKind: 'temperature', tone: 'info' }
+] as const;
+const activeTrendId = ref<(typeof trendOptions)[number]['id']>('cpu');
+const activeTrend = computed(() => trendOptions.find((option) => option.id === activeTrendId.value) ?? trendOptions[0]);
+const cpuPeakHint = computed(() => {
+  let peak: number | null = null;
+  for (const { value } of cpuTrend.value) {
+    if (value !== null && Number.isFinite(value) && (peak === null || value > peak)) peak = value;
+  }
+  return `近一小时峰值 ${formatPercent(peak)}`;
+});
+const memoryUsagePercent = computed(() => getMemoryUsagePercent(hardware.value?.memoryUsedMb, hardware.value?.memoryTotalMb));
+const memoryCapacityHint = computed(() => {
+  const total = formatMemoryHint(hardware.value?.memoryTotalMb);
+  return memoryUsagePercent.value === null ? total : `${total} · ${formatPercent(memoryUsagePercent.value)}`;
+});
 
 const hardwareSampleTime = computed(() => hardware.value?.sampleTime);
 const processCpuSampleTime = computed(() => processCpu.value?.sampleTime);
@@ -474,6 +478,10 @@ function formatNullable(value: number | null | undefined, unit: string) {
   return value == null || !Number.isFinite(value) ? '--' : `${value.toFixed(1)} ${unit}`;
 }
 
+function formatFrequency(mhz?: number | null) {
+  return mhz != null && mhz >= 1000 ? formatNullable(mhz / 1000, 'GHz') : formatNullable(mhz, 'MHz');
+}
+
 function formatMemoryUsage(value?: number | null, total?: number | null) {
   if (value == null || !Number.isFinite(value)) return '--';
 
@@ -498,17 +506,10 @@ function formatCpuNameHint(name?: string | null) {
 }
 
 function formatTemperatureHint(temperature?: number | null) {
-  if (temperature == null) return '温度数据不可用';
-  if (temperature >= 80) return '温度过高，建议检查散热';
-  if (temperature >= 65) return '温度偏高，注意通风';
-  return '温度正常，散热良好';
-}
-
-function formatPowerHint(power?: number | null) {
-  if (power == null) return '功耗数据不可用';
-  if (power >= 50) return '高负载运行';
-  if (power >= 25) return '中等负载运行';
-  return '低负载 / 空闲状态';
+  if (temperature == null) return undefined;
+  if (temperature >= 80) return '建议检查散热';
+  if (temperature >= 65) return '注意通风';
+  return undefined;
 }
 
 function formatDiskSize(value?: number | null) {

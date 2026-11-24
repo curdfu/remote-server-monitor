@@ -12,7 +12,7 @@ test('dashboard core metrics are wrapped in a single outer panel shell', async (
 
   assert.match(
     source,
-    /<section class="dashboard-section dashboard-core-metrics-section">[\s\S]*?<article class="card dashboard-core-metrics-panel">[\s\S]*?<div class="section-header section-header-rich dashboard-core-metrics-header">[\s\S]*?<div class="dashboard-hero-grid page-tier-stats">/,
+    /<section class="dashboard-section dashboard-core-metrics-section">[\s\S]*?<article class="card dashboard-core-metrics-panel">[\s\S]*?<div class="section-header section-header-rich dashboard-core-metrics-header">[\s\S]*?<div class="dashboard-hero-grid dashboard-primary-metrics">/,
     'expected the core metrics section to use a single outer panel shell around the existing header and hero grid',
   );
 
@@ -31,7 +31,8 @@ test('dashboard core metrics use the shared panel surface and retain a responsiv
 
   assert.match(sharedStyles, /\.card\s*\{[^}]*border:\s*1px solid var\(--line\);[^}]*background:\s*var\(--surface-1\)/);
   assert.match(dashboardStyles, /\.dashboard-core-metrics-panel-body\s*\{[^}]*min-width:\s*0/);
-  assert.match(dashboardStyles, /\.dashboard-hero-grid[^{}]*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(dashboardStyles, /\.dashboard-primary-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(dashboardStyles, /\.dashboard-secondary-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/);
   assert.doesNotMatch(
     dashboardStyles,
     /\.dashboard-core-metrics-panel(?:-body)? [^{]*\{[^}]*grid-template-columns:/,
@@ -45,32 +46,30 @@ test('core metrics include all six readings without a separate sensor panel', as
   ]);
   const core = view.slice(view.indexOf('dashboard-core-metrics-panel-body'), view.indexOf('<details class="metric-model-details">'));
   const cards = [...core.matchAll(/<MetricCard\b[\s\S]*?\/>/g)].map(([card]) => card);
-  assert.equal(cards.length, 6);
-  for (const label of ['CPU 占用', '内存已使用', '最高磁盘温度', 'CPU 当前频率', 'CPU 当前温度', 'CPU 当前功耗']) {
-    assert.equal(cards.filter((card) => card.includes(`label="${label}"`)).length, 1);
-  }
-  assert.match(core, /:value="formatNullable\(hardware\?\.cpuFrequencyMhz, 'MHz'\)"/);
+  assert.deepEqual(cards.map((card) => card.match(/label="([^"]+)"/)[1]), [
+    'CPU 占用', '内存已使用', 'CPU 当前温度', 'CPU 当前频率', 'CPU 当前功耗', '最高磁盘温度'
+  ]);
+  assert.match(cards[0], /:percent="hardware\?\.cpuUsagePercent"/);
+  assert.match(cards[1], /:percent="memoryUsagePercent"/);
+  assert.ok(cards.slice(2).every((card) => card.includes('small-value')));
+  assert.match(core, /:value="formatFrequency\(hardware\?\.cpuFrequencyMhz\)"/);
   assert.match(core, /:value="formatNullable\(hardware\?\.cpuTemperatureC, '°C'\)"/);
   assert.match(core, /:value="formatNullable\(hardware\?\.cpuPowerWatts, 'W'\)"/);
   assert.match(core, /:badge="temperatureBadge\(hardware\?\.cpuTemperatureC\)"/);
   assert.doesNotMatch(view, /dashboard-sensor-panel|dashboard-sensor-grid|辅助传感器/);
   assert.doesNotMatch(styles, /dashboard-sensor-panel|dashboard-sensor-grid/);
   const mobile = styles.slice(styles.indexOf('@media (max-width: 720px)'));
-  assert.match(mobile, /\.dashboard-hero-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
-  assert.match(mobile, /\.dashboard-hero-grid \.metric-card:nth-child\(2n \+ 1\)\s*\{[^}]*border-left:\s*0/);
+  assert.match(mobile, /\.dashboard-secondary-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(mobile, /\.dashboard-secondary-metrics \.metric-card:nth-child\(3\)\s*\{[^}]*border-left:\s*0/);
 });
 
 test('metric grid uses continuous dividers without doubling row spacing', async () => {
   const styles = await readFile(observatoryStylesPath, 'utf8');
   assert.match(styles, /\.dashboard-hero-grid\s*\{[^}]*gap:\s*0;/);
-  assert.doesNotMatch(styles, /row-gap:/);
-  assert.match(styles, /\.dashboard-hero-grid \.metric-card\s*\{[^}]*padding:\s*0 24px 16px/);
-  assert.match(styles, /\.dashboard-hero-grid \.metric-card:nth-child\(n \+ 4\)\s*\{[^}]*padding-top:\s*16px;[^}]*padding-bottom:\s*0;[^}]*border-top:\s*1px solid var\(--line\)/);
+  assert.match(styles, /\.dashboard-hero-grid \.metric-card \+ \.metric-card\s*\{[^}]*border-left:\s*1px solid var\(--line\)/);
+  assert.match(styles, /\.dashboard-secondary-metrics\s*\{[^}]*border-top:\s*1px solid var\(--line\)/);
   const mobile = styles.slice(styles.indexOf('@media (max-width: 720px)'));
-  assert.match(mobile, /\.metric-card:nth-child\(n\)\s*\{[^}]*padding:\s*12px;/);
-  assert.match(mobile, /\.metric-card:nth-child\(-n \+ 2\)\s*\{[^}]*padding-top:\s*0/);
-  assert.match(mobile, /\.metric-card:nth-child\(n \+ 3\)\s*\{[^}]*border-top:/);
-  assert.match(mobile, /\.metric-card:nth-child\(n \+ 5\)\s*\{[^}]*padding-bottom:\s*0/);
+  assert.match(mobile, /\.dashboard-secondary-metrics \.metric-card:nth-child\(n \+ 3\)\s*\{[^}]*border-top:\s*1px solid var\(--line\)/);
 });
 
 test('dashboard core metrics highlights the hottest disk with its temperature and name', async () => {
@@ -94,13 +93,15 @@ test('mobile core metrics keep memory context and allow complete model names to 
     readFile(observatoryStylesPath, 'utf8'),
   ]);
   const mobile = styles.slice(styles.indexOf('@media (max-width: 720px)'));
-  assert.match(view, /label="内存已使用"[\s\S]*?:hint="formatMemoryHint\(hardware\?\.memoryTotalMb\)"/);
+  assert.match(view, /label="内存已使用"[\s\S]*?:hint="memoryCapacityHint"/);
+  assert.match(view, /const memoryCapacityHint = computed\([\s\S]*?formatMemoryHint\(hardware\.value\?\.memoryTotalMb\)/);
   assert.match(card, /<span v-if="hint" class="metric-hint" :title="hint">\{\{ hint \}\}<\/span>/);
-  assert.match(mobile, /\.dashboard-hero-grid \.metric-hint\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/);
-  assert.doesNotMatch(mobile, /\.dashboard-hero-grid \.metric-hint\s*\{[^}]*display:\s*none/);
+  assert.match(card, /v-if="fill !== null" class="metric-track"/);
+  assert.match(mobile, /\.dashboard-secondary-metrics \.metric-hint\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/);
+  assert.doesNotMatch(mobile, /\.dashboard-secondary-metrics \.metric-hint\s*\{[^}]*display:\s*none/);
   assert.match(view, /<details class="metric-model-details">[\s\S]*?\{\{ coreMetricDetails \}\}[\s\S]*?<\/details>/);
   assert.match(view, /const coreMetricDetails = computed\([\s\S]*?formatCpuNameHint\(hardware\.value\?\.cpuName\)[\s\S]*?hottestDiskName\.value/);
-  assert.match(mobile, /\.metric-model-details\s*\{[^}]*display:\s*block/);
+  assert.doesNotMatch(styles, /\.metric-model-details\s*\{[^}]*display:\s*none/);
 });
 
 test('dashboard starts with content and keeps refresh and freshness feedback without a banner', async () => {

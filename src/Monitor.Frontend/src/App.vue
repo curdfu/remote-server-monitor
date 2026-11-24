@@ -1,7 +1,7 @@
 <template>
   <div class="layout">
     <a class="skip-link" href="#main-content">跳转到主要内容</a>
-    <aside class="sidebar">
+    <header class="sidebar">
       <div class="sidebar-brand">
         <div class="sidebar-brand-copy">
           <h1>服务器远程监控</h1>
@@ -31,7 +31,7 @@
             >
               <span class="nav-utility-indicator" :data-state="connectionState" />
               <span class="nav-utility-label">{{ connectionStatusText }}</span>
-              <AppIcon name="status" :size="16" />
+              <AppIcon class="nav-utility-status-icon" name="status" :size="16" />
             </button>
 
             <div
@@ -115,7 +115,7 @@
         </div>
       </div>
 
-      <nav class="sidebar-nav">
+      <nav class="sidebar-nav" aria-label="主导航">
         <div class="sidebar-nav-links">
           <RouterLink to="/">
             <span class="nav-link-content">
@@ -136,9 +136,8 @@
             </span>
           </RouterLink>
         </div>
-
       </nav>
-    </aside>
+    </header>
     <main id="main-content" class="content" tabindex="-1">
       <div v-if="healthNotice" class="health-notice" role="status">{{ healthNotice }}</div>
       <RouterView />

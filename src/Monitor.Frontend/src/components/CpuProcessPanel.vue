@@ -25,19 +25,31 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(process, index) in processCpu.processes" :key="`${process.processId}-${process.processName}`">
+          <tr v-for="(process, index) in processCpu.processes" :key="processKey(process)">
             <td class="process-cpu-rank">{{ index + 1 }}</td>
             <td>
               <div class="process-cpu-identity">
-                <strong class="process-cpu-name">{{ process.processName || '未知进程' }}</strong>
+                <svg v-if="Number.isFinite(process.cpuUsagePercent)" class="process-cpu-pie" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle class="process-cpu-pie-track" cx="8" cy="8" r="8" />
+                  <circle class="process-cpu-pie-fill" cx="8" cy="8" r="4" pathLength="100" :stroke-dasharray="`${clampPercent(process.cpuUsagePercent)} 100`" transform="rotate(-90 8 8)" />
+                </svg>
+                <button
+                  type="button"
+                  class="process-cpu-name"
+                  :aria-expanded="expandedProcessKey === processKey(process)"
+                  :aria-controls="`process-cpu-name-${process.processId}`"
+                  @click="toggleProcessName(process)"
+                >{{ process.processName || '未知进程' }}</button>
                 <span class="process-cpu-pid">PID {{ process.processId }}</span>
+                <span
+                  v-show="expandedProcessKey === processKey(process)"
+                  :id="`process-cpu-name-${process.processId}`"
+                  class="process-cpu-full-name"
+                >{{ process.processName || '未知进程' }}</span>
               </div>
             </td>
             <td class="align-right process-cpu-metric">
               <strong>{{ formatPercent(process.cpuUsagePercent) }}</strong>
-              <div class="process-cpu-progress" aria-hidden="true">
-                <span class="process-cpu-progress-bar" :style="{ width: `${clampPercent(process.cpuUsagePercent)}%` }"></span>
-              </div>
             </td>
           </tr>
         </tbody>
@@ -49,6 +61,7 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue';
 import type { ProcessCpuRealtimeDto } from '../types/monitor';
 
 withDefaults(defineProps<{
@@ -64,6 +77,18 @@ withDefaults(defineProps<{
   stateMessage: '',
   sampleText: '样本时间：--'
 });
+
+type ProcessCpu = ProcessCpuRealtimeDto['processes'][number];
+const expandedProcessKey = ref('');
+
+function processKey(process: ProcessCpu) {
+  return `${process.processId}-${process.processName}`;
+}
+
+function toggleProcessName(process: ProcessCpu) {
+  const key = processKey(process);
+  expandedProcessKey.value = expandedProcessKey.value === key ? '' : key;
+}
 
 function clampPercent(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return 0;
